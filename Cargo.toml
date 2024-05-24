@@ -9,3 +9,5 @@ edition = "2021"
 tokio = { version = "1", features = ["full"] }
 tmi = "0.6.0"
 anyhow = "1.0.86"
+serde_json = "1.0.117"
+serde = {version = "1.0.202", features = ["derive"]}
