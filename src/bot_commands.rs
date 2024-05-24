@@ -3,12 +3,25 @@ use tokio::sync::Mutex;
 
 use crate::{save_to_file, Queue, CHANNELS, FILENAME};
 
+pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: &mut Client, ) -> bool {
+    //předělat píše i když je success
+    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "mod" || badge.as_badge_data().name() == "broadcaster") {
+        return true;
+    } else {
+        client.privmsg(CHANNELS[0], "You are not a moderator/broadcaster. You can't use this command").send().await;
+        return false;
+    }
+
+    
+}
+//Names with more whitespaces dotn work rework
+
 pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mutex<Vec<Queue>>) -> anyhow::Result<()> {
-    let parts: Vec<&str> = msg.text().split_whitespace().collect();
-    if parts.len() == 2 && parts[1].contains('#') {
+    let (_join, part) = msg.text().split_once(" ").unwrap();
+    if part.contains('#') && part.split_once("#").unwrap().1.len() == 4 {
         let new_queue = Queue {
             twitch_name: msg.sender().name().to_string(),
-            bungie_name: parts[1].to_string(),
+            bungie_name: part.to_string(),
         };
         
         let mut queue_guard = queue.lock().await;
@@ -30,6 +43,7 @@ pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mu
 }
 
 pub async fn handle_next(client: &mut Client, queue: &Mutex<Vec<Queue>>) -> anyhow::Result<()> {
+    
     let mut queue_guard = queue.lock().await;
     for _ in 0..5 {
         if !queue_guard.is_empty() {

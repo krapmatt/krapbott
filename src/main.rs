@@ -1,10 +1,10 @@
 mod bot_commands;
-use std::{fs::{remove_file, File}, io::{self, Read, Write}, vec};
+use std::{fs::{remove_file, File}, io::{self, BufRead, BufReader, Read, Write}, vec};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::bot_commands::{handle_join, handle_leave, handle_next, handle_pos, handle_queue, handle_remove};
+use crate::bot_commands::{handle_join, handle_leave, handle_next, handle_pos, handle_queue, handle_remove, is_moderator};
 
 const FILENAME: &str = "queue.json";
 const CHANNELS: &[&str] = &["#krapmatt"];
@@ -31,18 +31,32 @@ impl PartialEq for Queue {
 }
 
 fn save_to_file(data: &Vec<Queue>, filename: &str) -> io::Result<()> {
-    let json = serde_json::to_string(data)?;
     let mut file = File::create(filename)?;
-    file.write_all(json.as_bytes())?;
+    for entry in data {
+        let json = serde_json::to_string(entry)?;
+        writeln!(file, "{}", json)?;
+    }
+    //let json = serde_json::to_string(data)?;
+    //let mut file = File::create(filename)?;
+    //file.write_all(json.as_bytes())?;
     Ok(())
 }
 
 fn load_from_file(filename: &str) -> io::Result<Vec<Queue>> {
-    let mut file = File::open(filename)?;
+    /*let mut file = File::open(filename)?;
     let mut json = String::new();
     file.read_to_string(&mut json)?;
     let data: Vec<Queue> = serde_json::from_str(&json)?;
-    remove_file(filename)?;
+    Ok(data)*/
+
+    let file = File::open(filename)?;
+    let reader = BufReader::new(file);
+    let mut data = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        let entry: Queue = serde_json::from_str(&line)?;
+        data.push(entry);
+    }
     Ok(data)
 }
 
@@ -65,13 +79,14 @@ async fn main() -> anyhow::Result<()> {
         let msg = client.recv().await?;
         match msg.as_typed()? {
             tmi::Message::Privmsg(msg) => {
+                //TODO better queue save to file and load
                 let queue_mutex = Mutex::new(load_from_file(FILENAME)?);
                 println!("{}: {}", msg.sender().name(), msg.text());
                 if msg.text().starts_with("!join") {
                     handle_join(&msg, &mut client, &queue_mutex).await?;
-                } else if msg.text().starts_with("!next") {
+                } else if msg.text().starts_with("!next") && is_moderator(&msg, &mut client).await {
                     handle_next(&mut client, &queue_mutex).await?;
-                } else if msg.text().starts_with("!remove") {
+                } else if msg.text().starts_with("!remove") && is_moderator(&msg, &mut client).await {
                     handle_remove(&msg, &mut client, &queue_mutex).await?;
                 } else if msg.text().starts_with("!pos") {
                     handle_pos(&msg, &mut client, &queue_mutex).await?;
@@ -80,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
                 } else if msg.text().starts_with("!queue") {
                     handle_queue(&mut client, &queue_mutex).await?;
                 }
+                
             }
             tmi::Message::Reconnect => {
                 client.reconnect().await?;
