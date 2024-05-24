@@ -17,26 +17,30 @@ pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: &mut Client, ) -> bool
 //Names with more whitespaces dotn work rework
 
 pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mutex<Vec<Queue>>) -> anyhow::Result<()> {
-    let (_join, part) = msg.text().split_once(" ").unwrap();
-    if part.contains('#') && part.split_once("#").unwrap().1.len() == 4 {
-        let new_queue = Queue {
-            twitch_name: msg.sender().name().to_string(),
-            bungie_name: part.to_string(),
-        };
-        
-        let mut queue_guard = queue.lock().await;
-        if !queue_guard.contains(&new_queue) {
-            queue_guard.push(new_queue);
-            save_to_file(&queue_guard, FILENAME)?;
+    if let Some((_join, part)) = msg.text().split_once(" ") {
+        if part.contains('#') && part.split_once("#").unwrap().1.len() == 4 {
+            let new_queue = Queue {
+                twitch_name: msg.sender().name().to_string(),
+                bungie_name: part.to_string(),
+            };
+            
+            let mut queue_guard = queue.lock().await;
+            if !queue_guard.contains(&new_queue) {
+                queue_guard.push(new_queue);
+                save_to_file(&queue_guard, FILENAME)?;
 
-            let reply = format!("{} entered the queue at position #{}", msg.sender().name(), queue_guard.len());
-            client.privmsg(CHANNELS[0], &reply).send().await?;
+                let reply = format!("{} entered the queue at position #{}", msg.sender().name(), queue_guard.len());
+                client.privmsg(CHANNELS[0], &reply).send().await?;
+            } else {
+                let reply = format!("You are already in the queue, {}!", msg.sender().name());
+                client.privmsg(CHANNELS[0], &reply).send().await?;
+            }
         } else {
-            let reply = format!("You are already in the queue, {}!", msg.sender().name());
+            let reply = format!("Invalid command format or Bungie name, {}!", msg.sender().name());
             client.privmsg(CHANNELS[0], &reply).send().await?;
         }
     } else {
-        let reply = format!("Invalid command format or Bungie name, {}!", msg.sender().name());
+        let reply = format!("Invalid command format, {}! Use: !join <BungieName#1234>", msg.sender().name());
         client.privmsg(CHANNELS[0], &reply).send().await?;
     }
     Ok(())
