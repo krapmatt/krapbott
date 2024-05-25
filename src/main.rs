@@ -1,5 +1,5 @@
 mod bot_commands;
-use std::{fs::{remove_file, File}, io::{self, BufRead, BufReader, Read, Write}, vec};
+use std::{env::var, fs::{remove_file, File}, io::{self, BufRead, BufReader, Read, Write}, vec};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -62,14 +62,14 @@ fn load_from_file(filename: &str) -> io::Result<Vec<Queue>> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let oauth_token = "gbmw5v39axrv7q2xdzyhneph5hi7vi"; 
-    let nickname = "krapbott";   
+    let oauth_token = var("TWITCH_OAUTH_TOKEN").expect("No oauth token"); 
+    let nickname = var("TWITCH_BOT_NICK").expect("No bot name");   
     
     let queue: Vec<Queue> = vec![];
     remove_file(FILENAME)?;
     save_to_file(&queue, FILENAME)?;
 
-    let credentials = tmi::Credentials::new(nickname, oauth_token);
+    let credentials = tmi::Credentials::new(nickname.clone(), oauth_token);
     let mut client = tmi::Client::builder().credentials(credentials).connect().await.unwrap();
     
 
