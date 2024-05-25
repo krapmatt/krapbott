@@ -1,3 +1,6 @@
+use std::time::Duration;
+
+use enigo::{Enigo, Keyboard, Mouse, Settings};
 use tmi::Client;
 use tokio::sync::Mutex;
 
@@ -11,10 +14,7 @@ pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: &mut Client, ) -> bool
         client.privmsg(CHANNELS[0], "You are not a moderator/broadcaster. You can't use this command").send().await;
         return false;
     }
-
-    
 }
-//Names with more whitespaces dotn work rework
 
 pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mutex<Vec<Queue>>) -> anyhow::Result<()> {
     if let Some((_join, part)) = msg.text().split_once(" ") {
@@ -25,14 +25,17 @@ pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mu
             };
             
             let mut queue_guard = queue.lock().await;
-            if !queue_guard.contains(&new_queue) {
+            if let Some(existing_queue) = queue_guard.iter_mut().find(|q| q.twitch_name == new_queue.twitch_name) {
+                existing_queue.bungie_name = new_queue.bungie_name.clone();
+                save_to_file(&queue_guard, FILENAME)?;
+
+                let reply = format!("{} updated their Bungie name to {}", msg.sender().name(), new_queue.bungie_name);
+                client.privmsg(CHANNELS[0], &reply).send().await?;
+            } else {
                 queue_guard.push(new_queue);
                 save_to_file(&queue_guard, FILENAME)?;
 
                 let reply = format!("{} entered the queue at position #{}", msg.sender().name(), queue_guard.len());
-                client.privmsg(CHANNELS[0], &reply).send().await?;
-            } else {
-                let reply = format!("You are already in the queue, {}!", msg.sender().name());
                 client.privmsg(CHANNELS[0], &reply).send().await?;
             }
         } else {
@@ -55,12 +58,37 @@ pub async fn handle_next(client: &mut Client, queue: &Mutex<Vec<Queue>>) -> anyh
         }
     }
 
-    let queue_msg: Vec<String> = queue_guard.iter().enumerate().map(|(i, q)| format!("{}. {}", i + 1, q.twitch_name)).collect();
-    let reply = format!("Next: {:?}", queue_msg);
+
+    let queue_msg: Vec<String> = queue_guard.iter().enumerate().take(5).map(|(i, q)| format!("{}. {}", i + 1, q.twitch_name)).collect();
+    let reply;
+    if queue_msg.is_empty() {
+        reply = "Queue is empty".to_string();
+    } else {
+        reply = format!("Next: {:?}", queue_msg);
+        let futures: Vec<_> = queue_guard.iter().take(5).map(|q| invite_macro(&q.bungie_name)).collect();
+        futures::future::join_all(futures).await;
+    };
+        
     client.privmsg(CHANNELS[0], &reply).send().await?;
+
+    
     
     save_to_file(&queue_guard, FILENAME)?;
     Ok(())
+}
+
+async fn invite_macro(bungie_name: &str) {
+    let mut enigo = Enigo::new(&Settings::default()).unwrap();
+    let _ = enigo.move_mouse(100, 0, enigo::Coordinate::Abs);
+    let _ = enigo.button(enigo::Button::Left, enigo::Direction::Click);
+    
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    
+    let _ = enigo.key(enigo::Key::Return, enigo::Direction::Click);
+    
+    let _ = enigo.text(&format!("/invite {}", bungie_name));
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let _ = enigo.key(enigo::Key::Return, enigo::Direction::Click);
 }
 
 pub async fn handle_remove(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mutex<Vec<Queue>>) -> anyhow::Result<()> {

@@ -1,6 +1,7 @@
 mod bot_commands;
-use std::{env::var, fs::{remove_file, File}, io::{self, BufRead, BufReader, Read, Write}, vec};
+use std::{env::var, fs::{remove_file, File}, io::{self, BufRead, BufReader, Write}, vec};
 
+use dotenv::dotenv;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -36,19 +37,10 @@ fn save_to_file(data: &Vec<Queue>, filename: &str) -> io::Result<()> {
         let json = serde_json::to_string(entry)?;
         writeln!(file, "{}", json)?;
     }
-    //let json = serde_json::to_string(data)?;
-    //let mut file = File::create(filename)?;
-    //file.write_all(json.as_bytes())?;
     Ok(())
 }
 
 fn load_from_file(filename: &str) -> io::Result<Vec<Queue>> {
-    /*let mut file = File::open(filename)?;
-    let mut json = String::new();
-    file.read_to_string(&mut json)?;
-    let data: Vec<Queue> = serde_json::from_str(&json)?;
-    Ok(data)*/
-
     let file = File::open(filename)?;
     let reader = BufReader::new(file);
     let mut data = Vec::new();
@@ -60,16 +52,18 @@ fn load_from_file(filename: &str) -> io::Result<Vec<Queue>> {
     Ok(data)
 }
 
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let oauth_token = var("TWITCH_OAUTH_TOKEN").expect("No oauth token"); 
+    dotenv().ok();
+    let oauth_token = var("TWITCH_OAUTH_TOKEN_BOTT").expect("No oauth token"); 
     let nickname = var("TWITCH_BOT_NICK").expect("No bot name");   
     
     let queue: Vec<Queue> = vec![];
     remove_file(FILENAME)?;
     save_to_file(&queue, FILENAME)?;
 
-    let credentials = tmi::Credentials::new(nickname.clone(), oauth_token);
+    let credentials = tmi::Credentials::new(nickname, oauth_token);
     let mut client = tmi::Client::builder().credentials(credentials).connect().await.unwrap();
     
 
@@ -79,7 +73,6 @@ async fn main() -> anyhow::Result<()> {
         let msg = client.recv().await?;
         match msg.as_typed()? {
             tmi::Message::Privmsg(msg) => {
-                //TODO better queue save to file and load
                 let queue_mutex = Mutex::new(load_from_file(FILENAME)?);
                 println!("{}: {}", msg.sender().name(), msg.text());
                 if msg.text().starts_with("!join") {
