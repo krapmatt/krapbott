@@ -1,25 +1,21 @@
-use crate::{bot, bot_commands::{discord, handle_join, handle_leave, handle_next, handle_pos, handle_queue, handle_remove, id_text, is_moderator, join_on_me, lurk_msg}, load_from_file, save_to_file, Queue};
+use crate::{bot, bot_commands::{discord, handle_join, handle_leave, handle_next, handle_pos, handle_queue, handle_remove, id_text, is_moderator, join_on_me, lurk_msg}, initialize_database, load_from_file, save_to_file, Queue};
 use dotenv::dotenv;
 use rusqlite::Connection;
 
-use std::{env::var, fs::{remove_file, File}, io::{self, BufRead, BufReader, Write}, sync::Arc, vec};
+use std::{env::var, fs::{remove_file, File}, sync::Arc, vec};
 use tokio::sync::Mutex;
 
 pub const FILENAME: &str = "queue.json";
 pub const CHANNELS: &[&str] = &["#krapmatt"];
 
 pub struct BotState {
-    queue: Arc<Mutex<Vec<Queue>>>,
     queue_open: bool,
-    conn: Connection,
 }
 
 impl BotState {
-    pub fn new(queue: Arc<Mutex<Vec<Queue>>>, conn: Connection) -> BotState {
-        BotState {
-            queue, 
+    pub fn new() -> BotState {
+        BotState { 
             queue_open: false, 
-            conn,
         }
     }
 }
@@ -40,13 +36,17 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>) -> anyhow::Result<()>
     
 
     client.join_all(CHANNELS).await?;
-
+    
     loop {
         let msg = client.recv().await?;
         match msg.as_typed()? {
             tmi::Message::Privmsg(msg) => {
+                //temp
+                //set size of queue
+                let queue_len = 30;
+                //set size of fireteam
+                let queue_drop = 5;
                 
-                let queue_mutex = Mutex::new(load_from_file(FILENAME)?);
                 println!("Channel: {}, {}: {}", msg.channel() ,msg.sender().name(), msg.text());
                 if msg.text().starts_with("!open_queue") && is_moderator(&msg, &mut client).await {
                     bot_state.lock().await.queue_open = true;
@@ -55,18 +55,19 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>) -> anyhow::Result<()>
                     bot_state.lock().await.queue_open = false;
                     client.privmsg(msg.channel(), "The queue is now closed!").send().await?;
                 } else if bot_state.lock().await.queue_open {
+                    let conn = Arc::new(Mutex::new(initialize_database().unwrap()));
                     if msg.text().starts_with("!join") {
-                        handle_join(&msg, &mut client, &queue_mutex, 30).await?;
+                        handle_join(&msg, &mut client, queue_len, &conn).await?;
                     } else if msg.text().starts_with("!next") && is_moderator(&msg, &mut client).await {
-                        handle_next(&msg, &mut client, &queue_mutex, 5).await?;
+                        handle_next(&msg, &mut client,queue_drop, &conn).await?;
                     } else if msg.text().starts_with("!remove") && is_moderator(&msg, &mut client).await {
-                        handle_remove(&msg, &mut client, &queue_mutex).await?;
+                        handle_remove(&msg, &mut client, &conn).await?;
                     } else if msg.text().starts_with("!pos") {
-                        handle_pos(&msg, &mut client, &queue_mutex).await?;
+                        handle_pos(&msg, &mut client, queue_len, &conn).await?;
                     } else if msg.text().starts_with("!leave") {
-                        handle_leave(&msg, &mut client, &queue_mutex).await?;
+                        handle_leave(&msg, &mut client, &conn).await?;
                     } else if msg.text().starts_with("!queue") {
-                        handle_queue(&msg, &mut client, &queue_mutex).await?;
+                        handle_queue(&msg, &mut client, &conn).await?;
                     }
                 } else {
                     if msg.text().starts_with("!join") || msg.text().starts_with("!next") || msg.text().starts_with("!remove") || msg.text().starts_with("!pos") || msg.text().starts_with("!leave") || msg.text().starts_with("!queue") {

@@ -1,7 +1,8 @@
 use std::time::Duration;
 
+use egui::emath::smart_aim;
 use enigo::{Enigo, Keyboard, Mouse, Settings};
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
 use tmi::{msg, Client};
 use tokio::sync::Mutex;
 
@@ -32,33 +33,51 @@ todo!();
 }
 
 //User can join into queue
-pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mutex<Vec<Queue>>, queue_len: usize) -> anyhow::Result<()> {
+pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, conn: &Mutex<Connection>) -> anyhow::Result<()> {
     if let Some((_join, part)) = msg.text().split_once(" ") {
+        //If name is correct
         if part.contains('#') && part.split_once("#").unwrap().1.len() == 4 {
+            //Update their name in queue
             let new_queue = Queue {
                 twitch_name: msg.sender().name().to_string(),
                 bungie_name: part.to_string(),
             };
             
-            let mut queue_guard = queue.lock().await;
-            if let Some(existing_queue) = queue_guard.iter_mut().find(|q| q.twitch_name == new_queue.twitch_name) {
-                existing_queue.bungie_name = new_queue.bungie_name.clone();
-                save_to_file(&queue_guard, FILENAME)?;
+            let conn = conn.lock().await;
+            let mut stmt = conn.prepare("SELECT * FROM queue WHERE twitch_name = ?1")?;
 
+            let exists: Result<Option<Queue>, _> = stmt.query_row(params![new_queue.twitch_name], |row| {
+                Ok(Queue {
+                    twitch_name: row.get(0)?,
+                    bungie_name: row.get(1)?,
+                })
+            }).optional();
+
+            if let Some(existing_queue) = exists? {
+                conn.execute("UPDATE queue SET bungie_name = ?1 WHERE twitch_name = ?2", params![new_queue.bungie_name, new_queue.twitch_name])?;
                 let reply = format!("{} updated their Bungie name to {}", msg.sender().name(), new_queue.bungie_name);
                 client.privmsg(msg.channel(), &reply).send().await?;
-            } else if queue_guard.len() < queue_len{
-                queue_guard.push(new_queue);
-                
-                save_to_file(&queue_guard, FILENAME)?;
-
-                let reply = format!("{} entered the queue at position #{}", msg.sender().name(), queue_guard.len());
-                client.privmsg(msg.channel(), &reply).send().await?;
+            //New name in queue - joined
+            } else {
+                let count: i64 = conn.query_row("SELECT COUNT(*) FROM queue", [], |row| row.get(0))?;
+                if count < queue_len as i64 {
+                    conn.execute(
+                        "INSERT INTO queue (twitch_name, bungie_name) VALUES (?1, ?2)",
+                        params![new_queue.twitch_name, new_queue.bungie_name],
+                    )?;
+                    let reply = format!("{} entered the queue at position #{}", msg.sender().name(), count + 1);
+                    client.privmsg(msg.channel(), &reply).send().await?;
+                //Queue is full
+                } else {
+                    client.privmsg(msg.channel(), "You can't enter queue if full").send().await?;
+                }
             }
+        //Name is incorrect
         } else {
             let reply = format!("Invalid command format or Bungie name, {}!", msg.sender().name());
             client.privmsg(msg.channel(), &reply).send().await?;
         }
+    //if command is incorrect
     } else {
         let reply = format!("Invalid command format, {}! Use: !join <BungieName#1234>", msg.sender().name());
         client.privmsg(msg.channel(), &reply).send().await?;
@@ -67,43 +86,45 @@ pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mu
 }
 
 //Kicks out users that were in game
-pub async fn handle_next(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mutex<Vec<Queue>>, queue_len: usize) -> anyhow::Result<()> {
-    
-    let mut queue_guard = queue.lock().await;
+pub async fn handle_next(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, conn: &Mutex<Connection>) -> anyhow::Result<()> {
+    let mut conn = conn.lock().await;
+
     for _ in 0..queue_len {
-        if !queue_guard.is_empty() {
-            queue_guard.remove(0);
-        }
+        conn.execute("DELETE FROM queue WHERE id IN (SELECT id FROM queue LIMIT 1)", params![])?;
     }
 
-    let queue_msg: Vec<String> = queue_guard.iter().enumerate().take(queue_len).map(|(i, q)| format!("{}. {}", i + 1, q.twitch_name)).collect();
+    
+    let mut stmt = conn.prepare("SELECT twitch_name FROM queue ?1")?;
+    let queue_iter = stmt.query_map(params![queue_len], |row| row.get::<_, String>(1))?;
+
+    let mut queue_msg = Vec::new();
+    for entry in queue_iter {
+        queue_msg.push(entry?);
+    }
+
     let reply;
     if queue_msg.is_empty() {
         reply = "Queue is empty".to_string();
     } else {
         reply = format!("Next: {:?}", queue_msg);
-        let futures: Vec<_> = queue_guard.iter().take(queue_len).map(|q| invite_macro(&q.bungie_name)).collect();
+        let futures: Vec<_> = queue_msg.iter().take(queue_len).map(|q| invite_macro(q)).collect();
         futures::future::join_all(futures).await;
-    };
-        
-    client.privmsg(msg.channel(), &reply).send().await?;
+    }
 
-    
-    
-    save_to_file(&queue_guard, FILENAME)?;
+    client.privmsg(msg.channel(), &reply).send().await?;
     Ok(())
+
 }
 
 //Moderator can remove player from queue
-pub async fn handle_remove(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mutex<Vec<Queue>>) -> anyhow::Result<()> {
+pub async fn handle_remove(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &Mutex<Connection>) -> anyhow::Result<()> {
     let parts: Vec<&str> = msg.text().split_whitespace().collect();
     if parts.len() == 2 {
         let twitch_name = parts[1];
         
-        let mut queue_guard = queue.lock().await;
-        if let Some(index) = queue_guard.iter().position(|q| q.twitch_name == twitch_name) {
-            queue_guard.remove(index);
-            save_to_file(&queue_guard, FILENAME)?;
+        let conn = conn.lock().await;
+        let rows = conn.execute("DELETE FROM queue WHERE twitch_name = ?1", params![twitch_name])?;
+        if rows > 0 {
             let reply = format!("{} has been removed from the queue.", twitch_name);
             client.privmsg(msg.channel(), &reply).send().await?;
         } else {
@@ -116,39 +137,50 @@ pub async fn handle_remove(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &
 
 
 //Show the user where he is in queue
-pub async fn handle_pos(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mutex<Vec<Queue>>) -> anyhow::Result<()> {
-    let queue_guard = queue.lock().await;
-    if let Some((index, _)) = queue_guard.iter().enumerate().find(|(_, q)| q.twitch_name == msg.sender().name()) {
-        let group = (index + 1) / 5;
+pub async fn handle_pos(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, conn: &Mutex<Connection>) -> anyhow::Result<()> {
+    let conn = conn.lock().await;
+    let mut stmt = conn.prepare("SELECT rowid, * FROM queue WHERE twitch_name = ?1")?;
+    if let Some((index, _)) = stmt.query_row(params![msg.sender().name()], |row| {
+        Ok((row.get::<_, i64>(0)? - 1, row.get::<_, String>(1)?))    
+    }).optional()? {
+        let group = (index + 1) / queue_len as i64;
         let reply = format!("You are at position {} and in group {}", index + 1, group);
         client.privmsg(msg.channel(), &reply).send().await?;
     } else {
         let reply = format!("You are not in the queue, {}.", msg.sender().name());
         client.privmsg(msg.channel(), &reply).send().await?;
     }
-    save_to_file(&queue_guard, FILENAME)?;
+    
     Ok(())
 }
 
 //User leaves queue
-pub async fn handle_leave(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mutex<Vec<Queue>>) -> anyhow::Result<()> {
-    let mut queue_guard = queue.lock().await;
-    if let Some(index) = queue_guard.iter().position(|q| q.twitch_name == msg.sender().name()) {
-        queue_guard.remove(index);
-        save_to_file(&queue_guard, FILENAME)?;
+pub async fn handle_leave(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &Mutex<Connection>) -> anyhow::Result<()> {
+    let conn = conn.lock().await;
+    let rows = conn.execute("DELETE FROM queue WHERE twitch_name = ?1", params![msg.sender().name()])?;
+    if rows > 0 {
         let reply = format!("You have been removed from the queue, {}.", msg.sender().name());
         client.privmsg(msg.channel(), &reply).send().await?;
+    } else {
+        let reply = format!("You are not in queue, {}.", msg.sender().name());
     }
     Ok(())
 }
 
 //Shows whole queue
-pub async fn handle_queue(msg: &tmi::Privmsg<'_>, client: &mut Client, queue: &Mutex<Vec<Queue>>) -> anyhow::Result<()> {
-    let queue_guard = queue.lock().await;
-    let queue_str: Vec<String> = queue_guard.iter().enumerate().map(|(i, q)| format!("{}. {}", i + 1, q.twitch_name)).collect();
+pub async fn handle_queue(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &Mutex<Connection>) -> anyhow::Result<()> {
+    let conn = conn.lock().await;
+    let mut stmt = conn.prepare("SELECT twitch_name FROM queue")?;
+    let queue_iter = stmt.query_map([], |row| row.get::<_,String>(1))?;
+
+    let mut queue_msg = Vec::new();
+    for entry in queue_iter {
+        queue_msg.push(entry?);
+    }
+    let queue_str: Vec<String> = queue_msg.iter().enumerate().map(|(i, q)| format!("{}. {}", i + 1, q)).collect();
     let reply = format!("Queue: {:?}", queue_str);
     client.privmsg(msg.channel(), &reply).send().await?;
-    save_to_file(&queue_guard, FILENAME)?;
+    
     Ok(())
 }
 
