@@ -1,16 +1,13 @@
 mod bot_commands;
-use std::{env::var, fs::{remove_file, File}, io::{self, BufRead, BufReader, Write}, vec};
+mod bot;
+use std::{env, fs::File, io::{self, BufRead, BufReader, Write}, sync::Arc};
+use bot::{run_chat_bot, BotState, FILENAME};
 
-use dotenv::dotenv;
+use egui::{Label, Sense};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
-
-use crate::bot_commands::{handle_join, handle_leave, handle_next, handle_pos, handle_queue, handle_remove, is_moderator};
-
-const FILENAME: &str = "queue.json";
-const CHANNELS: &[&str] = &["#krapmatt"];
-
-#[derive(Debug, Deserialize, Serialize)]
+use tokio::{sync::Mutex, task};
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct Queue {
     twitch_name: String,
     bungie_name: String,
@@ -52,55 +49,105 @@ fn load_from_file(filename: &str) -> io::Result<Vec<Queue>> {
     Ok(data)
 }
 
+struct AppState {
+}
+
+impl AppState {
+    fn new() -> Self {
+        AppState {}
+        
+    }
+}
+
+impl eframe::App for AppState {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Queue Management");
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                let queue = load_from_file(FILENAME).unwrap();
+                for (index, item) in queue.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        let text = format!("{}. {} {}", index + 1, item.twitch_name, item.bungie_name);
+                        let queue_name = ui.add(Label::new(text).sense(Sense::click()));
+                        if queue_name.clone().on_hover_text("Click to copy").clicked() {
+                            let copied_text = item.bungie_name.clone();
+                            ui.output().copied_text = String::from(copied_text);
+                        }
+                        
+                    });
+                };
+            });
+        });
+    }
+}
+
+
+fn initialize_database() -> anyhow::Result<Connection> {
+    let conn = Connection::open("queue.db")?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS queue (
+            id INTEGER PRIMARY KEY,
+            twitch_name TEXT NOT NULL,
+            bungie_name TEXT NOT NULL
+        )",
+        [],
+    )?;
+    Ok(conn)
+}
+
+fn save_to_database(conn: &Connection, queue: &Vec<Queue>) -> anyhow::Result<()> {
+    conn.execute("DELETE FROM queue", params![])?; // Clear existing data
+    for entry in queue {
+        conn.execute(
+            "INSERT INTO queue (twitch_name, bungie_name) VALUES (?1, ?2)",
+            params![entry.twitch_name, entry.bungie_name],
+        )?;
+    }
+    Ok(())
+}
+
+fn load_from_database(conn: &Connection) -> anyhow::Result<Vec<Queue>> {
+    let mut stmt = conn.prepare("SELECT twitch_name, bungie_name FROM queue")?;
+    let queue_iter = stmt.query_map([], |row| {
+        Ok(Queue {
+            twitch_name: row.get(0)?,
+            bungie_name: row.get(1)?,
+        })
+    })?;
+    
+    let mut queue = Vec::new();
+    for entry in queue_iter {
+        queue.push(entry?);
+    }
+    Ok(queue)
+}
+
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenv().ok();
-    let oauth_token = var("TWITCH_OAUTH_TOKEN_BOTT").expect("No oauth token"); 
-    let nickname = var("TWITCH_BOT_NICK").expect("No bot name");   
+    let conn = initialize_database().unwrap();
     
-    let queue: Vec<Queue> = vec![];
-    remove_file(FILENAME)?;
-    save_to_file(&queue, FILENAME)?;
-
-    let credentials = tmi::Credentials::new(nickname, oauth_token);
-    let mut client = tmi::Client::builder().credentials(credentials).connect().await.unwrap();
+    //TODO queue v databazi??????
+    
     
 
-    client.join_all(CHANNELS).await?;
+    let queue = Arc::new(Mutex::new(Vec::new()));
+    let bot_state = Arc::new(Mutex::new(BotState::new(queue.clone(), conn)));
 
-    loop {
-        let msg = client.recv().await?;
-        match msg.as_typed()? {
-            tmi::Message::Privmsg(msg) => {
-                let queue_mutex = Mutex::new(load_from_file(FILENAME)?);
-                println!("{}: {}", msg.sender().name(), msg.text());
-                if msg.text().starts_with("!join") {
-                    handle_join(&msg, &mut client, &queue_mutex).await?;
-                } else if msg.text().starts_with("!next") && is_moderator(&msg, &mut client).await {
-                    handle_next(&mut client, &queue_mutex).await?;
-                } else if msg.text().starts_with("!remove") && is_moderator(&msg, &mut client).await {
-                    handle_remove(&msg, &mut client, &queue_mutex).await?;
-                } else if msg.text().starts_with("!pos") {
-                    handle_pos(&msg, &mut client, &queue_mutex).await?;
-                } else if msg.text().starts_with("!leave") {
-                    handle_leave(&msg, &mut client, &queue_mutex).await?;
-                } else if msg.text().starts_with("!queue") {
-                    handle_queue(&mut client, &queue_mutex).await?;
-                }
-                
-            }
-            tmi::Message::Reconnect => {
-                client.reconnect().await?;
-                client.join_all(CHANNELS).await?;
-            }
-            tmi::Message::Ping(ping) => {
-                client.pong(&ping).await?;
-            }
-            _ => {}
+    // Start the chat bot in a separate task
+    let bot_state_clone = bot_state.clone();
+    task::spawn(async move {
+        if let Err(e) = run_chat_bot(bot_state_clone).await {
+            eprintln!("Error running chat bot: {:?}", e);
         }
-    }
-    
+    });
+
+    // Run the GUI
+    let app_state = AppState::new();
+    let native_options = eframe::NativeOptions::default();
+    eframe::run_native("Twitch Queue Manager", native_options, Box::new(|_cc| Box::new(app_state)));
+
 }
 
 

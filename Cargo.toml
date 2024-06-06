@@ -14,3 +14,7 @@ serde = {version = "1.0.202", features = ["derive"]}
 dotenv = "0.15"
 enigo = "0.2.1"
 futures = "0.3"
+reqwest = "0.12.4"
+egui = "0.18"
+eframe = "0.18"
+rusqlite = "0.26"
