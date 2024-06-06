@@ -126,19 +126,13 @@ fn load_from_database(conn: &Connection) -> anyhow::Result<Vec<Queue>> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let conn = initialize_database().unwrap();
     
     //TODO queue v databazi??????
-    
-    
-
-    let queue = Arc::new(Mutex::new(Vec::new()));
-    let bot_state = Arc::new(Mutex::new(BotState::new(queue.clone(), conn)));
+    let bot_state = Arc::new(Mutex::new(BotState::new()));
 
     // Start the chat bot in a separate task
-    let bot_state_clone = bot_state.clone();
     task::spawn(async move {
-        if let Err(e) = run_chat_bot(bot_state_clone).await {
+        if let Err(e) = run_chat_bot(bot_state).await {
             eprintln!("Error running chat bot: {:?}", e);
         }
     });
