@@ -29,52 +29,14 @@ todo!();
     Ok(!res.is_ok())
 }
 
-//User can join into queue
-pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, conn: &Mutex<Connection>) -> anyhow::Result<()> {
-    if let Some((_join, name)) = msg.text().split_once(" ") {
-        //If name is correct
-        if is_valid_bungie_name(name) {
-            //Update their name in queue
-            let new_queue = TwitchUser {
-                twitch_name: msg.sender().name().to_string(),
-                bungie_name: name.to_string(),
-            };
-            
-            let conn = conn.lock().await;
-            let mut stmt = conn.prepare("SELECT * FROM queue WHERE twitch_name = ?1")?;
-
-            let exists: Result<Option<TwitchUser>, _> = stmt.query_row(params![new_queue.twitch_name], |row| {
-                Ok(TwitchUser {
-                    twitch_name: row.get(1)?,
-                    bungie_name: row.get(2)?,
-                })
-            }).optional();
-            drop(stmt);
-            if let Some(_) = exists? {
-                conn.execute("UPDATE queue SET bungie_name = ?1 WHERE twitch_name = ?2", params![new_queue.bungie_name, new_queue.twitch_name])?;
-                let reply = format!("{} updated their Bungie name to {}", msg.sender().name(), new_queue.bungie_name);
-                client.privmsg(msg.channel(), &reply).send().await?;
-            //New name in queue - joined
-            } else {
-                add_to_queue(msg, client, queue_len, conn, new_queue).await?;
-            }
-        //Name is incorrect
-        } else {
-            send_invalid_name_reply(msg, client).await?;
-        }
-    //if command is incorrect or user is registered
-    } else {
-        let conn_user = initialize_database("user.db", USER_TABLE).unwrap();
-        let bungie_name = conn_user.query_row("SELECT * FROM user WHERE twitch_name = ?1", params![msg.sender().name()], |row| row.get::<_, String>(2))?;
-        
-        let join_queue = TwitchUser {
-            twitch_name: msg.sender().name().to_string(),
-            bungie_name: bungie_name
-        };
-        let conn = conn.lock().await;
-        add_to_queue(msg, client, queue_len, conn, join_queue).await?;
-    }
-    Ok(())
+fn get_bungie_name_from_db(twitch_name: &str) -> anyhow::Result<String> {
+    let conn_user = initialize_database("user.db", USER_TABLE)?;
+    let bungie_name = conn_user.query_row(
+        "SELECT bungie_name FROM user WHERE twitch_name = ?1",
+        params![twitch_name],
+        |row| row.get(0),
+    )?;
+    Ok(bungie_name)
 }
 
 fn is_valid_bungie_name(name: &str) -> bool {
@@ -126,6 +88,33 @@ async fn add_to_queue<'a>(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len
             //Queue is full
             client.privmsg(msg.channel(), "You can't enter queue, it is full").send().await?;
         }
+    Ok(())
+}
+
+//User can join into queue
+pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, conn: &Mutex<Connection>) -> anyhow::Result<()> {
+    if let Some((_join, name)) = msg.text().split_once(" ") {
+        if is_valid_bungie_name(name) {
+            //Update their name in queue or add to queue
+            let new_user = TwitchUser {
+                twitch_name: msg.sender().name().to_string(),
+                bungie_name: name.to_string(),
+            };
+            process_queue_entry(msg, client, queue_len, conn, new_user).await?;
+        
+        } else {
+            //Name is incorrect
+            send_invalid_name_reply(msg, client).await?;
+        }
+    } else {
+        //if command is incorrect or user is registered
+        let bungie_name = get_bungie_name_from_db(&msg.sender().name())?;
+        let new_user = TwitchUser {
+            twitch_name: msg.sender().name().to_string(),
+            bungie_name: bungie_name
+        };
+        process_queue_entry(msg, client, queue_len, conn, new_user).await?;
+    }
     Ok(())
 }
 
