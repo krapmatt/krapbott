@@ -1,11 +1,9 @@
-use crate::{bot, bot_commands::{discord, handle_join, handle_leave, handle_next, handle_pos, handle_queue, handle_remove, id_text, is_moderator, join_on_me, lurk_msg}, initialize_database, load_from_file, save_to_file, Queue};
+use crate::{ bot_commands::{discord, handle_join, handle_leave, handle_next, handle_pos, handle_queue, handle_remove, id_text, is_moderator, join_on_me, lurk_msg}, initialize_database, load_from_file, save_to_file, Queue};
 use dotenv::dotenv;
-use rusqlite::Connection;
 
-use std::{env::var, fs::{remove_file, File}, sync::Arc, vec};
+use std::{env::var, sync::Arc};
 use tokio::sync::Mutex;
 
-pub const FILENAME: &str = "queue.json";
 pub const CHANNELS: &[&str] = &["#krapmatt"];
 
 pub struct BotState {
@@ -25,15 +23,9 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>) -> anyhow::Result<()>
     dotenv().ok();
     let oauth_token = var("TWITCH_OAUTH_TOKEN_BOTT").expect("No oauth token"); 
     let nickname = var("TWITCH_BOT_NICK").expect("No bot name");   
-    
-    let queue: Vec<Queue> = vec![];
-    remove_file(FILENAME)?;
-    save_to_file(&queue, FILENAME)?;
 
     let credentials = tmi::Credentials::new(nickname, oauth_token);
     let mut client = tmi::Client::builder().credentials(credentials).connect().await.unwrap();
-    
-    
 
     client.join_all(CHANNELS).await?;
     

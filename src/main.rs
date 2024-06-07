@@ -1,9 +1,8 @@
 mod bot_commands;
 mod bot;
-use std::{env, fs::File, io::{self, BufRead, BufReader, Write}, sync::Arc};
-use bot::{run_chat_bot, BotState, FILENAME};
+use std::{env, fs::File, io::{self, BufRead, BufReader, Write}, sync::Arc, thread::spawn};
+use bot::{run_chat_bot, BotState};
 
-use egui::{Label, Sense};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::Mutex, task};
@@ -65,7 +64,7 @@ impl eframe::App for AppState {
             ui.heading("Queue Management");
 
             egui::ScrollArea::vertical().show(ui, |ui| {
-                let queue = load_from_file(FILENAME).unwrap();
+                /*let queue = load_from_file(FILENAME).unwrap();
                 for (index, item) in queue.iter().enumerate() {
                     ui.horizontal(|ui| {
                         let text = format!("{}. {} {}", index + 1, item.twitch_name, item.bungie_name);
@@ -76,7 +75,7 @@ impl eframe::App for AppState {
                         }
                         
                     });
-                };
+                };*/
             });
         });
     }
@@ -129,18 +128,29 @@ async fn main() -> anyhow::Result<()> {
     
     //TODO queue v databazi??????
     let bot_state = Arc::new(Mutex::new(BotState::new()));
-
     // Start the chat bot in a separate task
-    task::spawn(async move {
-        if let Err(e) = run_chat_bot(bot_state).await {
-            eprintln!("Error running chat bot: {:?}", e);
-        }
+    let bot_state_clone = Arc::clone(&bot_state);
+    spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            if let Err(e) = run_chat_bot(bot_state_clone).await {
+                eprintln!("Error running chat bot: {}", e);
+            }
+        });
     });
-
-    // Run the GUI
+    
+    //Run the GUI
     let app_state = AppState::new();
     let native_options = eframe::NativeOptions::default();
     eframe::run_native("Twitch Queue Manager", native_options, Box::new(|_cc| Box::new(app_state)));
+    
+    
+        
+           
+    Ok(())
+    
+    
+    
 
 }
 
