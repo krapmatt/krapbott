@@ -1,4 +1,4 @@
-use crate::{ bot_commands::{discord, handle_join, handle_leave, handle_next, handle_pos, handle_queue, handle_remove, id_text, is_moderator, join_on_me, lurk_msg}, initialize_database, load_from_file, save_to_file, Queue};
+use crate::{ bot_commands::{discord, handle_join, handle_leave, handle_next, handle_pos, handle_queue, handle_remove, id_text, is_moderator, join_on_me, lurk_msg, register_user}, database::QUEUE_TABLE, initialize_database, load_from_file, save_to_file, TwitchUser};
 use dotenv::dotenv;
 
 use std::{env::var, sync::Arc};
@@ -38,16 +38,20 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>) -> anyhow::Result<()>
                 let queue_len = 30;
                 //set size of fireteam
                 let queue_drop = 5;
-                
+                let conn = Mutex::new(initialize_database("queue.db", QUEUE_TABLE).unwrap());
                 println!("Channel: {}, {}: {}", msg.channel() ,msg.sender().name(), msg.text());
+
                 if msg.text().starts_with("!open_queue") && is_moderator(&msg, &mut client).await {
+                    
+                    conn.lock().await.execute("DELETE from queue", [])?;
                     bot_state.lock().await.queue_open = true;
                     client.privmsg(msg.channel(), "The queue is now open!").send().await?;
                 } else if msg.text().starts_with("!close_queue") && is_moderator(&msg, &mut client).await {
+                    
                     bot_state.lock().await.queue_open = false;
                     client.privmsg(msg.channel(), "The queue is now closed!").send().await?;
                 } else if bot_state.lock().await.queue_open {
-                    let conn = Arc::new(Mutex::new(initialize_database().unwrap()));
+
                     if msg.text().starts_with("!join") {
                         handle_join(&msg, &mut client, queue_len, &conn).await?;
                     } else if msg.text().starts_with("!next") && is_moderator(&msg, &mut client).await {
@@ -74,6 +78,8 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>) -> anyhow::Result<()>
                     discord(&msg, &mut client).await?;
                 } else if msg.text().starts_with("!lurk") {
                     lurk_msg(&msg, &mut client).await?;
+                } else if msg.text().starts_with("!register") {
+                    register_user(&msg, &mut client).await;
                 }
                 
             }
