@@ -1,12 +1,11 @@
 use std::time::Duration;
 
-use egui::emath::smart_aim;
 use enigo::{Enigo, Keyboard, Mouse, Settings};
 use rusqlite::{params, Connection, OptionalExtension};
 use tmi::{msg, Client};
 use tokio::sync::Mutex;
 
-use crate::{bot::FILENAME, initialize_database, save_to_database, save_to_file, Queue};
+use crate::Queue;
 
 pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: &mut Client, ) -> bool {
     //předělat píše i když je success)
@@ -48,8 +47,8 @@ pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len:
 
             let exists: Result<Option<Queue>, _> = stmt.query_row(params![new_queue.twitch_name], |row| {
                 Ok(Queue {
-                    twitch_name: row.get(0)?,
-                    bungie_name: row.get(1)?,
+                    twitch_name: row.get(1)?,
+                    bungie_name: row.get(2)?,
                 })
             }).optional();
 
@@ -140,11 +139,11 @@ pub async fn handle_remove(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &M
 pub async fn handle_pos(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, conn: &Mutex<Connection>) -> anyhow::Result<()> {
     let conn = conn.lock().await;
     let mut stmt = conn.prepare("SELECT rowid, * FROM queue WHERE twitch_name = ?1")?;
-    if let Some((index, _)) = stmt.query_row(params![msg.sender().name()], |row| {
-        Ok((row.get::<_, i64>(0)? - 1, row.get::<_, String>(1)?))    
+    if let Some(index)= stmt.query_row(params![msg.sender().name()], |row| {
+        Ok(row.get::<_, i64>(0)?)    
     }).optional()? {
-        let group = (index + 1) / queue_len as i64;
-        let reply = format!("You are at position {} and in group {}", index + 1, group);
+        let group = index / queue_len as i64;
+        let reply = format!("You are at position {} and in group {}", index, group + 1);
         client.privmsg(msg.channel(), &reply).send().await?;
     } else {
         let reply = format!("You are not in the queue, {}.", msg.sender().name());
@@ -171,9 +170,9 @@ pub async fn handle_leave(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &Mu
 pub async fn handle_queue(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &Mutex<Connection>) -> anyhow::Result<()> {
     let conn = conn.lock().await;
     let mut stmt = conn.prepare("SELECT twitch_name FROM queue")?;
-    let queue_iter = stmt.query_map([], |row| row.get::<_,String>(1))?;
+    let queue_iter = stmt.query_map([], |row| row.get::<_,String>(0))?;
 
-    let mut queue_msg = Vec::new();
+    let mut queue_msg: Vec<String> = Vec::new();
     for entry in queue_iter {
         queue_msg.push(entry?);
     }
