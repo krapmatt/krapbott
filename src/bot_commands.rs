@@ -1,32 +1,75 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use enigo::{Enigo, Keyboard, Mouse, Settings};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
 use tmi::Client;
 use tokio::sync::{Mutex, MutexGuard};
 
 use crate::{database::{initialize_database, save_to_user_database, USER_TABLE}, TwitchUser};
 
-pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: &mut Client, ) -> bool {
+pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: &mut Client) -> bool {
     if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "mod" || badge.as_badge_data().name() == "broadcaster") {
         return true;
     } else {
         client.privmsg(msg.channel(), "You are not a moderator/broadcaster. You can't use this command").send().await.expect("No connection to channel");
         return false;
     }
+    
 }
 
-pub async fn is_follower(oauth_token: &str, from_user_id: &str, to_user_id: &str) -> Result<bool, reqwest::Error> {
-    let url = format!("https://api.twitch.tv/helix/users/follows?from_id={}&to_id={}", from_user_id, to_user_id);
-    let client = reqwest::Client::new();
-todo!();
-    let res = client
+#[derive(Serialize)]
+struct BanRequest {
+    data: BanData,
+}
+
+#[derive(Serialize)]
+struct BanData {
+    user_id: String,
+}
+
+pub async fn ban_bots(msg: &tmi::Privmsg<'_>, client: &mut Client, oauth_token: &str, client_id: String) {
+    let url = format!("https://api.twitch.tv/helix/moderation/bans?broadcaster_id={}&moderator_id=1091219021", msg.channel_id());
+    
+    let ban_request = BanRequest {
+        data: BanData {
+            user_id: msg.sender().id().to_string(),
+        },
+    };
+    let res = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(oauth_token)
+        .header("Client-Id", client_id)
+
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&ban_request).unwrap())
+        
+        .send()
+        .await.expect("Bad reqwest");
+    println!("{:?}", res.text().await);
+    client.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await;
+    
+}
+
+pub async fn is_follower(msg: &tmi::Privmsg<'_>, client: &mut Client, oauth_token: &str, client_id: String) -> bool {
+    let url = format!("https://api.twitch.tv/helix/channels/followed?user_id={}&broadcaster_id={}", msg.sender().id(), msg.channel_id());
+    let res = reqwest::Client::new()
         .get(&url)
+        .header("Client-Id", client_id)
         .bearer_auth(oauth_token)
         .send()
-        .await;
+        .await.expect("Bad reqwest");
     println!("{:?}", res);
-    Ok(!res.is_ok())
+    if res.status().is_success() {
+        true
+    } else {
+        client.privmsg(msg.channel(), "You are not a follower!").send().await.expect("Client doesnt work");
+        false
+    }
+}
+
+fn is_valid_bungie_name(name: &str) -> bool {
+    name.contains('#') && name.split_once('#').unwrap().1.len() == 4
 }
 
 fn get_bungie_name_from_db(twitch_name: &str) -> anyhow::Result<String> {
@@ -39,9 +82,7 @@ fn get_bungie_name_from_db(twitch_name: &str) -> anyhow::Result<String> {
     Ok(bungie_name)
 }
 
-fn is_valid_bungie_name(name: &str) -> bool {
-    name.contains('#') && name.split_once('#').unwrap().1.len() == 4
-}
+
 
 async fn send_invalid_name_reply(msg: &tmi::Privmsg<'_>, client: &mut Client) -> anyhow::Result<()> {
     let reply = format!("Invalid command format or Bungie name, {}!", msg.sender().name());
@@ -91,11 +132,13 @@ async fn add_to_queue<'a>(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len
     Ok(())
 }
 
+
+
 //User can join into queue
 pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, conn: &Mutex<Connection>) -> anyhow::Result<()> {
+    
     if let Some((_join, name)) = msg.text().split_once(" ") {
         if is_valid_bungie_name(name) {
-            //Update their name in queue or add to queue
             let new_user = TwitchUser {
                 twitch_name: msg.sender().name().to_string(),
                 bungie_name: name.to_string(),
@@ -103,17 +146,19 @@ pub async fn handle_join(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len:
             process_queue_entry(msg, client, queue_len, conn, new_user).await?;
         
         } else {
-            //Name is incorrect
             send_invalid_name_reply(msg, client).await?;
         }
     } else {
-        //if command is incorrect or user is registered
-        let bungie_name = get_bungie_name_from_db(&msg.sender().name())?;
-        let new_user = TwitchUser {
-            twitch_name: msg.sender().name().to_string(),
-            bungie_name: bungie_name
-        };
-        process_queue_entry(msg, client, queue_len, conn, new_user).await?;
+        if let Some(bungie_name) = get_bungie_name_from_db(&msg.sender().name()).ok() {
+            let new_user = TwitchUser {
+                twitch_name: msg.sender().name().to_string(),
+                bungie_name: bungie_name
+            };
+            process_queue_entry(msg, client, queue_len, conn, new_user).await?;
+        } else {
+            send_invalid_name_reply(msg, client).await?;
+        }
+        
     }
     Ok(())
 }
@@ -196,6 +241,7 @@ pub async fn handle_leave(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &Mu
         client.privmsg(msg.channel(), &reply).send().await?;
     } else {
         let reply = format!("You are not in queue, {}.", msg.sender().name());
+        client.privmsg(msg.channel(), &reply).send().await;
     }
     Ok(())
 }
@@ -238,14 +284,6 @@ pub async fn register_user(msg: &tmi::Privmsg<'_>, client: &mut Client) {
     
 }
 
-
-
-
-
-
-
-
-
 async fn invite_macro(bungie_name: &str) {
     let mut enigo = Enigo::new(&Settings::default()).unwrap();
     let _ = enigo.move_mouse(100, 0, enigo::Coordinate::Abs);
@@ -260,23 +298,7 @@ async fn invite_macro(bungie_name: &str) {
     let _ = enigo.key(enigo::Key::Return, enigo::Direction::Click);
 }
 
-pub async fn join_on_me(msg: &tmi::Privmsg<'_>, client: &mut Client) -> anyhow::Result<()> {
-    client.privmsg(msg.channel(), "Type in game chat: /join KrapMatt#1497").send().await?;
-    Ok(())
-}
-
-pub async fn id_text(msg: &tmi::Privmsg<'_>, client: &mut Client) -> anyhow::Result<()> {
-    client.privmsg(msg.channel(), "KrapMatt#1497").send().await?;
-    Ok(())
-}
-
-pub async fn discord(msg: &tmi::Privmsg<'_>, client: &mut Client) -> anyhow::Result<()> {
-    client.privmsg(msg.channel(), "https://discord.gg/jJMwaetjeu").send().await?;
-    Ok(())
-}
-
-pub async fn lurk_msg(msg: &tmi::Privmsg<'_>, client: &mut Client) -> anyhow::Result<()> {
-    let reply = format!("Thanks for the lurk {}. I'll appreciate if you leave tab open <3", msg.sender().name());
+pub async fn simple_command(msg: &tmi::Privmsg<'_>, client: &mut Client, reply: &str) -> anyhow::Result<()> {
     client.privmsg(msg.channel(), &reply).send().await?;
     Ok(())
 }
