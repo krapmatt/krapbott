@@ -1,4 +1,4 @@
 /target
-/.env
-/queue.db
-/user.db
+.env
+queue.db
+user.db
