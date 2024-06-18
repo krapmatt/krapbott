@@ -21,23 +21,37 @@ impl Default for TwitchUser {
         TwitchUser { twitch_name: String::new(), bungie_name: String::new() }
     }
 }
-impl PartialEq for TwitchUser {
-    fn eq(&self, other: &Self) -> bool {
-        if self.twitch_name == other.twitch_name {
-            return true
-        } else {
-            return false
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct ChatMessage {
+    channel: String,
+    user: String,
+    text: String,
+}
+
+struct SharedState {
+    messages: Vec<ChatMessage>,
+}
+
+impl SharedState {
+    fn new() -> Self {
+        Self {
+            messages: Vec::new(),
         }
+    }
+
+    fn add_message(&mut self, message: ChatMessage) {
+        self.messages.push(message);
     }
 }
 
 struct AppState {
+    shared_state: Arc<std::sync::Mutex<SharedState>>
 }
 
 impl AppState {
-    fn new() -> Self {
-        AppState {}
-        
+    fn new(shared_state: Arc<std::sync::Mutex<SharedState>>) -> Self {
+        AppState { shared_state }
     }
 }
 
@@ -45,6 +59,7 @@ impl eframe::App for AppState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let conn = initialize_database("queue.db", QUEUE_TABLE).unwrap();
         let queue = load_from_queue(&conn).unwrap();
+        let messages = self.shared_state.lock().unwrap().messages.clone();
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Queue Management");
             
@@ -63,8 +78,21 @@ impl eframe::App for AppState {
                         }
                         
                     });
-                };
+                }
             });
+
+            ui.separator();
+            ui.heading("Chat Messages");
+            ui.push_id("85", |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for msg in messages.iter() {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{}: {}", msg.user, msg.text));
+                        });
+                    }
+                });
+            });
+            
         });
     }
 }
@@ -74,19 +102,23 @@ impl eframe::App for AppState {
 async fn main() -> anyhow::Result<()> {
     
     let bot_state = Arc::new(Mutex::new(BotState::new()));
+    let shared_state = Arc::new(std::sync::Mutex::new(SharedState::new()));
+
     // Start the chat bot in a separate task
     let bot_state_clone = Arc::clone(&bot_state);
+    let shared_state_clone = Arc::clone(&shared_state);
+    // Start the chat bot in a separate task
     spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            if let Err(e) = run_chat_bot(bot_state_clone).await {
+            if let Err(e) = run_chat_bot(bot_state_clone, shared_state_clone).await {
                 eprintln!("Error running chat bot: {}", e);
             }
         });
     });
     
     //Run the GUI
-    let app_state = AppState::new();
+    let app_state = AppState::new(shared_state);
     let native_options = eframe::NativeOptions::default();
     eframe::run_native("Twitch Queue Manager", native_options, Box::new(|_cc| Box::new(app_state)));
     

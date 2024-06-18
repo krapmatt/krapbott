@@ -3,13 +3,13 @@ use std::{collections::HashMap, time::Duration};
 use enigo::{Enigo, Keyboard, Mouse, Settings};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use tmi::Client;
+use tmi::{msg, Client};
 use tokio::sync::{Mutex, MutexGuard};
 
 use crate::{database::{initialize_database, save_to_user_database, USER_TABLE}, TwitchUser};
 
 pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: &mut Client) -> bool {
-    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "mod" || badge.as_badge_data().name() == "broadcaster") {
+    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "moderator" || badge.as_badge_data().name() == "broadcaster") {
         return true;
     } else {
         client.privmsg(msg.channel(), "You are not a moderator/broadcaster. You can't use this command").send().await.expect("No connection to channel");
@@ -27,7 +27,7 @@ struct BanRequest {
 struct BanData {
     user_id: String,
 }
-
+// Best viewers on u.to/paq8IA
 pub async fn ban_bots(msg: &tmi::Privmsg<'_>, client: &mut Client, oauth_token: &str, client_id: String) {
     let url = format!("https://api.twitch.tv/helix/moderation/bans?broadcaster_id={}&moderator_id=1091219021", msg.channel_id());
     
@@ -47,12 +47,10 @@ pub async fn ban_bots(msg: &tmi::Privmsg<'_>, client: &mut Client, oauth_token: 
         .send()
         .await.expect("Bad reqwest");
     println!("{:?}", res.text().await);
-    client.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await;
-    
 }
 
 pub async fn is_follower(msg: &tmi::Privmsg<'_>, client: &mut Client, oauth_token: &str, client_id: String) -> bool {
-    let url = format!("https://api.twitch.tv/helix/channels/followed?user_id={}&broadcaster_id={}", msg.sender().id(), msg.channel_id());
+    let url = format!("https://api.twitch.tv/helix/channels/followers?broadcaster_id={}&user_id={}", msg.channel_id(), msg.sender().id());
     let res = reqwest::Client::new()
         .get(&url)
         .header("Client-Id", client_id)
@@ -60,15 +58,18 @@ pub async fn is_follower(msg: &tmi::Privmsg<'_>, client: &mut Client, oauth_toke
         .send()
         .await.expect("Bad reqwest");
     println!("{:?}", res);
+
     if res.status().is_success() {
+        println!("{:?}", res.text().await);
         true
     } else {
+        println!("{:?}", res.text().await);
         client.privmsg(msg.channel(), "You are not a follower!").send().await.expect("Client doesnt work");
         false
     }
 }
 
-fn is_valid_bungie_name(name: &str) -> bool {
+pub fn is_valid_bungie_name(name: &str) -> bool {
     name.contains('#') && name.split_once('#').unwrap().1.len() == 4
 }
 
@@ -218,7 +219,7 @@ pub async fn handle_remove(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &M
 pub async fn handle_pos(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, conn: &Mutex<Connection>) -> anyhow::Result<()> {
     let conn = conn.lock().await;
     let mut stmt = conn.prepare("SELECT rowid, * FROM queue WHERE twitch_name = ?1")?;
-    if let Some(index)= stmt.query_row(params![msg.sender().name()], |row| {
+    if let Some(index) = stmt.query_row(params![msg.sender().name()], |row| {
         Ok(row.get::<_, i64>(0)?)    
     }).optional()? {
         let group = index / queue_len as i64;
@@ -283,6 +284,21 @@ pub async fn register_user(msg: &tmi::Privmsg<'_>, client: &mut Client) {
 
     
 }
+//if is/not in database
+pub async fn bungiename(msg: &tmi::Privmsg<'_>, client: &mut Client, twitch_name: &str) -> anyhow::Result<()> {
+    let conn = initialize_database("user.db", USER_TABLE).unwrap();
+    let mut stmt = conn.prepare("SELECT rowid, * FROM user WHERE twitch_name = ?1").unwrap();
+
+    if let Some(bungie_name) = stmt.query_row(params![twitch_name], |row| {
+        Ok(row.get::<_, String>(3)?)
+    }).optional()? {
+        client.privmsg(msg.channel(), &format!("@{} || BungieName: {}||", twitch_name, bungie_name)).send().await?;
+    } else {
+        client.privmsg(msg.channel(), &format!("{}, you are not registered", twitch_name)).send().await?;
+    }
+    Ok(())
+}
+
 
 async fn invite_macro(bungie_name: &str) {
     let mut enigo = Enigo::new(&Settings::default()).unwrap();
