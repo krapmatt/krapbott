@@ -1,7 +1,11 @@
 use crate::{ 
-    bot_commands::{ban_bots, bungiename, handle_join, handle_leave, handle_next, handle_pos, handle_queue, handle_remove, is_follower, is_moderator, is_valid_bungie_name, register_user, simple_command}, database::QUEUE_TABLE, initialize_database, AppState, ChatMessage, SharedState
+    bot_commands::{ban_bots, bungiename, handle_join, handle_leave, handle_next, handle_pos, 
+        handle_queue, handle_remove, is_follower, is_moderator, is_valid_bungie_name, register_user, simple_command}, 
+    database::{get_command_response, remove_command, save_command, COMMAND_TABLE, QUEUE_TABLE}, initialize_database, ChatMessage, SharedState
 };
 use dotenv::dotenv;
+use egui::TextBuffer;
+use rusqlite::Connection;
 use tmi::Client;
 
 use std::{env::var, sync::Arc};
@@ -13,7 +17,11 @@ pub struct BotState {
     queue_open: bool,
     oauth_token_bot: String,
     nickname: String,
-    bot_id: String
+    bot_id: String,
+    conn_command: Connection,
+    queue_len: usize,
+    queue_teamsize: usize,
+
 }
 
 impl BotState {
@@ -22,12 +30,15 @@ impl BotState {
         let oauth_token_bot = var("TWITCH_OAUTH_TOKEN_BOTT").expect("No bot oauth token"); 
         let nickname = var("TWITCH_BOT_NICK").expect("No bot name");   
         let bot_id = var("TWITCH_CLIENT_ID_BOT").expect("msg");
-
+        let conn_command = initialize_database("commands.db", COMMAND_TABLE).unwrap();
         BotState { 
             queue_open: false,
             oauth_token_bot: oauth_token_bot,
             nickname: nickname,
             bot_id: bot_id,
+            conn_command: conn_command,
+            queue_len: 30,
+            queue_teamsize: 5,
         }
     }
 
@@ -55,18 +66,13 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>, shared_state: Arc<std
                     text: msg.text().to_string(),
                 };
                 shared_state.lock().unwrap().add_message(chat_message);
-                
-                //temp
-                //set size of queue
-                let queue_len = 30;
-                //set size of fireteam
-                let queue_drop = 5;
-                let conn = Mutex::new(initialize_database("queue.db", QUEUE_TABLE).unwrap());
-                println!("Channel: {}, {}: {}", msg.channel() ,msg.sender().name(), msg.text());
+                  
+                let conn_queue = Mutex::new(initialize_database("queue.db", QUEUE_TABLE).unwrap());
+      
                 let mut bot_state = bot_state.lock().await;
                 match msg.text() {
                     text if text.starts_with("!open_queue") && is_moderator(&msg, &mut client).await => {
-                        conn.lock().await.execute("DELETE from queue", [])?;
+                        conn_queue.lock().await.execute("DELETE from queue", [])?;
                         bot_state.queue_open = true;
                         client.privmsg(msg.channel(), "The queue is now open!").send().await?;
                     }
@@ -76,33 +82,27 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>, shared_state: Arc<std
                     }
                     text if bot_state.queue_open => match text {
                         text if text.starts_with("!join") && is_follower(&msg, &mut client, &bot_state.oauth_token_bot, bot_state.bot_id.clone()).await => {
-                            handle_join(&msg, &mut client, queue_len, &conn).await?;
+                            handle_join(&msg, &mut client, bot_state.queue_len, &conn_queue).await?;
                         }
                         text if text.starts_with("!next") && is_moderator(&msg, &mut client).await => {
-                            handle_next(&msg, &mut client, queue_drop, &conn).await?;
+                            handle_next(&msg, &mut client, bot_state.queue_teamsize, &conn_queue).await?;
                         }
                         text if text.starts_with("!remove") && is_moderator(&msg, &mut client).await => {
-                            handle_remove(&msg, &mut client, &conn).await?;
+                            handle_remove(&msg, &mut client, &conn_queue).await?;
                         }
                         text if text.starts_with("!pos") => {
-                            handle_pos(&msg, &mut client, queue_len, &conn).await?;
+                            handle_pos(&msg, &mut client, bot_state.queue_len, &conn_queue).await?;
                         }
                         text if text.starts_with("!leave") => {
-                            handle_leave(&msg, &mut client, &conn).await?;
+                            handle_leave(&msg, &mut client, &conn_queue).await?;
                         }
                         text if text.starts_with("!queue") => {
-                            handle_queue(&msg, &mut client, &conn).await?;
+                            handle_queue(&msg, &mut client, &conn_queue).await?;
                         }
                         _ => {}
                     }
                     text if text.starts_with("!join") || text.starts_with("!next") || text.starts_with("!remove") || text.starts_with("!pos") || text.starts_with("!leave") || text.starts_with("!queue") => {
                         client.privmsg(msg.channel(), "The queue is currently closed!").send().await?;
-                    }
-                    text if text.starts_with("!id") => {
-                        simple_command(&msg, &mut client, "Type in game chat: /join KrapMatt#1497").await?;
-                    }
-                    text if text.starts_with("!discord") => {
-                        simple_command(&msg, &mut client, "https://discord.gg/jJMwaetjeu").await?;
                     }
                     text if text.starts_with("!lurk") => {
                         simple_command(&msg, &mut client, &format!("Thanks for the lurk {}. I'll appreciate if you leave tab open <3", msg.sender().name())).await?;
@@ -113,9 +113,6 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>, shared_state: Arc<std
                     text if text.starts_with("Cheap viewers on u.to/") || text.starts_with("Best viewers on cutt.ly/") => {
                         ban_bots(&msg, &mut client, &bot_state.oauth_token_bot, bot_state.bot_id.clone()).await;
                         client.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await?;
-                    }
-                    text if text.starts_with("!blameArr") => {
-                        simple_command(&msg, &mut client, "If something doesn't work, blame Arr").await?;
                     }
                     text if text.starts_with("!bungiename") => {
                         if text.trim_end().len() == 11 {
@@ -129,6 +126,31 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>, shared_state: Arc<std
                             bungiename(&msg, &mut client, &twitch_name).await?;
                         }
 
+                    }
+                    text if text.starts_with("!mod_addcommand") && is_moderator(&msg, &mut client).await => {
+                        let words: Vec<&str> = text.split_whitespace().collect();
+                        if words.len() > 2 {
+                            let command = words[1];
+                            let reply = words[2..].join(" ");
+                            save_command(&bot_state.conn_command, command, &reply);
+                            client.privmsg(msg.channel(), &format!("Command !{} added.", command)).send().await?;
+                        } else {
+                            client.privmsg(msg.channel(), "Usage: !addcommand <command> <response>").send().await?;
+                        }
+                    }
+                    text if text.starts_with("!mod_removecommand") && is_moderator(&msg, &mut client).await => {
+                        let words: Vec<&str> = text.split_whitespace().collect();
+                        let command = words[1];
+                        if remove_command(&bot_state.conn_command, command) {
+                            client.privmsg(msg.channel(), &format!("Command !{} removed.", command)).send().await?;
+                        } else {
+                            client.privmsg(msg.channel(), &format!("Command !{} doesn't exist.", command)).send().await?;
+                        }
+                    }
+                    text if text.starts_with("!") => {
+                        if let Ok(Some(reply)) = get_command_response(&bot_state.conn_command, text) {
+                            client.privmsg(msg.channel(), &reply).send().await?;
+                        }
                     }
                     _ => {}
                 }
