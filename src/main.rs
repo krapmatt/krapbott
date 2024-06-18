@@ -83,11 +83,11 @@ impl eframe::App for AppState {
 
             ui.separator();
             ui.heading("Chat Messages");
-            ui.push_id("85", |ui| {
+            ui.push_id("2", |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for msg in messages.iter() {
                         ui.horizontal(|ui| {
-                            ui.label(format!("{}: {}", msg.user, msg.text));
+                            ui.label(format!("Channel:{} // {}: {}", msg.channel, msg.user, msg.text));
                         });
                     }
                 });
@@ -103,15 +103,12 @@ async fn main() -> anyhow::Result<()> {
     
     let bot_state = Arc::new(Mutex::new(BotState::new()));
     let shared_state = Arc::new(std::sync::Mutex::new(SharedState::new()));
-
-    // Start the chat bot in a separate task
-    let bot_state_clone = Arc::clone(&bot_state);
     let shared_state_clone = Arc::clone(&shared_state);
-    // Start the chat bot in a separate task
+    
     spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            if let Err(e) = run_chat_bot(bot_state_clone, shared_state_clone).await {
+            if let Err(e) = run_chat_bot(bot_state, shared_state_clone).await {
                 eprintln!("Error running chat bot: {}", e);
             }
         });

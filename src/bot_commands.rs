@@ -242,7 +242,7 @@ pub async fn handle_leave(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &Mu
         client.privmsg(msg.channel(), &reply).send().await?;
     } else {
         let reply = format!("You are not in queue, {}.", msg.sender().name());
-        client.privmsg(msg.channel(), &reply).send().await;
+        client.privmsg(msg.channel(), &reply).send().await?;
     }
     Ok(())
 }
@@ -272,10 +272,9 @@ pub async fn register_user(msg: &tmi::Privmsg<'_>, client: &mut Client) {
                 twitch_name: msg.sender().name().to_string(),
                 bungie_name: name.to_string()
             };
-            println!("{} {}" ,new_user.twitch_name, new_user.bungie_name);
             let conn = Mutex::new(initialize_database("user.db", USER_TABLE).unwrap());
             match save_to_user_database(&conn, &new_user).await {
-                Ok(_) => client.privmsg(msg.channel(), "Successful registration to database").send().await,
+                Ok(_) => client.privmsg(msg.channel(), &format!("Registered to database as {}", new_user.bungie_name)).send().await,
                 Err(err) => client.privmsg(msg.channel(), "You are already registered").send().await
             }; 
             

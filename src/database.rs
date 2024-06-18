@@ -15,6 +15,15 @@ pub const USER_TABLE: &str = "CREATE TABLE IF NOT EXISTS user (
     UNIQUE (twitch_name)
 )";
 
+pub const COMMAND_TABLE: &str = "CREATE TABLE IF NOT EXISTS commands (
+    id INTEGER PRIMARY KEY,
+    command TEXT NOT NULL,
+    reply TEXT NOT NULL,
+    UNIQUE (command)
+)";
+
+
+
 pub fn initialize_database(db_name: &str, sql_query: &str) -> anyhow::Result<Connection> {
     let conn = Connection::open(db_name)?;
     conn.execute(sql_query, [])?;
@@ -23,8 +32,9 @@ pub fn initialize_database(db_name: &str, sql_query: &str) -> anyhow::Result<Con
 
 pub async fn save_to_user_database(conn: &Mutex<Connection>, user: &TwitchUser) -> Result<usize, rusqlite::Error> {
     conn.lock().await.execute(
-        "INSERT INTO user (twitch_name, bungie_name) VALUES (?1, ?2)",
-        params![user.twitch_name, user.bungie_name],
+        "INSERT INTO user (twitch_name, bungie_name) VALUES (?1, ?2)
+         ON CONFLICT(twitch_name) DO UPDATE SET bungie_name = excluded.bungie_name",
+        params![user.twitch_name, user.bungie_name],        
     )
     
 }
@@ -43,4 +53,43 @@ pub fn load_from_queue(conn: &Connection) -> anyhow::Result<Vec<TwitchUser>> {
         queue.push(entry?);
     }
     Ok(queue)
+}
+
+pub fn save_command(conn: &Connection, command: &str, reply: &str) -> anyhow::Result<()> {
+    let mut command = command.to_string();
+    command.insert(0, '!');
+    conn.execute("INSERT INTO commands (command, reply) VALUES (?1, ?2)", params![command, reply])?;
+    Ok(())
+}
+
+pub fn get_command_response(conn: &Connection, command: &str) -> anyhow::Result<Option<String>> {
+    
+    let mut stmt = conn.prepare("SELECT reply FROM commands WHERE command = ?1")?;
+    match stmt.query_row(params![command], |row| row.get::<_, String>(0)) {
+        Ok(reply) => {
+            println!("Command found: {:?}", reply);
+            return Ok(Some(reply))
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            println!("No command found");
+            return Ok(None)
+        }
+        Err(e) => {
+            println!("Database error: {:?}", e);
+            return Err(e.into())
+        }
+    }
+
+    
+}
+
+pub fn remove_command(conn: &Connection, command: &str) -> bool {
+    let mut command = command.to_string();
+    command.insert(0, '!');
+    if conn.execute("DELETE FROM commands WHERE command = ?1", params![command]).expect("Remove command went wrong") > 1 {
+        true
+    } else {
+        false
+    }
+   
 }
