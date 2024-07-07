@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::mpsc::channel, time::Duration};
 
 use enigo::{Enigo, Keyboard, Mouse, Settings};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -74,7 +74,7 @@ pub fn is_valid_bungie_name(name: &str) -> bool {
 }
 
 fn get_bungie_name_from_db(twitch_name: &str) -> anyhow::Result<String> {
-    let conn_user = initialize_database("user.db", USER_TABLE)?;
+    let conn_user = initialize_database()?;
     let bungie_name = conn_user.query_row(
         "SELECT bungie_name FROM user WHERE twitch_name = ?1",
         params![twitch_name],
@@ -272,7 +272,7 @@ pub async fn register_user(msg: &tmi::Privmsg<'_>, client: &mut Client) {
                 twitch_name: msg.sender().name().to_string(),
                 bungie_name: name.to_string()
             };
-            let conn = Mutex::new(initialize_database("user.db", USER_TABLE).unwrap());
+            let conn = Mutex::new(initialize_database().unwrap());
             match save_to_user_database(&conn, &new_user).await {
                 Ok(_) => client.privmsg(msg.channel(), &format!("Registered to database as {}", new_user.bungie_name)).send().await,
                 Err(err) => client.privmsg(msg.channel(), "You are already registered").send().await
@@ -285,7 +285,7 @@ pub async fn register_user(msg: &tmi::Privmsg<'_>, client: &mut Client) {
 }
 //if is/not in database
 pub async fn bungiename(msg: &tmi::Privmsg<'_>, client: &mut Client, twitch_name: &str) -> anyhow::Result<()> {
-    let conn = initialize_database("user.db", USER_TABLE).unwrap();
+    let conn = initialize_database().unwrap();
     let mut stmt = conn.prepare("SELECT rowid, * FROM user WHERE twitch_name = ?1").unwrap();
 
     if let Some(bungie_name) = stmt.query_row(params![twitch_name], |row| {
@@ -297,6 +297,61 @@ pub async fn bungiename(msg: &tmi::Privmsg<'_>, client: &mut Client, twitch_name
     }
     Ok(())
 }
+
+//random fireteam
+pub async fn random(msg: &tmi::Privmsg<'_>, client: &mut Client, mutex_conn: &Mutex<Connection>, teamsize: usize) -> anyhow::Result<()>{
+    //Push the randomly chosen player to first positions
+    
+    
+    let mut conn = mutex_conn.lock().await;
+    
+    let tx = conn.transaction()?;
+    let mut stmt = tx.prepare("SELECT queue.id FROM queue ORDER BY RANDOM() LIMIT ?1")?;
+    let ids: Vec<i64> = stmt.query_map(params![teamsize], |row| row.get(0))?
+        .map(|id| id.unwrap())
+        .collect();
+    println!("im here");
+    if ids.is_empty() {
+        println!("No rows selected.");
+        return Ok(());
+    }
+
+    //Nereálné id vybraným
+    for (i, id) in ids.iter().enumerate() {
+        tx.execute(
+            "UPDATE queue SET id = ?1 WHERE id = ?2",
+            params![-(i as i64 + 1), id],
+        )?;
+    }
+
+    //Posunou existující id o počet aby bylo místo pro náhodně vybrané
+    tx.execute(
+        "UPDATE queue SET id = id + ?1 WHERE id >= 1",
+        params![ids.len() as i64],
+    )?;
+
+    //vrátit nazpět správné id
+    for (new_id, _) in (1..=ids.len()).enumerate() {
+        tx.execute(
+            "UPDATE queue SET id = ?1 WHERE id = ?2",
+            params![new_id as i64 + 1, -(new_id as i64 + 1)],
+        )?;
+    }
+    drop(stmt);
+    tx.commit()?;
+
+    let mut stmt = conn.prepare("SELECT twitch_name from queue WHERE id <= ?1").unwrap();
+    let rows = stmt.query_map(params![teamsize], |row| row.get::<_,String>(1))?;
+    let mut live_names = Vec::new();
+    for names in rows {
+        live_names.push(names?);
+    }
+    client.privmsg(msg.channel(), &format!("Randomly selected: {:?}",live_names));
+    println!("IDs updated successfully.");
+    Ok(())
+}
+
+
 
 
 async fn invite_macro(bungie_name: &str) {

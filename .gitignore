@@ -1,4 +1,3 @@
 /target
 .env
-queue.db
-user.db
+commands.db
