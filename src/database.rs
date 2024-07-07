@@ -24,9 +24,11 @@ pub const COMMAND_TABLE: &str = "CREATE TABLE IF NOT EXISTS commands (
 
 
 
-pub fn initialize_database(db_name: &str, sql_query: &str) -> anyhow::Result<Connection> {
-    let conn = Connection::open(db_name)?;
-    conn.execute(sql_query, [])?;
+pub fn initialize_database() -> anyhow::Result<Connection> {
+    let conn = Connection::open("commands.db")?;
+    conn.execute(USER_TABLE, [])?;
+    conn.execute(QUEUE_TABLE, [])?;
+    conn.execute(COMMAND_TABLE, [])?;
     Ok(conn)
 }
 

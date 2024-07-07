@@ -1,6 +1,5 @@
 use crate::{ 
-    bot_commands::{ban_bots, bungiename, handle_join, handle_leave, handle_next, handle_pos, 
-        handle_queue, handle_remove, is_follower, is_moderator, is_valid_bungie_name, register_user, simple_command}, 
+    bot_commands::{ban_bots, bungiename, handle_join, handle_leave, handle_next, handle_pos, handle_queue, handle_remove, is_follower, is_moderator, is_valid_bungie_name, random, register_user, simple_command}, 
     database::{get_command_response, remove_command, save_command, COMMAND_TABLE, QUEUE_TABLE}, initialize_database, ChatMessage, SharedState
 };
 use dotenv::dotenv;
@@ -30,15 +29,15 @@ impl BotState {
         let oauth_token_bot = var("TWITCH_OAUTH_TOKEN_BOTT").expect("No bot oauth token"); 
         let nickname = var("TWITCH_BOT_NICK").expect("No bot name");   
         let bot_id = var("TWITCH_CLIENT_ID_BOT").expect("msg");
-        let conn_command = initialize_database("commands.db", COMMAND_TABLE).unwrap();
+        let conn_command = initialize_database().unwrap();
         BotState { 
             queue_open: false,
             oauth_token_bot: oauth_token_bot,
             nickname: nickname,
             bot_id: bot_id,
             conn_command: conn_command,
-            queue_len: 30,
-            queue_teamsize: 5,
+            queue_len: 5,
+            queue_teamsize: 1,
         }
     }
 
@@ -49,9 +48,7 @@ impl BotState {
         client
     }
 }
-//Add command command for mods
 //Timers/Counters
-// !bungiename
 //Bungie api stuff - evade it
 pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>, shared_state: Arc<std::sync::Mutex<SharedState>>,) -> anyhow::Result<()> {
     let mut client = bot_state.lock().await.client_builder().await;
@@ -67,7 +64,7 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>, shared_state: Arc<std
                 };
                 shared_state.lock().unwrap().add_message(chat_message);
                   
-                let conn_queue = Mutex::new(initialize_database("queue.db", QUEUE_TABLE).unwrap());
+                let conn_queue = Mutex::new(initialize_database().unwrap());
       
                 let mut bot_state = bot_state.lock().await;
                 match msg.text() {
@@ -99,6 +96,9 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>, shared_state: Arc<std
                         text if text.starts_with("!queue") => {
                             handle_queue(&msg, &mut client, &conn_queue).await?;
                         }
+                        text if text.starts_with("!random") && is_moderator(&msg, &mut client).await => {
+                            random(&msg, &mut client, &conn_queue, bot_state.queue_teamsize).await?;
+                        }
                         _ => {}
                     }
                     text if text.starts_with("!join") || text.starts_with("!next") || text.starts_with("!remove") || text.starts_with("!pos") || text.starts_with("!leave") || text.starts_with("!queue") => {
@@ -110,7 +110,7 @@ pub async fn run_chat_bot(bot_state: Arc<Mutex<BotState>>, shared_state: Arc<std
                     text if text.starts_with("!register") => {
                         register_user(&msg, &mut client).await;
                     }
-                    text if text.starts_with("Cheap viewers on u.to/") || text.starts_with("Best viewers on cutt.ly/") => {
+                    text if (text.starts_with("Cheap viewers on") || text.starts_with("Best viewers on")) && (text.contains("cutt.ly/") || text.contains("u.to/")) => {
                         ban_bots(&msg, &mut client, &bot_state.oauth_token_bot, bot_state.bot_id.clone()).await;
                         client.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await?;
                     }

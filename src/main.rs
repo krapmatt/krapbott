@@ -57,7 +57,7 @@ impl AppState {
 
 impl eframe::App for AppState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let conn = initialize_database("queue.db", QUEUE_TABLE).unwrap();
+        let conn = initialize_database().unwrap();
         let queue = load_from_queue(&conn).unwrap();
         let messages = self.shared_state.lock().unwrap().messages.clone();
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
     let bot_state = Arc::new(Mutex::new(BotState::new()));
     let shared_state = Arc::new(std::sync::Mutex::new(SharedState::new()));
     let shared_state_clone = Arc::clone(&shared_state);
-    
+
     spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
