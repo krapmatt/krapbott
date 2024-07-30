@@ -20,7 +20,7 @@ pub const COMMAND_TABLE: &str = "CREATE TABLE IF NOT EXISTS commands (
     command TEXT NOT NULL,
     reply TEXT NOT NULL,
     UNIQUE (command)
-)";
+) ";
 
 
 
@@ -56,18 +56,20 @@ pub fn load_from_queue(conn: &Connection) -> Vec<TwitchUser> {
     }
     queue
 }
-
-pub async fn save_command(conn: &Mutex<Connection>, command: &str, reply: &str) {
+//TODO have the commands for multiple channels TOOD!!!!!!!!!
+//bungiename doesnt work!!!!!!
+pub async fn save_command(conn: &Mutex<Connection>, command: &str, reply: &str, channel: &str) {
     let mut command = command.to_string();
     let conn = conn.lock().await;
     command.insert(0, '!');
-    conn.execute("INSERT INTO commands (command, reply) VALUES (?1, ?2)", params![command, reply]).unwrap();
+    conn.execute("INSERT INTO commands (command, reply, channel) VALUES (?1, ?2, ?3)
+        ON CONFLICT(command) DO UPDATE SET reply=excluded.reply, channel=excluded.channel", params![command, reply, channel]).unwrap();
 }
 
-pub async fn get_command_response(conn: &Mutex<Connection>, command: &str) -> Result<Option<String>, BotError> {
+pub async fn get_command_response(conn: &Mutex<Connection>, command: &str, channel: &str) -> Result<Option<String>, BotError> {
     let conn = conn.lock().await;
-    let mut stmt = conn.prepare("SELECT reply FROM commands WHERE command = ?1")?;
-    match stmt.query_row(params![command], |row| row.get::<_, String>(0)) {
+    let mut stmt = conn.prepare("SELECT reply FROM commands WHERE command = ?1 AND channel = ?2")?;
+    match stmt.query_row(params![command, channel], |row| row.get::<_, String>(0)) {
         Ok(reply) => {
             println!("Command found: {:?}", reply);
             return Ok(Some(reply))
@@ -89,7 +91,7 @@ pub async fn remove_command(conn: &Mutex<Connection>, command: &str) -> bool {
     let mut command = command.to_string();
     let conn = conn.lock().await;
     command.insert(0, '!');
-    if conn.execute("DELETE FROM commands WHERE command = ?1", params![command]).expect("Remove command went wrong") > 1 {
+    if conn.execute("DELETE FROM commands WHERE command = ?1", params![command]).expect("Remove command went wrong") > 0 {
         true
     } else {
         false

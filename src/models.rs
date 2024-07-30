@@ -81,3 +81,8 @@ impl From<ReconnectError> for BotError {
         BotError { error_code: 104, string: Some(err.to_string()) }
     }
 }
+impl From<reqwest::Error> for BotError {
+    fn from(err: reqwest::Error) -> BotError {
+        BotError { error_code: 105, string: Some(err.to_string()) }
+    }
+}
