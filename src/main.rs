@@ -3,6 +3,7 @@ mod bot;
 mod database;
 mod gui;
 pub mod models;
+pub mod api;
 use std::{sync::Arc, thread::spawn};
 use bot::{run_chat_bot, BotState};
 
@@ -17,6 +18,7 @@ async fn main() {
     let bot_state = Arc::new(Mutex::new(BotState::new()));
     let shared_state = Arc::new(std::sync::Mutex::new(SharedState::new()));
     let shared_state_clone = Arc::clone(&shared_state);
+    
 
     spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
