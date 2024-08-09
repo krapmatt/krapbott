@@ -21,21 +21,25 @@ pub struct ChatMessage {
     pub channel: String,
     pub user: String,
     pub text: String,
+    
 }
 
 pub struct SharedState {
     pub messages: Vec<ChatMessage>,
+    pub run_count: usize
 }
 
 impl SharedState {
     pub fn new() -> Self {
         Self {
             messages: Vec::new(),
+            run_count: 0
         }
     }
 
-    pub fn add_message(&mut self, message: ChatMessage) {
+    pub fn add_stats(&mut self, message: ChatMessage, run_count: usize) {
         self.messages.push(message);
+        self.run_count = run_count
     }
 }
 
