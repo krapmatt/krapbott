@@ -1,18 +1,18 @@
-use crate::{ 
-    bot_commands::{announcment, ban_bots, bungiename, in_right_chat, is_follower, is_moderator, register_user, send_message}, database::{get_command_response, remove_command, save_command}, initialize_database, models::{BotError, ChatMessage}, SharedState
-};
+
 use dotenv::dotenv;
 use rand::{random, Rng};
 use regex::Regex;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tmi::Client;
+use twitch_irc::{login::{LoginCredentials, StaticLoginCredentials}, message::{AsRawIRC, PrivmsgMessage, ServerMessage}, transport::Transport, ClientConfig, SecureTCPTransport, TwitchIRCClient};
 
 use std::{env::var, fs::File, io::{Read, Write}, sync::Arc, time::{self, SystemTime}};
 use tokio::sync::Mutex;
 
-pub const CHANNELS: &[&str] = &["#krapmatt"];
+use crate::{bot_commands::{announcment, ban_bots, bungiename, in_right_chat, is_follower, is_moderator, register_user}, database::{get_command_response, initialize_database, remove_command, save_command}, models::{BotError, ChatMessage, SharedState}};
+
+pub const CHANNELS: &[&str] = &["krapmatt"];
 
 #[derive(Serialize, Deserialize)]
 pub struct BotConfig {
@@ -60,8 +60,9 @@ impl BotState {
         let oauth_token_bot = var("TWITCH_OAUTH_TOKEN_BOTT").expect("No bot oauth token"); 
         let nickname = var("TWITCH_BOT_NICK").expect("No bot name");   
         let bot_id = var("TWITCH_CLIENT_ID_BOT").expect("msg");
+        let x_api_key = var("XAPIKEY").expect("No bungie api key");
         let conn = Mutex::new(initialize_database());
-        let x_api_key = var("X-API-KEY").expect("No bungie api key");
+        
         
 
         BotState { 
@@ -74,48 +75,43 @@ impl BotState {
         }
     }
 
-    pub async fn client_builder(&mut self) -> Client {
-        let credentials = tmi::Credentials::new(self.nickname.clone(), self.oauth_token_bot.clone());
-        let mut client = tmi::Client::builder().credentials(credentials).connect().await.unwrap();
-        client.join_all(CHANNELS).await.unwrap();
-        client
-    }
-
-    async fn non_queue_comms(&mut self, mut client: &mut Client, msg: &tmi::Privmsg<'_>) -> Result<(), BotError> {
-        match msg.text() {   
-            text if text.to_ascii_lowercase().starts_with("!connect") && is_moderator(msg, client).await => {
-                if let Some((_, channel)) = msg.text().split_once(" ") {
-                    client.join(format!("#{}", channel)).await?;
+    async fn non_queue_comms<T, L>(&mut self, client: TwitchIRCClient<T, L>, msg: PrivmsgMessage) -> Result<(), BotError> where T: Transport, L: LoginCredentials{
+        let message_text = msg.message_text.clone();
+        let channel_login = msg.channel_login.clone();
+        match message_text.to_ascii_lowercase().as_str() {   
+            text if text.to_ascii_lowercase().starts_with("!connect") && is_moderator(msg.clone(), &client).await => {
+                if let Some((_, channel)) = msg.message_text.split_once(" ") {
+                    client.join(channel.to_string());
                 } else {
-                    client.privmsg(msg.channel(), "You didn't write the channel to connect to").send().await?;
+                    client.say(channel_login, "You didn't write the channel to connect to".to_string()).await;
                 }
             }
             
             text if text.to_ascii_lowercase().starts_with("!lurk") && in_right_chat(&msg).await => {
-                send_message(&msg, &mut client, &format!("Thanks for the krapmaLurk {}! Be sure to leave the tab on low volume, or mute tab, to support stream krapmaHeart", msg.sender().name())).await?;
+                client.say(msg.channel_login, format!("Thanks for the krapmaLurk {}! Be sure to leave the tab on low volume, or mute tab, to support stream krapmaHeart", msg.sender.name)).await;
             }
-            text if text.to_ascii_lowercase().starts_with("!so") && is_moderator(msg, client).await && in_right_chat(&msg).await => {
-                let words:Vec<&str> = msg.text().split_ascii_whitespace().collect();
+            text if text.to_ascii_lowercase().starts_with("!so") && is_moderator(msg.clone(), &client).await && in_right_chat(&msg).await => {
+                let words:Vec<&str> = msg.message_text.split_ascii_whitespace().collect();
                 let mut twitch_name = words[1].to_string();
                 if twitch_name.starts_with("@") {
                     twitch_name.remove(0);
                 }
-                send_message(&msg, &mut client, &format!("Let's give a big Shoutout to https://www.twitch.tv/{}!. Make sure to check them out and give them a FOLLOW krapmaHeart", twitch_name)).await?;
-                send_message(msg, client, &format!("/shoutout {}", twitch_name)).await?;
+                client.say(channel_login.clone(), format!("Let's give a big Shoutout to https://www.twitch.tv/{}!. Make sure to check them out and give them a FOLLOW krapmaHeart", twitch_name)).await;
+                client.privmsg(channel_login, format!("/shoutout {}", twitch_name)).await;
             }
             text if text.to_ascii_lowercase().starts_with("!total") => {
                 self.total_raid_clears(msg, client).await?;
             }
             text if text.to_ascii_lowercase().starts_with("!register") => {
                 let reply;
-                if let Some((_, bungie_name)) = msg.text().split_once(" ") {
-                    reply = register_user(&self.conn, &msg.sender().name(), bungie_name).await?;
+                if let Some((_, bungie_name)) = msg.message_text.split_once(" ") {
+                    reply = register_user(&self.conn, &msg.sender.name, bungie_name).await?;
                 } else {
                     reply = "Invalid command format! Use: !register bungiename#1234".to_string();
                 }
-                send_message(msg, client, &reply).await?;
+                client.say(msg.channel_login, reply).await;
             }
-            text if text.to_ascii_lowercase().starts_with("!mod_register") && is_moderator(&msg, &mut client).await => {
+            text if text.to_ascii_lowercase().starts_with("!mod_register") && is_moderator(msg.clone(), &client).await => {
                 let words: Vec<&str> = text.split_whitespace().collect();
                 let reply;
                 if words.len() >= 3 {
@@ -128,74 +124,79 @@ impl BotState {
                 } else {
                     reply = "You are a mod. . . || If you forgot use: !mod_register twitchname bungoname".to_string();
                 }
-                send_message(msg, client, &reply).await?;
+                client.say(msg.clone().channel_login, reply).await;
             }
-            text if is_bannable_link(text) => {
-                ban_bots(&msg, &self.oauth_token_bot, self.bot_id.clone()).await;
-                client.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await?;
+            text if is_bannable_link(&text) => {
+                ban_bots(msg.clone(), &self.oauth_token_bot, self.bot_id.clone()).await;
+                client.say(msg.clone().channel_login, "We don't want cheap viewers, only expensive ones <3".to_string()).await;
             }
             text if text.starts_with("!bungiename") => {
                 if text.trim_end().len() == 11 {
-                    bungiename(&msg, &mut client, &self.conn, &msg.sender().name()).await?;
+                    bungiename(msg.clone(), client, &self.conn, &msg.clone().sender.name).await?;
                 } else {
                     let (_, twitch_name) = text.split_once(" ").expect("How did it panic, what happened? //Always is something here");
                     let mut twitch_name = twitch_name.to_string();
                     if twitch_name.starts_with("@") {
                         twitch_name.remove(0);
                     }
-                    bungiename(&msg, &mut client, &self.conn, &twitch_name).await?;
+                    bungiename(msg, client, &self.conn, &twitch_name).await?;
                 }
                 
             }
             text if text.starts_with("!mod_addglobalcommand") => {
                 let words: Vec<&str> = text.split_whitespace().collect();
+                let message;
                 if words.len() > 2 {
                     let command = words[1];
                     let reply = words[2..].join(" ");
                     save_command(&self.conn, command, &reply, None).await;
-                    client.privmsg(msg.channel(), &format!("Global Command !{} added.", command)).send().await?;
+                    message = format!("Global Command !{} added.", command);
+                    
                 } else {
-                    client.privmsg(msg.channel(), "Usage: !mod_addglobalcommand <command> <response>").send().await?;
+                    message = "Usage: !mod_addglobalcommand <command> <response>".to_string();
                 }
+                client.say(msg.clone().channel_login, message).await;
             }
-            text if text.starts_with("!mod_addcommand") && is_moderator(&msg, &mut client).await => {
-                self.mod_addcommand(msg, client).await?;
+            text if text.starts_with("!mod_addcommand") && is_moderator(msg.clone(), &client).await => {
+                self.mod_addcommand(&msg, client).await?;
             }
-            text if text.starts_with("!mod_removecommand") && is_moderator(&msg, &mut client).await => {
+            text if text.starts_with("!mod_removecommand") && is_moderator(msg.clone(), &client).await => {
                 self.mod_removecommand(msg, client).await?;
             }
-            text if text == "!mod_config" && is_moderator(msg, client).await => {
+            text if text == "!mod_config" && is_moderator(msg.clone(), &client).await => {
                 let a = BotConfig::load_config();
                 let reply = format!("Queue: {} || Lenght: {} || Fireteam size: {}", a.open, a.len, a.teamsize);
-                send_message(msg, client, &reply).await?;
+                client.say(msg.clone().channel_login, reply).await;
             }
             text if text.starts_with("!") => {
-                if let Ok(Some(reply)) = get_command_response(&self.conn, text, Some(msg.channel())).await {
-                    send_message(msg, client, &reply).await?;
+                if let Ok(Some(reply)) = get_command_response(&self.conn, &text, Some(&msg.clone().channel_login)).await {
+                    client.say(msg.clone().channel_login, reply).await;
                 }
             }
             
-            &_ => {},
+            _ => {},
         } 
         Ok(())
     }
 
-    async fn mod_addcommand(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
-        let words: Vec<&str> = msg.text().split_whitespace().collect();
+    async fn mod_addcommand<T, L>(&mut self, msg: &PrivmsgMessage, client: TwitchIRCClient<T, L>) -> Result<(), BotError> where T: Transport, L: LoginCredentials {
+        let words: Vec<&str> = msg.message_text.split_whitespace().collect();
+        let message;
         if words.len() > 2 {
-            let channel = msg.channel();
+            let channel = &msg.channel_login;
             let command = words[1];
             let reply = words[2..].join(" ");
-            save_command(&self.conn, command, &reply, Some(channel)).await;
-            send_message(msg, client, &format!("Command !{} added.", command)).await?;
+            save_command(&self.conn, command, &reply, Some(&channel)).await;
+            message= format!("Command !{} added.", command);
         } else {
-            send_message(msg, client, "Usage: !mod_addcommand <command> <response>").await?;
+            message = "Usage: !mod_addcommand <command> <response>".to_string();
         }
+        client.say(msg.channel_login.clone(), message).await;
         Ok(())    
     }
 
-    async fn mod_removecommand(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
-        let words: Vec<&str> = msg.text().split_whitespace().collect();
+    async fn mod_removecommand<T, L> (&mut self, msg: PrivmsgMessage, client: TwitchIRCClient<T, L>) -> Result<(), BotError> where T: Transport, L: LoginCredentials {
+        let words: Vec<&str> = msg.channel_login.split_whitespace().collect();
         let command = words[1];
         let reply;
         if remove_command(&self.conn, command).await {
@@ -203,7 +204,7 @@ impl BotState {
         } else {
             reply = format!("Command !{} doesn't exist.", command);
         }
-        send_message(msg, client, &reply).await?;
+        client.say(msg.channel_login, reply).await;
         Ok(())
     }
 }
@@ -213,127 +214,133 @@ impl BotState {
 pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> Result<(), BotError> {
     let bot_state = Mutex::new(BotState::new());
 
-    let mut client = bot_state.lock().await.client_builder().await;
-    
+
+    let config = ClientConfig::new_simple(StaticLoginCredentials::new(bot_state.lock().await.nickname, Some(bot_state.lock().await.oauth_token_bot)));
+    let (mut msg, client) = TwitchIRCClient::<SecureTCPTransport, StaticLoginCredentials>::new(config);
+
+    client.join("krapmatt".to_string()).unwrap();
+
     let mut run_count = 0;
     let mut messeges = 0;
     
     let mut start_time = SystemTime::now();
     let mut time: SystemTime;
 
-    client.privmsg("#krapmatt", "Krapbott connected!").send().await?;
-
-    loop {
-        let msg = client.recv().await?;
-        
-        match msg.as_typed()? {
-            tmi::Message::Privmsg(msg) => {
-                
-                let chat_message = ChatMessage {
-                    channel: msg.channel().to_string(),
-                    user: msg.sender().name().to_string(),
-                    text: msg.text().to_string(),
-                };
-                
-                shared_state.lock().unwrap().add_stats(chat_message, run_count);
-      
-                let mut bot_state = bot_state.lock().await;
-                match msg.text() {
-                    text if text.to_ascii_lowercase() == "!open_queue" && is_moderator(&msg, &mut client).await => {
-                        bot_state.conn.lock().await.execute("DELETE from queue", [])?;
-                        bot_state.queue_config.open = true;
-                        send_message(&msg, &mut client, "The queue is now open!").await?
-                    }
-                    text if text.to_ascii_lowercase() == "!close_queue" && is_moderator(&msg, &mut client).await => {
-                        bot_state.queue_config.open = false;
-                        send_message(&msg, &mut client, "The queue is now closed!").await?;
-                    }
-                    text if text.starts_with("!queue_len") && is_moderator(&msg, &mut client).await => {
-                        let words:Vec<&str> = text.split_whitespace().collect();
-                        if words.len() == 2 {
-                            let lenght = words[1].to_owned();
-                            bot_state.queue_config.len = lenght.parse().unwrap();
-                            client.privmsg(msg.channel(), &format!("Queue lenght has been changed to {}", lenght)).send().await?;
-                        } else {
-                            client.privmsg(msg.channel(), "Are you sure you had the right command? In case !queue_len <queue lenght>").send().await?;
+    
+    
+        loop {
+            match msg.recv().await {
+                ServerMessage::Privmsg(msg) => {
+                    println!("#{} {} {}", msg.channel_login, msg.sender.name, msg.message_text);
+                    let chat_message = ChatMessage {
+                        channel: msg.channel_login,
+                        user: msg.sender.name,
+                        text: msg.message_text,
+                    };
+                    
+                    shared_state.lock().unwrap().add_stats(chat_message, run_count);
+                    let mut bot_state = bot_state.lock().await;
+                    match msg.message_text {
+                        text if text.to_ascii_lowercase() == "!open_queue" && is_moderator(msg, &client).await => {
+                            bot_state.conn.lock().await.execute("DELETE from queue", []);
+                            bot_state.queue_config.open = true;
+                            client.say(msg.channel_login, "The queue is now open!".to_string()).await;
                         }
-                    }
-                    text if text.starts_with("!queue_size") && is_moderator(&msg, &mut client).await => {
-                        let words:Vec<&str> = text.split_whitespace().collect();
-                        if words.len() == 2 {
-                            let lenght = words[1].to_owned();
-                            bot_state.queue_config.teamsize = lenght.parse().unwrap();
-                            client.privmsg(msg.channel(), &format!("Queue fireteam size has been changed to {}", lenght)).send().await?;
-                        } else {
-                            client.privmsg(msg.channel(), "Are you sure you had the right command? In case !queue_size <fireteam size>").send().await?;
+                        text if text.to_ascii_lowercase() == "!close_queue" && is_moderator(msg, &client).await => {
+                            bot_state.queue_config.open = false;
+                            client.say(msg.channel_login, "The queue is now closed!".to_string()).await;
                         }
+                        text if text.starts_with("!queue_len") && is_moderator(msg, &client).await => {
+                            let reply;
+                            let words:Vec<&str> = text.split_whitespace().collect();
+                            if words.len() == 2 {
+                                let lenght = words[1].to_owned();
+                                bot_state.queue_config.len = lenght.parse().unwrap();
+                                reply = format!("Queue lenght has been changed to {}", lenght);
+                            } else {
+                                reply = "Are you sure you had the right command? In case !queue_len <queue lenght>".to_owned();
+                            }
+                            client.say(msg.channel_login, reply).await;
+                        }
+                        text if text.starts_with("!queue_size") && is_moderator(msg, &client).await => {
+                            let words:Vec<&str> = text.split_whitespace().collect();
+                            let reply;
+                            if words.len() == 2 {
+                                let lenght = words[1].to_owned();
+                                bot_state.queue_config.teamsize = lenght.parse().unwrap();
+                                reply = format!("Queue fireteam size has been changed to {}", lenght);
+                            } else {
+                                reply = "Are you sure you had the right command? In case !queue_size <fireteam size>".to_owned();
+                            }
+                            client.say(msg.channel_login, reply);
+                        }
+                        text if text.to_ascii_lowercase().starts_with("!join") && is_follower(msg, client, &bot_state.oauth_token_bot, bot_state.bot_id.clone()).await.unwrap() => {
+                            bot_state.handle_join(msg, client).await;
+                        }
+                        text if text.to_ascii_lowercase().starts_with("!next") && is_moderator(msg, &client).await => {
+                            run_count += 1;
+                            bot_state.handle_next(msg, client).await;
+                        }
+                        text if text.to_ascii_lowercase().starts_with("!remove") && is_moderator(msg, &client).await => {
+                            bot_state.handle_remove(msg, client).await;
+                        }
+                        text if text.to_ascii_lowercase().starts_with("!pos") => {
+                            bot_state.handle_pos(msg, client).await;
+                        }
+                        text if text.to_ascii_lowercase().starts_with("!leave") => {
+                            bot_state.handle_leave(msg, client).await;
+                        }
+                        text if text.to_ascii_lowercase().starts_with("!queue") || text.starts_with("!list")=> {
+                            bot_state.handle_queue(msg, client).await;
+                        }
+                        text if text.to_ascii_lowercase().starts_with("!random") && is_moderator(msg, &client).await => {
+                            bot_state.random(msg, client).await;
+                        }
+                        _ => match bot_state.non_queue_comms(client, msg).await {
+                            Ok(_) => return Ok(()),
+                            Err(e) => client.say(msg.channel_login, e.to_string()).await.expect("Huh?")
+                        },
                     }
-                    text if text.to_ascii_lowercase().starts_with("!join") && is_follower(&msg, &mut client, &bot_state.oauth_token_bot, bot_state.bot_id.clone()).await? => {
-                        bot_state.handle_join(&msg, &mut client).await?;
-                    }
-                    text if text.to_ascii_lowercase().starts_with("!next") && is_moderator(&msg, &mut client).await => {
-                        run_count += 1;
-                        bot_state.handle_next(&msg, &mut client).await?;
-                    }
-                    text if text.to_ascii_lowercase().starts_with("!remove") && is_moderator(&msg, &mut client).await => {
-                        bot_state.handle_remove(&msg, &mut client).await?;
-                    }
-                    text if text.to_ascii_lowercase().starts_with("!pos") => {
-                        bot_state.handle_pos(&msg, &mut client).await?;
-                    }
-                    text if text.to_ascii_lowercase().starts_with("!leave") => {
-                        bot_state.handle_leave(&msg, &mut client).await?;
-                    }
-                    text if text.to_ascii_lowercase().starts_with("!queue") || text.starts_with("!list")=> {
-                        bot_state.handle_queue(&msg, &mut client).await?;
-                    }
-                    text if text.to_ascii_lowercase().starts_with("!random") && is_moderator(&msg, &mut client).await => {
-                        bot_state.random(&msg, &mut client).await?;
-                    }
-                    _ => bot_state.non_queue_comms(&mut client, &msg).await?
+                    messeges += 1;
                 }
-                messeges += 1;
+
+               _ => {}
             }
-            tmi::Message::Reconnect => {
-                client.reconnect().await?;
-                client.join_all(CHANNELS).await?;
-            }
-            tmi::Message::Ping(ping) => {
-                client.pong(&ping).await?;
-            }
-            
-            _ => {}
         }
-        bot_state.lock().await.queue_config.save_config();
+    
+            
+    bot_state.lock().await.queue_config.save_config();
+    
+    //rendom choose from preset messages
+    //Add those messages into a database in future
+    println!("Differenct in time {:?}", start_time.elapsed());
+    if start_time.elapsed().unwrap() > time::Duration::from_secs(800) && messeges >= 10 {
+        let bot_state = bot_state.lock().await;
+        let mut rand = rand::thread_rng();
+        let ch = rand.gen_range(1..4);
+        let mut mess = String::new(); 
         
-        //rendom choose from preset messages
-        //Add those messages into a database in future
-
-        println!("Differenct in time {:?}", start_time.elapsed());
-        if start_time.elapsed().unwrap() > time::Duration::from_secs(800) && messeges >= 10 {
-            let bot_state = bot_state.lock().await;
-            let mut rand = rand::thread_rng();
-            let ch = rand.gen_range(1..4);
-            let mut mess = String::new(); 
-            
-            if ch == 1 {
-                mess = "Join my discord krapmaStare : https://discord.gg/jJMwaetjeu".to_string();
-            } else if ch == 2 {
-                mess = "Don't forget to follow, if you enjoy it here! Also krapmaLurk is greatly appreciated krapmaHeart".to_string();
-            } else if ch == 3 {
-                mess = "If you need any help with dungeons. Try asking in chat! I just might be able to help you krapmaHeart".to_string();
-            } else if ch == 4 {
-                mess = "If you need any crota yeets just let me know. If I have a cp i will get it for you. <3".to_string();
-            }
-            
-            announcment("216105918", "1091219021",&bot_state.oauth_token_bot , bot_state.bot_id.to_string(), mess).await?;
-            
-            messeges = 0;
-            start_time = SystemTime::now();
+        if ch == 1 {
+            mess = "Join my discord krapmaStare : https://discord.gg/jJMwaetjeu".to_string();
+        } else if ch == 2 {
+            mess = "Don't forget to follow, if you enjoy it here! Also krapmaLurk is greatly appreciated krapmaHeart".to_string();
+        } else if ch == 3 {
+            mess = "If you need any help with dungeons. Try asking in chat! I just might be able to help you krapmaHeart".to_string();
+        } else if ch == 4 {
+            mess = "If you need any crota yeets just let me know. If I have a cp i will get it for you. <3".to_string();
         }
-
-
+        
+        announcment("216105918", "1091219021",&bot_state.oauth_token_bot , bot_state.bot_id.to_string(), mess).await?;
+        
+        messeges = 0;
+        start_time = SystemTime::now();
     }
+
+
+        
+    
+    
+    Ok(())
 }
 //Find first message
 fn is_bannable_link(text: &str) -> bool {

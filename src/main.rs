@@ -7,12 +7,10 @@ pub mod api;
 use std::{fs::File, io::Write, sync::Arc, thread::spawn, time::Duration};
 use bot::{run_chat_bot, BotConfig};
 
-use database::initialize_database;
 
 use gui::AppState;
 use models::SharedState;
 use tokio::time::sleep;
-use twitch_api::{helix::client, twitch_oauth2::{AccessToken, UserToken}, HelixClient, TwitchClient};
 
 pub fn check_config_file() {
     match File::open("Config.json") {
@@ -29,6 +27,7 @@ pub fn check_config_file() {
 async fn main() {
     check_config_file();
     
+
     let shared_state = Arc::new(std::sync::Mutex::new(SharedState::new()));
     let shared_state_clone = Arc::clone(&shared_state);
     
@@ -53,5 +52,3 @@ async fn main() {
         Box::new(|_cc| Box::new(app_state)));
     
 }
-
-

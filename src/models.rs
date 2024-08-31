@@ -2,7 +2,8 @@ use core::fmt;
 use std::error::Error;
 
 use serde::{Deserialize, Serialize};
-use tmi::{client::{read::RecvError, write::SendError, ReconnectError}, MessageParseError};
+use twitch_irc::{login::LoginCredentials, transport::Transport};
+
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TwitchUser {
@@ -65,24 +66,15 @@ impl From<rusqlite::Error> for BotError {
         BotError { error_code: 100, string: Some(err.to_string()) }
     }
 }
-impl From<RecvError> for BotError {
-    fn from(err: RecvError) -> BotError {
-        BotError { error_code: 101, string: Some(err.to_string()) }
-    }
-}
-impl From<SendError> for BotError {
-    fn from(err: SendError) -> BotError {
-        BotError { error_code: 102, string: Some(err.to_string()) }
-    }
-}
-impl From<MessageParseError> for BotError {
-    fn from(err: MessageParseError) -> BotError {
-        BotError { error_code: 103, string: Some(err.to_string()) }
-    }
-}
-impl From<ReconnectError> for BotError {
-    fn from(err: ReconnectError) -> BotError {
-        BotError { error_code: 104, string: Some(err.to_string()) }
+
+use twitch_irc::Error as TwitchIrcError;
+
+impl<T: Transport, L: LoginCredentials> From<TwitchIrcError<T, L>> for BotError {
+    fn from(err: TwitchIrcError<T, L>) -> BotError {
+        BotError {
+            error_code: 103, // Choose an appropriate error code
+            string: Some(err.to_string()),
+        }
     }
 }
 impl From<reqwest::Error> for BotError {
