@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, Error, OptionalExtension};
+use rusqlite::{params, Connection, Error};
 use tokio::sync::Mutex;
 
 use crate::{api::{get_membershipid, MemberShip}, models::{BotError, TwitchUser}};
@@ -25,18 +25,23 @@ pub const COMMAND_TABLE: &str = "CREATE TABLE IF NOT EXISTS commands (
     UNIQUE(command, channel)
 ) ";
 
-
+pub const ANNOUNCMENT_TABLE: &str = "CREATE TABLE IF NOT EXISTS announcments (
+    id INTEGER PRIMARY KEY,
+    announcment TEXT NOT NULL,
+    channel TEXT
+)";
 
 pub fn initialize_database() -> Connection {
-    let conn = Connection::open("commands.db").unwrap();
+    let conn = Connection::open("D:/program/krapbott/commands.db").unwrap();
     conn.execute(USER_TABLE, []).unwrap();
     conn.execute(QUEUE_TABLE, []).unwrap();
     conn.execute(COMMAND_TABLE, []).unwrap();
+    conn.execute(ANNOUNCMENT_TABLE, []).unwrap();
     return conn
 }
 
-pub async fn save_to_user_database(conn: &Mutex<Connection>, user: &TwitchUser) -> Result<String, BotError> {
-    if let Ok(user_info) = get_membershipid(user.bungie_name.clone()).await {
+pub async fn save_to_user_database(conn: &Mutex<Connection>, user: &TwitchUser, x_api_key: String) -> Result<String, BotError> {
+    if let Ok(user_info) = get_membershipid(user.bungie_name.clone(), x_api_key).await {
         if user_info.type_m == -1 {
             Ok(format!("{} doesn't exist, check if your bungiename is correct", user.bungie_name))
         } else {
@@ -53,7 +58,7 @@ pub async fn save_to_user_database(conn: &Mutex<Connection>, user: &TwitchUser) 
     }
 
 }
-// DO NOT KILL ANYTHING EXCEPT WIZARD. Queue is open use !join <bungiename#0000>. Do not pull to orbit, always change characters!
+//  Queue is open use !join <bungiename#0000> >> DO NOT KILL ANYTHING EXCEPT WIZARD. Do not pull to orbit, always change characters!
 pub fn load_membership(conn: &Connection, twitch_name: String) -> Option<MemberShip> {
     let mut stmt = conn.prepare("SELECT membership_id, membership_type FROM user WHERE twitch_name = ?1").unwrap();
 
@@ -65,7 +70,7 @@ pub fn load_membership(conn: &Connection, twitch_name: String) -> Option<MemberS
     }) {
         Ok(membership) => Some(membership),
         Err(Error::QueryReturnedNoRows) => None,
-        Err(_) => None,  // Handle other errors if necessary
+        Err(_) => None, 
     }
 }
 
@@ -165,17 +170,11 @@ pub fn pick_random(conn: &mut Connection, teamsize: usize) -> Result<(), BotErro
 
     //Nereálné id vybraným
     for (i, id) in ids.iter().enumerate() {
-        tx.execute(
-            "UPDATE queue SET id = ?1 WHERE id = ?2",
-            params![-(i as i64 + 1), id],
-        )?;
+        tx.execute("UPDATE queue SET id = ?1 WHERE id = ?2", params![-(i as i64 + 1), id])?;
     }
 
     //Posunou existující id o počet aby bylo místo pro náhodně vybrané
-    tx.execute(
-        "UPDATE queue SET id = id + ?1 WHERE id >= 1",
-        params![ids.len() as i64],
-    )?;
+    tx.execute("UPDATE queue SET id = id + ?1 WHERE id >= 1", params![ids.len() as i64])?;
 
     //vrátit nazpět správné id
     for (new_id, _) in (1..=ids.len()).enumerate() {

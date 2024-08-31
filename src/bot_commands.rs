@@ -1,11 +1,12 @@
-use std::{cmp::min, future::IntoFuture, ops::Index, string, time::Duration};
+use std::{cmp::min, time::Duration};
+use dotenv::var;
 use enigo::{Enigo, Keyboard, Mouse, Settings};
 use rusqlite::{params, Connection, OptionalExtension, Result};
 use serde::{Deserialize, Serialize};
 use tmi::Client;
 use tokio::sync::{Mutex, MutexGuard};
 
-use crate::{api::{get_membershipid, get_users_clears, MemberShip}, bot::BotState, database::{load_membership, pick_random, save_to_user_database}, models::{BotError, TwitchUser}};
+use crate::{api::{get_membershipid, get_users_clears, MemberShip}, bot::{BotState, CHANNELS}, database::{load_membership, pick_random, save_to_user_database}, models::{BotError, TwitchUser}};
 
 pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: &mut Client) -> bool {
     if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "moderator" || badge.as_badge_data().name() == "broadcaster") {
@@ -16,7 +17,13 @@ pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: &mut Client) -> bool {
     }
     
 }
-
+pub async fn in_right_chat(msg: &tmi::Privmsg<'_>) -> bool {
+    if msg.channel() == CHANNELS[0] {
+        return true
+    } else {
+        return false
+    }
+}
 //Pro twitch na ban botů
 #[derive(Serialize)]
 struct BanRequest {
@@ -63,7 +70,7 @@ pub async fn is_follower(msg: &tmi::Privmsg<'_>, client: &mut Client, oauth_toke
         .send()
         .await.expect("Bad reqwest");
     
-    if res.text().await?.contains("user_id") { 
+    if res.text().await?.contains("user_id") || msg.channel_id() == msg.sender().id() { 
         Ok(true)
     } else {
         send_message(msg, client, "You are not a follower!").await?;
@@ -87,14 +94,14 @@ async fn get_bungie_name_from_db(twitch_name: &str, conn: &Mutex<Connection>) ->
 impl BotState {
     //User can join into queue
     pub async fn handle_join(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
-        if self.queue_open {
+        if self.queue_config.open {
             if let Some((_join, name)) = msg.text().split_once(" ") {
                 if is_valid_bungie_name(name.trim()) {
                     let new_user = TwitchUser {
                         twitch_name: msg.sender().name().to_string(),
                         bungie_name: name.trim().to_string(),
                     };
-                    process_queue_entry(msg, client, self.queue_len, &self.conn, new_user).await?;
+                    process_queue_entry(msg, client, self.queue_config.len, &self.conn, new_user).await?;
                 
                 } else {
                     send_invalid_name_reply(msg, client).await?;
@@ -105,7 +112,7 @@ impl BotState {
                         twitch_name: msg.sender().name().to_string(),
                         bungie_name: bungie_name
                     };
-                    process_queue_entry(msg, client, self.queue_len, &self.conn, new_user).await?;
+                    process_queue_entry(msg, client, self.queue_config.len, &self.conn, new_user).await?;
                 } else {
                     send_invalid_name_reply(msg, client).await?;
                 }
@@ -122,10 +129,10 @@ impl BotState {
     pub async fn handle_next(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
         let conn = self.conn.lock().await;
     
-        conn.execute("DELETE FROM queue WHERE id IN (SELECT id FROM queue LIMIT ?1);", params![self.queue_teamsize])?;
+        conn.execute("DELETE FROM queue WHERE id IN (SELECT id FROM queue LIMIT ?1);", params![self.queue_config.teamsize])?;
     
         let mut stmt = conn.prepare("SELECT bungie_name FROM queue LIMIT ?1")?;
-        let queue_iter = stmt.query_map(params![self.queue_teamsize], |row| row.get::<_, String>(0))?;
+        let queue_iter = stmt.query_map(params![self.queue_config.teamsize], |row| row.get::<_, String>(0))?;
     
         let mut queue_msg = Vec::new();
         for entry in queue_iter {
@@ -188,7 +195,7 @@ impl BotState {
         if let Some(index) = stmt.query_row(params![msg.sender().name()], |row| {
             Ok(row.get::<_, i64>(0)?)    
         }).optional()? {
-            let group = index / self.queue_len as i64;
+            let group = index / self.queue_config.len as i64;
             
             if group == 0 {
                 reply = format!("You are at position {} and in LIVE group krapmaHeart!", index);
@@ -227,7 +234,7 @@ impl BotState {
     //Shows whole queue
     pub async fn handle_queue(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
         let reply;
-        if self.queue_open {
+        if self.queue_config.open {
             let conn = self.conn.lock().await;
             let mut stmt = conn.prepare("SELECT twitch_name FROM queue")?;
             let queue_iter = stmt.query_map([], |row| row.get::<_,String>(0))?;
@@ -241,18 +248,18 @@ impl BotState {
             }
             queue_msg = queue_msg.iter().enumerate().map(|(i, q)| format!("{}. {}", i + 1, q)).collect();
             
-            for name in &queue_msg[0..min(self.queue_teamsize, queue_msg.len())] {
+            for name in &queue_msg[0..min(self.queue_config.teamsize, queue_msg.len())] {
                 live_group.push(name);
             }
 
-            if queue_msg.len() > self.queue_teamsize {
-                for name in &queue_msg[self.queue_teamsize..min(self.queue_teamsize * 2, queue_msg.len())] {
+            if queue_msg.len() > self.queue_config.teamsize {
+                for name in &queue_msg[self.queue_config.teamsize..min(self.queue_config.teamsize * 2, queue_msg.len())] {
                     next_group.push(name);
                 }
             }
             
-            let rest_group: Vec<&str> = if queue_msg.len() > self.queue_teamsize * 2 {
-                queue_msg[self.queue_teamsize * 2..].iter().map(AsRef::as_ref).collect()
+            let rest_group: Vec<&str> = if queue_msg.len() > self.queue_config.teamsize * 2 {
+                queue_msg[self.queue_config.teamsize * 2..].iter().map(AsRef::as_ref).collect()
             } else {
                 Vec::new()
             };
@@ -273,10 +280,10 @@ impl BotState {
     pub async fn random(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError>{
         //Push the randomly chosen player to first positions
         let mut conn = self.conn.lock().await;
-        pick_random(&mut conn, self.queue_teamsize)?;
+        pick_random(&mut conn, self.queue_config.teamsize)?;
 
         let mut stmt = conn.prepare("SELECT twitch_name from queue WHERE id <= ?1").unwrap();
-        let rows = stmt.query_map(params![self.queue_teamsize], |row| row.get::<_,String>(1))?;
+        let rows = stmt.query_map(params![self.queue_config.teamsize], |row| row.get::<_,String>(1))?;
         let mut live_names = Vec::new();
         for names in rows {
             live_names.push(names?);
@@ -295,7 +302,7 @@ impl BotState {
             let mut name = words[1..].to_vec().join(" ").to_string();
     
             if is_valid_bungie_name(&name) {
-                match get_membershipid(name.clone()).await {
+                match get_membershipid(name.clone(), self.x_api_key.clone()).await {
                     Ok(ship) => membership = ship,
                     Err(err) => client.privmsg(msg.channel(), &format!("Error: {}", err)).send().await?,
                 }
@@ -312,11 +319,11 @@ impl BotState {
                     return Ok(());
                 }
             }
-            let clears = get_users_clears(membership.id, membership.type_m).await? as i32;
+            let clears = get_users_clears(membership.id, membership.type_m, self.x_api_key.clone()).await? as i32;
             reply = format!("{} has total {} raid clears", name, clears);
         } else {
             if let Some(membership) = load_membership(&conn, msg.sender().name().to_string()) {
-                let clears = get_users_clears(membership.id, membership.type_m).await? as i32;
+                let clears = get_users_clears(membership.id, membership.type_m, self.x_api_key.clone()).await? as i32;
                 reply = format!("You have total {} raid clears", clears);
             } else {
                 reply = format!("{} is not registered to the database. Use !register <yourbungiename#0000>", msg.sender().name());
@@ -376,13 +383,15 @@ async fn add_to_queue<'a>(msg: &tmi::Privmsg<'_>, queue_len: usize, conn: MutexG
 }
 
 pub async fn register_user(conn: &Mutex<Connection>, twitch_name: &str, bungie_name: &str) -> Result<String, BotError> {
+    dotenv::dotenv().ok();
+    let x_api_key = var("X-API-KEY").expect("No bungie api key");
     let reply;
     if is_valid_bungie_name(bungie_name) {
         let new_user = TwitchUser {
             twitch_name: twitch_name.to_string(),
             bungie_name: bungie_name.to_string()
         };
-        reply = save_to_user_database(&conn, &new_user).await?;
+        reply = save_to_user_database(&conn, &new_user, x_api_key).await?;
     } else {
         reply = "You have typed invalid format of bungiename, make sure it looks like -> bungiename#0000".to_string();
     }
@@ -403,7 +412,26 @@ pub async fn bungiename(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &Mute
     }
     Ok(())
 }
-
+#[derive(Serialize)]
+struct Data {
+    message: String,
+    color: String
+}
+//https://api.twitch.tv/helix/chat/announcements?broadcaster_id={broadcaster_id}&moderator_id={moderator_id}
+//Make announcment automatizations!
+pub async fn announcment(broadcaster_id: &str, mod_id: &str, oauth_token: &str, client_id: String, message: String) -> Result<(), BotError> {
+    let url = format!("https://api.twitch.tv/helix/chat/announcements?broadcaster_id={}&moderator_id={}", broadcaster_id, mod_id);
+    let res = reqwest::Client::new()
+        .post(&url)
+        .header("Client-Id", client_id)
+        .bearer_auth(oauth_token)
+        .form(&Data {message: message, color: "primary".to_string()})
+        .send()
+        .await.expect("Bad reqwest");
+    println!("{:?}", res.text().await);
+    
+    Ok(())
+}
 
 
 
