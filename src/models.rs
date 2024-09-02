@@ -1,6 +1,7 @@
 use core::fmt;
 use std::error::Error;
 
+use async_sqlite::rusqlite;
 use serde::{Deserialize, Serialize};
 use tmi::{client::{read::RecvError, write::SendError, ReconnectError}, MessageParseError};
 
@@ -59,7 +60,11 @@ impl fmt::Display for BotError {
 }
 
 impl Error for BotError {}
-
+impl From<async_sqlite::Error> for BotError {
+    fn from(err: async_sqlite::Error) -> BotError {
+        BotError { error_code: 99, string: Some(err.to_string()) }
+    }
+}
 impl From<rusqlite::Error> for BotError {
     fn from(err: rusqlite::Error) -> BotError {
         BotError { error_code: 100, string: Some(err.to_string()) }

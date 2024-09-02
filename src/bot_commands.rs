@@ -1,10 +1,9 @@
-use std::{cmp::min, time::Duration};
+use std::{cmp::min, sync::{Arc, Mutex}};
+use async_sqlite::{rusqlite::{params, OptionalExtension}, Client as SqliteClient};
 use dotenv::var;
-use enigo::{Enigo, Keyboard, Mouse, Settings};
-use rusqlite::{params, Connection, OptionalExtension, Result};
+
 use serde::{Deserialize, Serialize};
 use tmi::Client;
-use tokio::sync::{Mutex, MutexGuard};
 
 use crate::{api::{get_membershipid, get_users_clears, MemberShip}, bot::{BotState, CHANNELS}, database::{load_membership, pick_random, save_to_user_database}, models::{BotError, TwitchUser}};
 
@@ -82,10 +81,10 @@ pub fn is_valid_bungie_name(name: &str) -> bool {
     name.contains('#') && name.split_once('#').unwrap().1.len() == 4
 }
 
-async fn get_bungie_name_from_db(twitch_name: &str, conn: &Mutex<Connection>) -> Option<String> {
-    if let Ok(bungie_name) = conn.lock().await.query_row("SELECT bungie_name FROM user WHERE twitch_name = ?1", params![twitch_name], 
-        |row| row.get(0)) {
-        bungie_name    
+async fn get_bungie_name_from_db(twitch_name: String, conn: &SqliteClient) -> Option<String> {
+    if let Ok(bungie_name) = conn.conn(move |conn| {
+        conn.query_row("SELECT bungie_name FROM user WHERE twitch_name = ?1", params![twitch_name],|row| row.get(0))}).await {
+            bungie_name    
         } else {
             None
         }
@@ -93,7 +92,7 @@ async fn get_bungie_name_from_db(twitch_name: &str, conn: &Mutex<Connection>) ->
 }
 impl BotState {
     //User can join into queue
-    pub async fn handle_join(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
+    pub async fn handle_join(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
         if self.queue_config.open {
             if let Some((_join, name)) = msg.text().split_once(" ") {
                 if is_valid_bungie_name(name.trim()) {
@@ -101,18 +100,18 @@ impl BotState {
                         twitch_name: msg.sender().name().to_string(),
                         bungie_name: name.trim().to_string(),
                     };
-                    process_queue_entry(msg, client, self.queue_config.len, &self.conn, new_user).await?;
+                    process_queue_entry(msg, client, self.queue_config.len, conn, new_user).await?;
                 
                 } else {
                     send_invalid_name_reply(msg, client).await?;
                 }
             } else {
-                if let Some(bungie_name) = get_bungie_name_from_db(&msg.sender().name(), &self.conn).await {
+                if let Some(bungie_name) = get_bungie_name_from_db(msg.sender().name().to_string(), conn).await {
                     let new_user = TwitchUser {
                         twitch_name: msg.sender().name().to_string(),
                         bungie_name: bungie_name
                     };
-                    process_queue_entry(msg, client, self.queue_config.len, &self.conn, new_user).await?;
+                    process_queue_entry(msg, client, self.queue_config.len, conn, new_user).await?;
                 } else {
                     send_invalid_name_reply(msg, client).await?;
                 }
@@ -126,27 +125,35 @@ impl BotState {
     }
 
     //Kicks out users that were in game
-    pub async fn handle_next(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
-        let conn = self.conn.lock().await;
+    pub async fn handle_next(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
+        let bot_state = self.clone();
+        conn.conn(move |conn| {
+            Ok(conn.execute("DELETE FROM queue WHERE id IN (SELECT id FROM queue LIMIT ?1);", params![bot_state.queue_config.teamsize])?)
+        
+        }).await?;
+        
+        let queue_msg = Arc::new(Mutex::new(Vec::new()));
+        let queue_msg_clone = Arc::clone(&queue_msg);
+
+        conn.conn(move |conn| {
+            let mut stmt = conn.prepare("SELECT bungie_name FROM queue LIMIT ?1")?;
+            let queue_iter = stmt.query_map(params![bot_state.queue_config.teamsize], |row| row.get::<_, String>(0))?;
+            for entry in queue_iter {
+                queue_msg_clone.lock().unwrap().push(entry?);
+            }
+            Ok(())
+        }).await?;
+        
     
-        conn.execute("DELETE FROM queue WHERE id IN (SELECT id FROM queue LIMIT ?1);", params![self.queue_config.teamsize])?;
+        
+        let queue_msg = queue_msg.lock().unwrap();
     
-        let mut stmt = conn.prepare("SELECT bungie_name FROM queue LIMIT ?1")?;
-        let queue_iter = stmt.query_map(params![self.queue_config.teamsize], |row| row.get::<_, String>(0))?;
-    
-        let mut queue_msg = Vec::new();
-        for entry in queue_iter {
-            queue_msg.push(entry?);
-        }
-    
-        let reply;
-        if queue_msg.is_empty() {
-            reply = "Queue is empty".to_string();
+        
+        let reply = if queue_msg.is_empty() {
+            "Queue is empty".to_string()
         } else {
-            reply = format!("Next: {:?}", queue_msg.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "));
-            /*let futures: Vec<_> = queue_msg.iter().take(queue_len).map(|q| invite_macro(q)).collect();
-            futures::future::join_all(futures).await;*/
-        }
+            format!("Next: {:?}", queue_msg.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "))
+        };
     
         send_message(msg, client, &reply).await?;
         
@@ -157,22 +164,24 @@ impl BotState {
     }
 
     //Moderator can remove player from queue
-    pub async fn handle_remove(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
+    pub async fn handle_remove(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
         if is_moderator(msg, client).await {
             let parts: Vec<&str> = msg.text().split_whitespace().collect();
             if parts.len() == 2 {
-                let twitch_name = parts[1];
-                let reply;
-                let conn = self.conn.lock().await;
-                let rows = match conn.execute("DELETE FROM queue WHERE twitch_name = ?1", params![twitch_name]) {
+                
+                let twitch_name = parts[1].to_string();
+                let twitch_name_clone = twitch_name.clone();
+                
+                let rows = match conn.conn(move |conn| conn.execute("DELETE FROM queue WHERE twitch_name = ?1", params![twitch_name_clone])).await {
                     Ok(rows) => rows,
                     Err(err) => return Err(BotError {error_code: 100, string: Some(err.to_string())}),
                 };
-                if rows > 0 {
-                    reply = format!("{} has been removed from the queue.", twitch_name);
+                
+                let reply = if rows > 0 {
+                    format!("{} has been removed from the queue.", twitch_name)
                 } else {
-                    reply = format!("User {} not found in the queue.", twitch_name);
-                }
+                    format!("User {} not found in the queue.", twitch_name)
+                };
                 send_message(msg, client, &reply).await?;
             }
         
@@ -181,73 +190,94 @@ impl BotState {
     }
 
     //Show the user where he is in queue
-    pub async fn handle_pos(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
-        let reply;
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare("
-            WITH RankedQueue AS (
-                SELECT twitch_name, ROW_NUMBER() OVER (ORDER BY id) AS position
-                FROM queue
-            )
-            SELECT position
-            FROM RankedQueue
-            WHERE twitch_name = ?1").unwrap();
-        if let Some(index) = stmt.query_row(params![msg.sender().name()], |row| {
-            Ok(row.get::<_, i64>(0)?)    
-        }).optional()? {
-            let group = index / self.queue_config.len as i64;
-            
-            if group == 0 {
-                reply = format!("You are at position {} and in LIVE group krapmaHeart!", index);
-            } else if group == 1 {
-                reply = format!("You are at position {} and in NEXT group!", index);
-            } else {
-                reply = format!("You are at position {} (Group {}) !", index, group);
-            }
-           
-        } else {
-            reply = format!("You are not in the queue, {}.", msg.sender().name());
-        }
+    pub async fn handle_pos(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
+        let reply = Arc::new(Mutex::new(String::new()));
+        let reply_clone = Arc::clone(&reply);
 
-        client.privmsg(msg.channel(), &reply).send().await?;
+        // Clone the necessary data to avoid borrowing issues
+        let sender_name = msg.sender().name().to_string(); // Convert to owned String
+        let queue_len = self.queue_config.len as i64; // Copy the value from self
+
+        // Perform the database operation inside an async context
+        conn.conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "WITH RankedQueue AS (
+                    SELECT twitch_name, ROW_NUMBER() OVER (ORDER BY id) AS position
+                    FROM queue)
+                    SELECT position
+                    FROM RankedQueue
+                    WHERE twitch_name = ?1",
+            )?;
+
+            // Capture necessary data as owned to avoid lifetime issues
+            let result = stmt.query_row(params![sender_name], |row| row.get::<_, i64>(0)).optional()?;
+
+            // Build the reply message based on the query result
+            let message = match result {
+                Some(index) => {
+                    let group = index / queue_len;
+                    if group == 0 {
+                        format!("You are at position {} and in LIVE group krapmaHeart!", index)
+                    } else if group == 1 {
+                        format!("You are at position {} and in NEXT group!", index)
+                    } else {
+                        format!("You are at position {} (Group {}) !", index, group)
+                    }
+                }
+                None => format!("You are not in the queue, {}.", sender_name),
+            };
+
+            // Safely modify the shared reply variable
+            *reply_clone.lock().unwrap() = message;
+
+            Ok(())
+        })
+        .await?;
+
+        // Send the reply message using the client
+        client.privmsg(msg.channel(), &reply.lock().unwrap()).send().await?;
         Ok(())
     }
 
     //User leaves queue
-    pub async fn handle_leave(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
-        let conn = self.conn.lock().await;
-        let rows = conn.execute("DELETE FROM queue WHERE twitch_name = ?1", params![msg.sender().name()])?;
-        let reply;
-
-        if rows > 0 {
-            reply = format!("You have been removed from the queue, {}.", msg.sender().name());
+    pub async fn handle_leave(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
+        let name = msg.sender().name().to_string();
+        let rows = conn.conn(move |conn| Ok(conn.execute("DELETE FROM queue WHERE twitch_name = ?1", params![name])?)).await.unwrap();
+        
+        let reply = if rows > 0 {
+            format!("You have been removed from the queue, {}.", msg.sender().name())
             
         } else {
-            reply = format!("You are not in queue, {}.", msg.sender().name());
+            format!("You are not in queue, {}.", msg.sender().name())
             
-        }
+        };
 
         client.privmsg(msg.channel(), &reply).send().await?;
         Ok(())
     }
 
     //Shows whole queue
-    pub async fn handle_queue(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
-        let reply;
-        if self.queue_config.open {
-            let conn = self.conn.lock().await;
-            let mut stmt = conn.prepare("SELECT twitch_name FROM queue")?;
-            let queue_iter = stmt.query_map([], |row| row.get::<_,String>(0))?;
+    pub async fn handle_queue(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
+        let queue_msg = Arc::new(Mutex::new(Vec::new()));
+        let queue_msg_clone = Arc::clone(&queue_msg);
 
-            let mut queue_msg: Vec<String> = Vec::new();
+
+        let reply = if self.queue_config.open {
+            conn.conn(move |conn| {
+                let mut stmt = conn.prepare("SELECT twitch_name FROM queue")?;
+                let queue_iter = stmt.query_map([], |row| row.get::<_,String>(0))?;
+                for entry in queue_iter {
+                    queue_msg_clone.lock().unwrap().push(entry?);
+                };
+                Ok(())
+            }).await?;
+
+            let queue_msg = queue_msg.lock().unwrap();
             let mut live_group: Vec<&str> = Vec::new();
             let mut next_group: Vec<&str> = Vec::new();
 
-            for entry in queue_iter {
-                queue_msg.push(entry?);
-            }
-            queue_msg = queue_msg.iter().enumerate().map(|(i, q)| format!("{}. {}", i + 1, q)).collect();
             
+            let queue_msg: Vec<String> = queue_msg.iter().enumerate().map(|(i, q)| format!("{}. {}", i + 1, q)).collect();
             for name in &queue_msg[0..min(self.queue_config.teamsize, queue_msg.len())] {
                 live_group.push(name);
             }
@@ -266,39 +296,45 @@ impl BotState {
 
             let format_group = |group: &Vec<&str>| group.join(", ");
 
-            reply = format!( "LIVE: {} || NEXT: {} || QUEUE: {}", format_group(&live_group), format_group(&next_group), format_group(&rest_group));
+            format!( "LIVE: {} || NEXT: {} || QUEUE: {}", format_group(&live_group), format_group(&next_group), format_group(&rest_group))
             
         } else {
-            reply = "Queue is not opened!".to_string();
-        }
+            "Queue is not opened!".to_string()
+        };
         
         client.privmsg(msg.channel(), &reply).send().await?;
         Ok(())
     }
 
     //random fireteam
-    pub async fn random(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError>{
+    pub async fn random(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError>{
         //Push the randomly chosen player to first positions
-        let mut conn = self.conn.lock().await;
-        pick_random(&mut conn, self.queue_config.teamsize)?;
-
-        let mut stmt = conn.prepare("SELECT twitch_name from queue WHERE id <= ?1").unwrap();
-        let rows = stmt.query_map(params![self.queue_config.teamsize], |row| row.get::<_,String>(1))?;
-        let mut live_names = Vec::new();
-        for names in rows {
-            live_names.push(names?);
-        }
+        let bot_state = self.clone();
+        pick_random(conn.clone(), self.queue_config.teamsize).await?;
+        let live_names = Arc::new(Mutex::new(Vec::new()));
+        let live_names_clone = Arc::clone(&live_names);
+        conn.conn(move |conn| {
+            let mut stmt = conn.prepare("SELECT twitch_name from queue WHERE id <= ?1").unwrap();
+            let rows = stmt.query_map(params![bot_state.queue_config.teamsize], |row| row.get::<_,String>(1))?;
+            for names in rows {
+                live_names_clone.lock().unwrap().push(names?);
+            };
+            Ok(())
+        }).await?;
+        
+        
+        
 
         client.privmsg(msg.channel(), &format!("Randomly selected: {:?}",live_names)).send().await?;
         Ok(())
     }
     //Get total clears of raid of a player
-    pub async fn total_raid_clears(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
-        let conn = self.conn.lock().await;
+    pub async fn total_raid_clears(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
+        
         let mut membership = MemberShip { id: String::new(), type_m: -1 };
         let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
-        let mut reply = String::new();
-        if words.len() > 1 {
+        
+        let reply = if words.len() > 1 {
             let mut name = words[1..].to_vec().join(" ").to_string();
     
             if is_valid_bungie_name(&name) {
@@ -312,7 +348,7 @@ impl BotState {
                 }
             
                 println!("{:?}", name);
-                if let Some(ship) = load_membership(&conn, name.clone()) {
+                if let Some(ship) = load_membership(&conn, name.clone()).await {
                     membership = ship;
                 } else {
                     client.privmsg(msg.channel(), "Twitch user isn't registered in the database! Use their Bungie name!").send().await?;
@@ -320,15 +356,15 @@ impl BotState {
                 }
             }
             let clears = get_users_clears(membership.id, membership.type_m, self.x_api_key.clone()).await? as i32;
-            reply = format!("{} has total {} raid clears", name, clears);
+            format!("{} has total {} raid clears", name, clears)
         } else {
-            if let Some(membership) = load_membership(&conn, msg.sender().name().to_string()) {
+            if let Some(membership) = load_membership(&conn, msg.sender().name().to_string()).await {
                 let clears = get_users_clears(membership.id, membership.type_m, self.x_api_key.clone()).await? as i32;
-                reply = format!("You have total {} raid clears", clears);
+                format!("You have total {} raid clears", clears)
             } else {
-                reply = format!("{} is not registered to the database. Use !register <yourbungiename#0000>", msg.sender().name());
+                format!("{} is not registered to the database. Use !register <yourbungiename#0000>", msg.sender().name())
             }
-        }
+        };
         
         client.privmsg(msg.channel(), &reply).send().await?;
         Ok(())
@@ -342,38 +378,42 @@ async fn send_invalid_name_reply(msg: &tmi::Privmsg<'_>, client: &mut Client) ->
     Ok(())
 }
 
-async fn process_queue_entry(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, conn: &Mutex<Connection>, user: TwitchUser) -> Result<(), BotError> {
-    let reply;
-    let conn = conn.lock().await;
-    if user_exists_in_queue(&conn, &user.twitch_name) {
-        update_queue(&conn, &user);
-        reply = format!("{} updated their Bungie name to {}", msg.sender().name(), user.bungie_name);
-        send_message(msg, client, &reply).await?;
+async fn process_queue_entry(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, conn: &SqliteClient, user: TwitchUser) -> Result<(), BotError> {
+   
+    let reply = if user_exists_in_queue(&conn, user.clone().twitch_name).await {
+        update_queue(&conn, user.clone()).await?;
+        format!("{} updated their Bungie name to {}", msg.sender().name(), user.clone().bungie_name)
     } else {
-        reply = add_to_queue(msg, queue_len, conn, user).await?;
-    }
+        add_to_queue(msg, queue_len, &conn, user).await?
+    };
     send_message(msg, client, &reply).await?;
     Ok(())
 }
 
-fn user_exists_in_queue(conn: &Connection, twitch_name: &str) -> bool {
-    let mut stmt = conn.prepare("SELECT 1 FROM queue WHERE twitch_name = ?1").unwrap();
-    let exists: Result<Option<i64>, _> = stmt.query_row(params![twitch_name], |row| row.get(0));
-    exists.is_ok()
+async fn user_exists_in_queue(conn: &SqliteClient, twitch_name: String) -> bool {
+    let res = conn.conn(move |conn| {
+        let mut stmt = conn.prepare("SELECT 1 FROM queue WHERE twitch_name = ?1").unwrap();
+        let exists: Result<Option<i64>, _> = stmt.query_row(params![twitch_name], |row| row.get(0));
+        Ok(exists.is_ok())
+    }).await.unwrap();
+    return res
 }
 
-fn update_queue(conn: &Connection, user: &TwitchUser) {
-    conn.execute("UPDATE queue SET bungie_name = ?1 WHERE twitch_name = ?2", params![user.bungie_name, user.twitch_name]).unwrap();
+async fn update_queue(conn: &SqliteClient, user: TwitchUser) -> Result<(), BotError>{
+    conn.conn(move |conn| 
+        Ok(conn.execute("UPDATE queue SET bungie_name = ?1 WHERE twitch_name = ?2", params![user.bungie_name, user.twitch_name]).unwrap())
+    ).await?;
+    Ok(())
 }
 
-async fn add_to_queue<'a>(msg: &tmi::Privmsg<'_>, queue_len: usize, conn: MutexGuard<'a, Connection>, user: TwitchUser) -> Result<String, BotError>{
+async fn add_to_queue<'a>(msg: &tmi::Privmsg<'_>, queue_len: usize, conn: &SqliteClient, user: TwitchUser) -> Result<String, BotError>{
     let reply;
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM queue", [], |row| row.get(0))?;
+    let count: i64 = conn.conn(move |conn| Ok(conn.query_row("SELECT COUNT(*) FROM queue", [], |row| row.get::<_,i64>(0))?)).await?;
     if count < queue_len as i64 {
-        conn.execute(
+        conn.conn(move |conn| Ok(conn.execute(
             "INSERT INTO queue (twitch_name, bungie_name) VALUES (?1, ?2)",
             params![user.twitch_name, user.bungie_name],
-        ).unwrap();
+        )?)).await?;
         reply = format!("{} entered the queue at position #{}", msg.sender().name(), count + 1);
     } else {
         //Queue is full
@@ -382,34 +422,37 @@ async fn add_to_queue<'a>(msg: &tmi::Privmsg<'_>, queue_len: usize, conn: MutexG
     Ok(reply)
 }
 
-pub async fn register_user(conn: &Mutex<Connection>, twitch_name: &str, bungie_name: &str) -> Result<String, BotError> {
+pub async fn register_user(conn: &SqliteClient, twitch_name: &str, bungie_name: &str) -> Result<String, BotError> {
     dotenv::dotenv().ok();
     let x_api_key = var("X-API-KEY").expect("No bungie api key");
-    let reply;
-    if is_valid_bungie_name(bungie_name) {
+    let reply = if is_valid_bungie_name(bungie_name) {
         let new_user = TwitchUser {
             twitch_name: twitch_name.to_string(),
             bungie_name: bungie_name.to_string()
         };
-        reply = save_to_user_database(&conn, &new_user, x_api_key).await?;
+        save_to_user_database(conn, new_user, x_api_key).await?
     } else {
-        reply = "You have typed invalid format of bungiename, make sure it looks like -> bungiename#0000".to_string();
-    }
+        "You have typed invalid format of bungiename, make sure it looks like -> bungiename#0000".to_string()
+    };
     Ok(reply)
     
 }
 //if is/not in database
-pub async fn bungiename(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &Mutex<Connection>, twitch_name: &str) -> Result<(), BotError> {
-    let conn = conn.lock().await;
-    let mut stmt = conn.prepare("SELECT rowid, * FROM user WHERE twitch_name = ?1").unwrap();
+pub async fn bungiename(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient, twitch_name: String) -> Result<(), BotError> {
+    let reply = conn.conn(move |conn| {
+        let mut stmt = conn.prepare("SELECT rowid, * FROM user WHERE twitch_name = ?1").unwrap();
+        let reply = if let Some(bungie_name) = stmt.query_row(params![twitch_name], |row| {
+            Ok(row.get::<_, String>(3)?)
+        }).optional()? {
+            format!("@{} || BungieName: {}||", twitch_name, bungie_name).to_string()
+        } else {
+            format!("{}, you are not registered", twitch_name).to_string()
+        };
+        Ok(reply)
+    }).await?;
 
-    if let Some(bungie_name) = stmt.query_row(params![twitch_name], |row| {
-        Ok(row.get::<_, String>(3)?)
-    }).optional()? {
-        send_message(msg, client, &format!("@{} || BungieName: {}||", twitch_name, bungie_name)).await?;
-    } else {
-        send_message(msg, client, &format!("{}, you are not registered", twitch_name)).await?;
-    }
+    send_message(msg, client, &reply).await?;
+
     Ok(())
 }
 #[derive(Serialize)]
@@ -431,27 +474,6 @@ pub async fn announcment(broadcaster_id: &str, mod_id: &str, oauth_token: &str, 
     println!("{:?}", res.text().await);
     
     Ok(())
-}
-
-
-
-
-//REmade invites twitch
-//Still needs a better timing - maybe AHK?
-
-async fn invite_macro(bungie_name: &str) {
-    let mut enigo = Enigo::new(&Settings::default()).unwrap();
-    let _ = enigo.move_mouse(100, 0, enigo::Coordinate::Abs);
-    let _ = enigo.button(enigo::Button::Left, enigo::Direction::Click);
-    
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    
-    let _ = enigo.key(enigo::Key::Return, enigo::Direction::Click);
-    
-    let _ = enigo.text(&format!("/invite {}", bungie_name));
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    let _ = enigo.key(enigo::Key::Return, enigo::Direction::Click);
-    tokio::time::sleep(Duration::from_secs(7)).await;
 }
 
 pub async fn send_message(msg: &tmi::Privmsg<'_>, client: &mut Client, reply: &str) -> Result<(), BotError> {
