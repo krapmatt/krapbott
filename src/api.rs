@@ -1,6 +1,4 @@
 use std::{collections::HashMap, env::var};
-
-use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, json, Value};
 

@@ -1,12 +1,11 @@
 use crate::{ 
-    bot_commands::{announcment, ban_bots, bungiename, in_right_chat, is_follower, is_moderator, register_user, send_message}, database::{get_command_response, remove_command, save_command}, initialize_database, models::{BotError, ChatMessage}, SharedState
+    bot_commands::{announcment, ban_bots, bungiename, in_right_chat, is_follower, is_moderator, register_user, send_message}, database::{get_command_response, initialize_database_async, remove_command, save_command}, initialize_database, models::{BotError, ChatMessage}, SharedState
 };
+use async_sqlite::Client as SqliteClient;
 use dotenv::dotenv;
-use rand::{random, Rng};
+use rand::Rng;
 use regex::Regex;
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tmi::Client;
 
 use std::{env::var, fs::File, io::{Read, Write}, sync::Arc, time::{self, SystemTime}};
@@ -14,7 +13,7 @@ use tokio::sync::Mutex;
 
 pub const CHANNELS: &[&str] = &["#krapmatt"];
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct BotConfig {
     pub open: bool,
     pub len: usize,
@@ -41,16 +40,16 @@ impl BotConfig {
     pub fn save_config(&self) {
         let content = serde_json::to_string_pretty(self).expect("Json serialization is wrong? Check save_config function");
         let mut file = File::create("Config.json").expect("Still the config file doesnt exist?");
-        file.write_all(content.as_bytes());
+        file.write_all(content.as_bytes()).unwrap();
         
     }
 }
+#[derive(Clone)]
 pub struct BotState {
     oauth_token_bot: String,
     pub nickname: String,
     bot_id: String,
     pub x_api_key: String,
-    pub conn: Mutex<Connection>,
     pub queue_config: BotConfig
 }
 
@@ -60,15 +59,13 @@ impl BotState {
         let oauth_token_bot = var("TWITCH_OAUTH_TOKEN_BOTT").expect("No bot oauth token"); 
         let nickname = var("TWITCH_BOT_NICK").expect("No bot name");   
         let bot_id = var("TWITCH_CLIENT_ID_BOT").expect("msg");
-        let conn = Mutex::new(initialize_database());
-        let x_api_key = var("X-API-KEY").expect("No bungie api key");
+        let x_api_key = var("XAPIKEY").expect("No bungie api key");
         
 
         BotState { 
             oauth_token_bot: oauth_token_bot,
             nickname: nickname,
             bot_id: bot_id,
-            conn: conn,
             x_api_key: x_api_key,
             queue_config: BotConfig::load_config()
         }
@@ -81,7 +78,7 @@ impl BotState {
         client
     }
 
-    async fn non_queue_comms(&mut self, mut client: &mut Client, msg: &tmi::Privmsg<'_>) -> Result<(), BotError> {
+    async fn non_queue_comms(&mut self, mut client: &mut Client, msg: &tmi::Privmsg<'_>, conn: &SqliteClient) -> Result<(), BotError> {
         match msg.text() {   
             text if text.to_ascii_lowercase().starts_with("!connect") && is_moderator(msg, client).await => {
                 if let Some((_, channel)) = msg.text().split_once(" ") {
@@ -100,16 +97,16 @@ impl BotState {
                 if twitch_name.starts_with("@") {
                     twitch_name.remove(0);
                 }
-                send_message(&msg, &mut client, &format!("Let's give a big Shoutout to https://www.twitch.tv/{}!. Make sure to check them out and give them a FOLLOW krapmaHeart", twitch_name)).await?;
+                send_message(&msg, &mut client, &format!("Let's give a big Shoutout to https://www.twitch.tv/{} ! Make sure to check them out and give them a FOLLOW krapmaHeart", twitch_name)).await?;
                 send_message(msg, client, &format!("/shoutout {}", twitch_name)).await?;
             }
             text if text.to_ascii_lowercase().starts_with("!total") => {
-                self.total_raid_clears(msg, client).await?;
+                self.total_raid_clears(msg, client, conn).await?;
             }
             text if text.to_ascii_lowercase().starts_with("!register") => {
                 let reply;
                 if let Some((_, bungie_name)) = msg.text().split_once(" ") {
-                    reply = register_user(&self.conn, &msg.sender().name(), bungie_name).await?;
+                    reply = register_user(conn, &msg.sender().name(), bungie_name).await?;
                 } else {
                     reply = "Invalid command format! Use: !register bungiename#1234".to_string();
                 }
@@ -124,7 +121,7 @@ impl BotState {
                     if twitch_name.starts_with("@") {
                         twitch_name.remove(0);
                     }
-                    reply = register_user(&self.conn, &twitch_name, bungie_name).await?;
+                    reply = register_user(conn, &twitch_name, bungie_name).await?;
                 } else {
                     reply = "You are a mod. . . || If you forgot use: !mod_register twitchname bungoname".to_string();
                 }
@@ -136,33 +133,34 @@ impl BotState {
             }
             text if text.starts_with("!bungiename") => {
                 if text.trim_end().len() == 11 {
-                    bungiename(&msg, &mut client, &self.conn, &msg.sender().name()).await?;
+                    bungiename(&msg, &mut client, conn, msg.sender().name().to_string()).await?;
                 } else {
                     let (_, twitch_name) = text.split_once(" ").expect("How did it panic, what happened? //Always is something here");
                     let mut twitch_name = twitch_name.to_string();
                     if twitch_name.starts_with("@") {
                         twitch_name.remove(0);
                     }
-                    bungiename(&msg, &mut client, &self.conn, &twitch_name).await?;
+                    bungiename(&msg, &mut client, conn, twitch_name).await?;
                 }
                 
             }
             text if text.starts_with("!mod_addglobalcommand") => {
                 let words: Vec<&str> = text.split_whitespace().collect();
-                if words.len() > 2 {
-                    let command = words[1];
-                    let reply = words[2..].join(" ");
-                    save_command(&self.conn, command, &reply, None).await;
-                    client.privmsg(msg.channel(), &format!("Global Command !{} added.", command)).send().await?;
+                let reply = if words.len() > 2 {
+                    let command = words[1].to_string();
+                    let reply = words[2..].join(" ").to_string();
+                    save_command(conn, command.clone(), reply, None).await;
+                    format!("Global Command !{} added.", command)
                 } else {
-                    client.privmsg(msg.channel(), "Usage: !mod_addglobalcommand <command> <response>").send().await?;
-                }
+                    "Usage: !mod_addglobalcommand <command> <response>".to_string()
+                };
+                send_message(msg, client, &reply).await?;
             }
             text if text.starts_with("!mod_addcommand") && is_moderator(&msg, &mut client).await => {
-                self.mod_addcommand(msg, client).await?;
+                self.mod_addcommand(msg, client, conn).await?;
             }
             text if text.starts_with("!mod_removecommand") && is_moderator(&msg, &mut client).await => {
-                self.mod_removecommand(msg, client).await?;
+                self.mod_removecommand(msg, client, conn).await?;
             }
             text if text == "!mod_config" && is_moderator(msg, client).await => {
                 let a = BotConfig::load_config();
@@ -170,7 +168,7 @@ impl BotState {
                 send_message(msg, client, &reply).await?;
             }
             text if text.starts_with("!") => {
-                if let Ok(Some(reply)) = get_command_response(&self.conn, text, Some(msg.channel())).await {
+                if let Ok(Some(reply)) = get_command_response(conn, text.to_string(), Some(msg.channel().to_string())).await {
                     send_message(msg, client, &reply).await?;
                 }
             }
@@ -180,25 +178,26 @@ impl BotState {
         Ok(())
     }
 
-    async fn mod_addcommand(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
+    async fn mod_addcommand(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
         let words: Vec<&str> = msg.text().split_whitespace().collect();
-        if words.len() > 2 {
-            let channel = msg.channel();
-            let command = words[1];
-            let reply = words[2..].join(" ");
-            save_command(&self.conn, command, &reply, Some(channel)).await;
-            send_message(msg, client, &format!("Command !{} added.", command)).await?;
+        let reply = if words.len() > 2 {
+            let channel = msg.channel().to_string();
+            let command = words[1].to_string();
+            let reply = words[2..].join(" ").to_string();
+            save_command(conn, command.clone(), reply, Some(channel)).await;
+            format!("Command !{} added.", command)
         } else {
-            send_message(msg, client, "Usage: !mod_addcommand <command> <response>").await?;
-        }
+            "Usage: !mod_addcommand <command> <response>".to_string()
+        };
+        send_message(msg, client, &reply).await?;
         Ok(())    
     }
 
-    async fn mod_removecommand(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
+    async fn mod_removecommand(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
         let words: Vec<&str> = msg.text().split_whitespace().collect();
         let command = words[1];
         let reply;
-        if remove_command(&self.conn, command).await {
+        if remove_command(conn, command).await {
             reply = format!("Command !{} removed.", command);
         } else {
             reply = format!("Command !{} doesn't exist.", command);
@@ -219,10 +218,9 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
     let mut messeges = 0;
     
     let mut start_time = SystemTime::now();
-    let mut time: SystemTime;
 
     client.privmsg("#krapmatt", "Krapbott connected!").send().await?;
-
+    let conn = initialize_database_async().await;
     loop {
         let msg = client.recv().await?;
         
@@ -240,7 +238,7 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
                 let mut bot_state = bot_state.lock().await;
                 match msg.text() {
                     text if text.to_ascii_lowercase() == "!open_queue" && is_moderator(&msg, &mut client).await => {
-                        bot_state.conn.lock().await.execute("DELETE from queue", [])?;
+                        conn.conn(|conn| Ok(conn.execute("DELETE from queue", [])?)).await?;
                         bot_state.queue_config.open = true;
                         send_message(&msg, &mut client, "The queue is now open!").await?
                     }
@@ -269,28 +267,28 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
                         }
                     }
                     text if text.to_ascii_lowercase().starts_with("!join") && is_follower(&msg, &mut client, &bot_state.oauth_token_bot, bot_state.bot_id.clone()).await? => {
-                        bot_state.handle_join(&msg, &mut client).await?;
+                        bot_state.handle_join(&msg, &mut client, &conn).await?;
                     }
                     text if text.to_ascii_lowercase().starts_with("!next") && is_moderator(&msg, &mut client).await => {
                         run_count += 1;
-                        bot_state.handle_next(&msg, &mut client).await?;
+                        bot_state.handle_next(&msg, &mut client, &conn).await?;
                     }
                     text if text.to_ascii_lowercase().starts_with("!remove") && is_moderator(&msg, &mut client).await => {
-                        bot_state.handle_remove(&msg, &mut client).await?;
+                        bot_state.handle_remove(&msg, &mut client, &conn).await?;
                     }
                     text if text.to_ascii_lowercase().starts_with("!pos") => {
-                        bot_state.handle_pos(&msg, &mut client).await?;
+                        bot_state.handle_pos(&msg, &mut client, &conn).await?;
                     }
                     text if text.to_ascii_lowercase().starts_with("!leave") => {
-                        bot_state.handle_leave(&msg, &mut client).await?;
+                        bot_state.handle_leave(&msg, &mut client, &conn).await?;
                     }
                     text if text.to_ascii_lowercase().starts_with("!queue") || text.starts_with("!list")=> {
-                        bot_state.handle_queue(&msg, &mut client).await?;
+                        bot_state.handle_queue(&msg, &mut client, &conn).await?;
                     }
                     text if text.to_ascii_lowercase().starts_with("!random") && is_moderator(&msg, &mut client).await => {
-                        bot_state.random(&msg, &mut client).await?;
+                        bot_state.random(&msg, &mut client, &conn).await?;
                     }
-                    _ => bot_state.non_queue_comms(&mut client, &msg).await?
+                    _ => bot_state.non_queue_comms(&mut client, &msg, &conn).await?
                 }
                 messeges += 1;
             }
@@ -332,9 +330,16 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
             start_time = SystemTime::now();
         }
 
-
+        
     }
 }
+
+lazy_static::lazy_static! {
+    static ref CHEAP_VIEWERS_RE: Regex = Regex::new(r"cheap\s*viewers\s*on").unwrap();
+    static ref BEST_VIEWERS_RE: Regex = Regex::new(r"best\s*viewers\s*on").unwrap();
+    static ref PROMO_RE: Regex = Regex::new(r"hello\s*sorry\s*for\s*bothering\s*you\s*i\s*want\s*to\s*offer\s*promotion\s*of\s*your\s*channel\s*viewers\s*followers\s*views\s*chat\s*bots\s*etc\s*the\s*price\s*is\s*lower\s*than\s*any\s*competitor\s*the\s*quality\s*is\s*guaranteed\s*to\s*be\s*the\s*best\s*flexible\s*and\s*convenient\s*order\s*management\s*panel\s*chat\s*panel\s*everything\s*is\s*in\s*your\s*hands\s*a\s*huge\s*number\s*of\s*custom\s*settings").unwrap();
+}
+
 //Find first message
 fn is_bannable_link(text: &str) -> bool {
     // Remove non-alphanumeric characters and convert to lowercase
@@ -343,18 +348,9 @@ fn is_bannable_link(text: &str) -> bool {
         .collect::<String>()
         .to_ascii_lowercase();
 
-    // Compile regex for matching phrases
-    let cheap_viewers_re = Regex::new(r"cheap\s*viewers\s*on").unwrap();
-    let best_viewers_re = Regex::new(r"best\s*viewers\s*on").unwrap();
-    let promo_re = Regex::new(r"hello\s*sorry\s*for\s*bothering\s*you\s*i\s*want\s*to\s*offer\s*promotion\s*of\s*your\s*channel\s*viewers\s*followers\s*views\s*chat\s*bots\s*etc\s*the\s*price\s*is\s*lower\s*than\s*any\s*competitor\s*the\s*quality\s*is\s*guaranteed\s*to\s*be\s*the\s*best\s*flexible\s*and\s*convenient\s*order\s*management\s*panel\s*chat\s*panel\s*everything\s*is\s*in\s*your\s*hands\s*a\s*huge\s*number\s*of\s*custom\s*settings").unwrap();
-
-    // Check the conditions
-    if (cheap_viewers_re.is_match(&cleaned_text) || best_viewers_re.is_match(&cleaned_text) && text.contains(".")) ||
-        promo_re.is_match(&cleaned_text) {
-        true
-    } else {
-        false
-    }
+    // Check the conditions using precompiled regexes
+    (CHEAP_VIEWERS_RE.is_match(&cleaned_text) || BEST_VIEWERS_RE.is_match(&cleaned_text) && text.contains(".")) ||
+        PROMO_RE.is_match(&cleaned_text)
 }
 
 

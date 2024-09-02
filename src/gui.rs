@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use async_sqlite::rusqlite::params;
 use egui::{Label, Sense};
-use rusqlite::params;
+
 
 use crate::{database::{initialize_database, load_from_queue}, SharedState};
 pub struct AppState {
