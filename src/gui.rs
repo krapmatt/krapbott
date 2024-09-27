@@ -1,17 +1,20 @@
+use core::f32;
 use std::sync::Arc;
 
 use async_sqlite::rusqlite::params;
-use egui::{Label, Sense};
+use egui::{text_edit::TextEditOutput, Label, Sense, TextEdit};
 
 
 use crate::{database::{initialize_database, load_from_queue}, SharedState};
 pub struct AppState {
-    shared_state: Arc<std::sync::Mutex<SharedState>>
+    shared_state: Arc<std::sync::Mutex<SharedState>>,
+    ban_field: String,
+    reason_field: String
 }
 
 impl AppState {
     pub fn new(shared_state: Arc<std::sync::Mutex<SharedState>>) -> Self {
-        AppState { shared_state }
+        AppState { shared_state, ban_field: String::new(), reason_field: String::new() }
     }
 }
 
@@ -46,6 +49,20 @@ impl eframe::App for AppState {
                 ui.label(run_count_stat);
                 
             });
+            ui.separator();
+            ui.heading("Ban from queue");
+            ui.horizontal(|ui| {
+                
+                
+                ui.add(TextEdit::singleline(&mut self.ban_field));
+                ui.add(TextEdit::singleline(&mut self.reason_field));
+                if ui.button("Submit").clicked() {
+                    println!("Submitted text: {}", self.ban_field);
+                    conn.execute("INSERT INTO banlist (twitch_name, reason) VALUES (?1, ?2)", params![self.ban_field, self.reason_field]).unwrap();
+                }
+            });
+
+
             ui.separator();
             ui.heading("Chat Messages");
             ui.push_id("2", |ui| {

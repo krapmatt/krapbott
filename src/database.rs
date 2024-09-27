@@ -6,7 +6,8 @@ use crate::{api::{get_membershipid, MemberShip}, models::{BotError, TwitchUser}}
 pub const QUEUE_TABLE: &str = "CREATE TABLE IF NOT EXISTS queue (
     id INTEGER PRIMARY KEY,
     twitch_name TEXT NOT NULL,
-    bungie_name TEXT NOT NULL
+    bungie_name TEXT NOT NULL,
+    channel_id VARCHAR
 )";
 
 pub const USER_TABLE: &str = "CREATE TABLE IF NOT EXISTS user (
@@ -32,12 +33,19 @@ pub const ANNOUNCMENT_TABLE: &str = "CREATE TABLE IF NOT EXISTS announcments (
     channel TEXT
 )";
 
+pub const BAN_TABLE: &str = "CREATE TABLE IF NOT EXISTS banlist (
+    id INTEGER PRIMARY KEY,
+    twitch_name TEXT NOT NULL,
+    reason TEXT
+)";
+
 pub fn initialize_database() -> Connection {
     let conn = Connection::open("D:/program/krapbott/commands.db").unwrap();
     conn.execute(USER_TABLE, []).unwrap();
     conn.execute(QUEUE_TABLE, []).unwrap();
     conn.execute(COMMAND_TABLE, []).unwrap();
     conn.execute(ANNOUNCMENT_TABLE, []).unwrap();
+    conn.execute(BAN_TABLE, []).unwrap();
     return conn
 }
 
@@ -52,8 +60,9 @@ pub async fn initialize_database_async() -> Client {
         conn.execute(QUEUE_TABLE, []).unwrap();
         conn.execute(COMMAND_TABLE, []).unwrap();
         conn.execute(ANNOUNCMENT_TABLE, []).unwrap();
+        conn.execute(BAN_TABLE, []).unwrap();
         Ok(())
-    }).await;
+    }).await.expect("Failed to create database");
     client
 }
 
@@ -67,7 +76,7 @@ pub async fn save_to_user_database(conn: &Client, user: TwitchUser, x_api_key: S
             "INSERT INTO user (twitch_name, bungie_name, membership_id, membership_type) VALUES (?1, ?2, ?3, ?4)
                 ON CONFLICT(twitch_name) DO UPDATE SET bungie_name = excluded.bungie_name",
                 params![user_clone.twitch_name, user_clone.bungie_name, user_info.id, user_info.type_m],        
-            )?)).await;
+            )?)).await?;
             Ok(format!("{} has been registered to database as {}", user.twitch_name, user.bungie_name))
         }
     } else {
@@ -187,7 +196,7 @@ pub async fn remove_command(conn: &Client, command: &str) -> bool {
     }
    
 }
-//Need this to async!!! TODO
+
 pub async fn pick_random(conn: Client, teamsize: usize) -> Result<(), BotError> {
     conn.conn_mut( move |conn| {
         let tx = conn.transaction().unwrap();
@@ -217,7 +226,7 @@ pub async fn pick_random(conn: Client, teamsize: usize) -> Result<(), BotError> 
         drop(stmt);
         tx.commit()?;
         Ok(())
-    }).await;
+    }).await?;
     
     Ok(())
 }
