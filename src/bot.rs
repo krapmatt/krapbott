@@ -1,49 +1,19 @@
 use crate::{ 
-    bot_commands::{announcment, ban_bots, bungiename, in_right_chat, is_follower, is_moderator, register_user, send_message}, database::{get_command_response, initialize_database_async, remove_command, save_command}, initialize_database, models::{BotError, ChatMessage}, SharedState
+    bot_commands::{announcment, ban_bots, bungiename, in_right_chat, is_follower, is_moderator, register_user, send_message}, 
+    database::{get_command_response, initialize_database_async, remove_command, save_command}, 
+    models::{BotConfig, BotError, ChatMessage}, SharedState
 };
 use async_sqlite::Client as SqliteClient;
 use dotenv::dotenv;
 use rand::Rng;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
-use tmi::Client;
+use tmi::{Client, Tag};
 
-use std::{env::var, fs::File, io::{Read, Write}, sync::Arc, time::{self, SystemTime}};
+use std::{env::var, sync::Arc, time::{self, SystemTime}};
 use tokio::sync::Mutex;
 
-pub const CHANNELS: &[&str] = &["#krapmatt"];
+pub const CHANNELS: &[&str] = &["#krapmatt, #nyc62truck"];
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct BotConfig {
-    pub open: bool,
-    pub len: usize,
-    pub teamsize: usize,
-}
-
-impl BotConfig {
-    pub fn new() -> Self {
-        BotConfig {
-            open: false,
-            len: 0,
-            teamsize: 0,
-        }
-    }
-    
-    pub fn load_config() -> Self {
-        let mut file = File::open("Config.json").expect("Failed to load config. Create file Config.json");
-        let mut string = String::new();
-        let _ = file.read_to_string(&mut string);
-        let bot_config: BotConfig = serde_json::from_str(&string).expect("Always will be correct format");
-        bot_config
-    }
-
-    pub fn save_config(&self) {
-        let content = serde_json::to_string_pretty(self).expect("Json serialization is wrong? Check save_config function");
-        let mut file = File::create("Config.json").expect("Still the config file doesnt exist?");
-        file.write_all(content.as_bytes()).unwrap();
-        
-    }
-}
 #[derive(Clone)]
 pub struct BotState {
     oauth_token_bot: String,
@@ -78,8 +48,9 @@ impl BotState {
         client
     }
 
-    async fn non_queue_comms(&mut self, mut client: &mut Client, msg: &tmi::Privmsg<'_>, conn: &SqliteClient) -> Result<(), BotError> {
+    async fn non_queue_comms(&mut self, mut client: &mut Client, msg: &tmi::Privmsg<'_>, conn: &SqliteClient, first_time: Option<&str>) -> Result<(), BotError> {
         match msg.text() {   
+            
             text if text.to_ascii_lowercase().starts_with("!connect") && is_moderator(msg, client).await => {
                 if let Some((_, channel)) = msg.text().split_once(" ") {
                     client.join(format!("#{}", channel)).await?;
@@ -127,7 +98,7 @@ impl BotState {
                 }
                 send_message(msg, client, &reply).await?;
             }
-            text if is_bannable_link(text) => {
+            text if is_bannable_link(text) && first_time == Some("1") => {
                 ban_bots(&msg, &self.oauth_token_bot, self.bot_id.clone()).await;
                 client.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await?;
             }
@@ -223,7 +194,7 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
     let conn = initialize_database_async().await;
     loop {
         let msg = client.recv().await?;
-        
+        let first_time = msg.tag(Tag::FirstMsg);
         match msg.as_typed()? {
             tmi::Message::Privmsg(msg) => {
                 
@@ -236,6 +207,7 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
                 shared_state.lock().unwrap().add_stats(chat_message, run_count);
       
                 let mut bot_state = bot_state.lock().await;
+                bot_state.queue_config.channel_id = Some(msg.channel().to_string());
                 match msg.text() {
                     text if text.to_ascii_lowercase() == "!open_queue" && is_moderator(&msg, &mut client).await => {
                         conn.conn(|conn| Ok(conn.execute("DELETE from queue", [])?)).await?;
@@ -288,7 +260,8 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
                     text if text.to_ascii_lowercase().starts_with("!random") && is_moderator(&msg, &mut client).await => {
                         bot_state.random(&msg, &mut client, &conn).await?;
                     }
-                    _ => bot_state.non_queue_comms(&mut client, &msg, &conn).await?
+                    _ => bot_state.non_queue_comms(&mut client, &msg, &conn, first_time).await?
+                    
                 }
                 messeges += 1;
             }
@@ -302,12 +275,13 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
             
             _ => {}
         }
+        println!("msg: {:?}", msg);
+        println!("msg_raw: {:?}", msg.raw());
         bot_state.lock().await.queue_config.save_config();
         
         //rendom choose from preset messages
         //Add those messages into a database in future
 
-        println!("Differenct in time {:?}", start_time.elapsed());
         if start_time.elapsed().unwrap() > time::Duration::from_secs(800) && messeges >= 10 {
             let bot_state = bot_state.lock().await;
             let mut rand = rand::thread_rng();

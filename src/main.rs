@@ -5,14 +5,13 @@ mod gui;
 pub mod models;
 pub mod api;
 use std::{fs::File, io::Write, sync::Arc, thread::spawn, time::Duration};
-use bot::{run_chat_bot, BotConfig};
+use bot::run_chat_bot;
 
-use database::initialize_database;
 
 use gui::AppState;
-use models::SharedState;
+use models::{BotConfig, SharedState};
 use tokio::time::sleep;
-use twitch_api::{helix::client, twitch_oauth2::{AccessToken, UserToken}, HelixClient, TwitchClient};
+
 
 pub fn check_config_file() {
     match File::open("Config.json") {
@@ -23,7 +22,6 @@ pub fn check_config_file() {
         }
     }
 }
-
 
 #[tokio::main]
 async fn main() {

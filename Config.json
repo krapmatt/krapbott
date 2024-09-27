@@ -1,5 +1,6 @@
 {
-  "open": false,
-  "len": 20,
-  "teamsize": 5
+  "open": true,
+  "len": 5,
+  "teamsize": 5,
+  "channel_id": "#krapmatt"
 }

@@ -1,3 +1,5 @@
 /target
 .env
-commands.db
+/commands.db
+/commands.db-shm
+/commands.db-wal
