@@ -1,7 +1,5 @@
 use async_sqlite::{rusqlite::{params, Connection, Error}, Client, ClientBuilder};
 
-use tokio::sync::Mutex;
-
 use crate::{api::{get_membershipid, MemberShip}, models::{BotError, TwitchUser}};
 pub const QUEUE_TABLE: &str = "CREATE TABLE IF NOT EXISTS queue (
     id INTEGER PRIMARY KEY,
@@ -120,9 +118,10 @@ pub fn load_from_queue(conn: &Connection, channel: &str) -> Vec<TwitchUser> {
     queue
 }
 
-pub async fn save_command(conn: &Client, command: String, reply: String, channel: Option<String>) {
-    let mut command = command.to_string();
-    command.insert(0, '!');
+pub async fn save_command(conn: &Client, mut command: String, reply: String, channel: Option<String>) {
+    if !command.starts_with("!") {
+        command.insert(0, '!');
+    }
     conn.conn(move |conn| {conn.execute(
         "INSERT INTO commands (command, reply, channel) 
         VALUES (?1, ?2, ?3) 

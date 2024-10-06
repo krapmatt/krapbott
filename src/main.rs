@@ -5,9 +5,9 @@ mod gui;
 pub mod models;
 pub mod api;
 pub mod discord_bot;
-use std::{fs::File, io::Write, sync::Arc, thread::spawn, time::Duration};
-use bot::run_chat_bot;
+use std::{sync::Arc, thread::spawn, time::Duration};
 
+use bot::run_chat_bot;
 use discord_bot::run_discord_bot;
 use gui::AppState;
 use models::{BotConfig, SharedState};
@@ -16,7 +16,7 @@ use tokio::time::sleep;
 #[tokio::main]
 async fn main() {
     
-    spawn(move || {
+    /*spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             loop {
@@ -24,7 +24,7 @@ async fn main() {
                 sleep(Duration::from_secs(5)).await;
             }
         });
-    });
+    });*/
     
     let shared_state = Arc::new(std::sync::Mutex::new(SharedState::new()));
     let shared_state_clone = Arc::clone(&shared_state);

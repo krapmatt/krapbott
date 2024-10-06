@@ -1,29 +1,23 @@
-use std::{cmp::min, sync::{Arc, Mutex}};
+use std::{borrow::BorrowMut, cmp::min, sync::{Arc, Mutex}};
 use async_sqlite::{rusqlite::{params, OptionalExtension}, Client as SqliteClient};
 use dotenv::var;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+
 use tmi::Client;
 
 use crate::{api::{get_membershipid, get_users_clears, MemberShip}, bot::{BotState, CHANNELS}, database::{load_membership, pick_random, save_to_user_database}, models::{BotError, TwitchUser}};
 
-pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: &mut Client) -> bool {
+pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
     if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "moderator" || badge.as_badge_data().name() == "broadcaster") {
         return true;
     } else {
-        _ = client.privmsg(msg.channel(), "You are not a moderator/broadcaster. You can't use this command").send().await;
+        _ = client.lock().await.privmsg(msg.channel(), "You are not a moderator/broadcaster. You can't use this command").send().await;
         return false;
     }
     
 }
-pub async fn in_right_chat(msg: &tmi::Privmsg<'_>) -> bool {
-    if msg.channel() == "#krapmatt" {
-        return true
-    } else {
-        return false
-    }
-}
+
 //Pro twitch na ban botů
 #[derive(Serialize)]
 struct BanRequest {
@@ -56,10 +50,7 @@ pub async fn ban_bots(msg: &tmi::Privmsg<'_>, oauth_token: &str, client_id: Stri
 }
 
 pub async fn shoutout(oauth_token: &str, client_id: String, to_broadcaster_id: &str) {
-
     let url = format!("https://api.twitch.tv/helix/chat/shoutouts?from_broadcaster_id=216105918&to_broadcaster_id={}&moderator_id=1091219021", to_broadcaster_id);
-
-    
     let res = reqwest::Client::new()
         .post(url)
         .bearer_auth(oauth_token)
@@ -76,7 +67,11 @@ struct data_follow {
     pagination: String
 }
 //Not actually checking follow status
-pub async fn is_follower(msg: &tmi::Privmsg<'_>, client: &mut Client, oauth_token: &str, client_id: String) -> Result<bool, BotError> {
+pub async fn is_follower(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
+    dotenv::dotenv().ok();
+    let oauth_token = var("TWITCH_OAUTH_TOKEN_BOTT").expect("No oauth token");
+    let client_id = var("TWITCH_CLIENT_ID_BOT").expect("No bot id");
+
     let url = format!("https://api.twitch.tv/helix/channels/followers?broadcaster_id={}&user_id={}", msg.channel_id(), msg.sender().id());
     let res = reqwest::Client::new()
         .get(&url)
@@ -84,12 +79,19 @@ pub async fn is_follower(msg: &tmi::Privmsg<'_>, client: &mut Client, oauth_toke
         .bearer_auth(oauth_token)
         .send()
         .await.expect("Bad reqwest");
-    
-    if res.text().await?.contains("user_id") || msg.channel_id() == msg.sender().id() { 
-        Ok(true)
+    //.
+    if let Ok(a) = res.text().await  { 
+        if a.contains("user_id") || msg.channel_id() == msg.sender().id() {
+            true
+        } else {
+            let mut client = client.lock().await;
+            let _ = send_message(msg, &mut client, "You are not a follower!").await;
+            false
+        }
     } else {
-        send_message(msg, client, "You are not a follower!").await?;
-        Ok(false)
+        let mut client = client.lock().await;
+        let _ = send_message(msg, &mut client, "Error occured! Tell Matt").await;
+        true
     }
 }
 
@@ -104,7 +106,6 @@ async fn get_bungie_name_from_db(twitch_name: String, conn: &SqliteClient) -> Op
     } else {
             None
     }
-    
 }
 
 async fn is_banned_from_queue(msg: &tmi::Privmsg<'_>, conn: &SqliteClient, client: &mut Client) -> Result<bool, BotError> {
@@ -123,19 +124,20 @@ async fn is_banned_from_queue(msg: &tmi::Privmsg<'_>, conn: &SqliteClient, clien
 
 impl BotState {
     //User can join into queue
-    pub async fn handle_join(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
+    pub async fn handle_join(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, conn: &SqliteClient) -> Result<(), BotError> {
+        let mut client = client.lock().await;
         if self.queue_config.open {
-            if !is_banned_from_queue(msg, conn, client).await? {
+            if !is_banned_from_queue(msg, conn, &mut client).await? {
                 if let Some((_join, name)) = msg.text().split_once(" ") {
                     if is_valid_bungie_name(name.trim()) {
                         let new_user = TwitchUser {
                             twitch_name: msg.sender().name().to_string(),
                             bungie_name: name.trim().to_string(),
                         };
-                        process_queue_entry(msg, client, self.queue_config.len, conn, new_user, self.queue_config.channel_id.clone()).await?;
+                        process_queue_entry(msg, &mut client, self.queue_config.len, conn, new_user, self.queue_config.channel_id.clone()).await?;
                     
                     } else {
-                        send_invalid_name_reply(msg, client).await?;
+                        send_invalid_name_reply(msg, &mut client).await?;
                     }
                 } else {
                     if let Some(bungie_name) = get_bungie_name_from_db(msg.sender().name().to_string(), conn).await {
@@ -143,9 +145,9 @@ impl BotState {
                             twitch_name: msg.sender().name().to_string(),
                             bungie_name: bungie_name
                         };
-                        process_queue_entry(msg, client, self.queue_config.len, conn, new_user, self.queue_config.channel_id.clone()).await?;
+                        process_queue_entry(msg, &mut client, self.queue_config.len, conn, new_user, self.queue_config.channel_id.clone()).await?;
                     } else {
-                        send_invalid_name_reply(msg, client).await?;
+                        send_invalid_name_reply(msg, &mut client).await?;
                     }
                     
                 }
@@ -158,28 +160,31 @@ impl BotState {
     }
 
     //Kicks out users that were in game
-    pub async fn handle_next(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
+    pub async fn handle_next(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, conn: &SqliteClient) -> Result<(), BotError> {
         let bot_state = self.clone();
+        let mut client = client.lock().await;
         let channel = msg.channel().clone().to_string();
+
         conn.conn(move |conn| {
             Ok(conn.execute("DELETE FROM queue WHERE channel_id = ?2 AND id IN (SELECT id FROM queue WHERE channel_id = ?2 LIMIT ?1)", params![bot_state.queue_config.teamsize, channel])?)
         }).await?;
         
-        let queue_msg = Arc::new(Mutex::new(Vec::new()));
+        let queue_msg = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let queue_msg_clone = Arc::clone(&queue_msg);
         let channel = msg.channel().clone().to_string();
+
         conn.conn(move |conn| {
             let mut stmt = conn.prepare("SELECT bungie_name FROM queue WHERE channel_id = ?2 LIMIT ?1")?;
             let queue_iter = stmt.query_map(params![bot_state.queue_config.teamsize, &channel], |row| row.get::<_, String>(0))?;
             for entry in queue_iter {
-                queue_msg_clone.lock().unwrap().push(entry?);
+                queue_msg_clone.blocking_lock().push(entry?);
             }
             Ok(())
         }).await?;
         
     
         
-        let queue_msg = queue_msg.lock().unwrap();
+        let queue_msg = queue_msg.lock().await;
     
         
         let reply = if queue_msg.is_empty() {
@@ -188,7 +193,7 @@ impl BotState {
             format!("Next: {:?}", queue_msg.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "))
         };
     
-        send_message(msg, client, &reply).await?;
+        send_message(msg, &mut client, &reply).await?;
         
         //Vymyslet způsob jak vypisovat vždy kde je bot připojen TODO!
         
@@ -197,9 +202,11 @@ impl BotState {
     }
 
     //Moderator can remove player from queue
-    pub async fn handle_remove(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
-        if is_moderator(msg, client).await {
+    pub async fn handle_remove(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, conn: &SqliteClient) -> Result<(), BotError> {
+        
+        if is_moderator(msg, client.clone()).await {
             let parts: Vec<&str> = msg.text().split_whitespace().collect();
+            let mut client = client.lock().await;
             if parts.len() == 2 {
                 
                 let twitch_name = parts[1].to_string();
@@ -215,7 +222,7 @@ impl BotState {
                 } else {
                     format!("User {} not found in the queue.", twitch_name)
                 };
-                send_message(msg, client, &reply).await?;
+                send_message(msg, &mut client, &reply).await?;
             }
         
         }
@@ -223,10 +230,10 @@ impl BotState {
     }
 
     //Show the user where he is in queue
-    pub async fn handle_pos(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
-        let reply = Arc::new(Mutex::new(String::new()));
+    pub async fn handle_pos(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, conn: &SqliteClient) -> Result<(), BotError> {
+        let reply = Arc::new(tokio::sync::Mutex::new(String::new()));
         let reply_clone = Arc::clone(&reply);
-
+        let mut client = client.lock().await;
         
         let sender_name = msg.sender().name().to_string(); 
         let teamsize = self.queue_config.teamsize as i64; 
@@ -261,19 +268,20 @@ impl BotState {
                 None => format!("You are not in the queue, {}.", sender_name),
             };
 
-            // Safely modify the shared reply variable
-            *reply_clone.lock().unwrap() = message;
+            let mut reply_lock = reply_clone.blocking_lock();
+            *reply_lock = message;
 
             Ok(())
         }).await?;
 
         // Send the reply message using the client
-        client.privmsg(msg.channel(), &reply.lock().unwrap()).send().await?;
+        client.privmsg(msg.channel(), &reply.lock().await).send().await?;
+        
         Ok(())
     }
 
     //User leaves queue
-    pub async fn handle_leave(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
+    pub async fn handle_leave(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, conn: &SqliteClient) -> Result<(), BotError> {
         let name = msg.sender().name().to_string();
         let rows = conn.conn(move |conn| Ok(conn.execute("DELETE FROM queue WHERE twitch_name = ?1", params![name])?)).await.unwrap();
         
@@ -285,13 +293,13 @@ impl BotState {
             
         };
 
-        client.privmsg(msg.channel(), &reply).send().await?;
+        client.lock().await.privmsg(msg.channel(), &reply).send().await?;
         Ok(())
     }
 
     //Shows whole queue
     //TODO! COMBINED/SINGLE
-    pub async fn handle_queue(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
+    pub async fn handle_queue(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, conn: &SqliteClient) -> Result<(), BotError> {
         let queue_msg = Arc::new(Mutex::new(Vec::new()));
         let queue_msg_clone = Arc::clone(&queue_msg);
 
@@ -336,12 +344,12 @@ impl BotState {
             "Queue is not opened!".to_string()
         };
         
-        client.privmsg(msg.channel(), &reply).send().await?;
+        client.lock().await.privmsg(msg.channel(), &reply).send().await?;
         Ok(())
     }
 
     //random fireteam
-    pub async fn random(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError>{
+    pub async fn random(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, conn: &SqliteClient) -> Result<(), BotError>{
         //Push the randomly chosen player to first positions
         let bot_state = self.clone();
         pick_random(conn.clone(), self.queue_config.teamsize).await?;
@@ -359,7 +367,7 @@ impl BotState {
         
         
 
-        client.privmsg(msg.channel(), &format!("Randomly selected: {:?}",live_names)).send().await?;
+        client.lock().await.privmsg(msg.channel(), &format!("Randomly selected: {:?}",live_names)).send().await?;
         Ok(())
     }
     //Get total clears of raid of a player
