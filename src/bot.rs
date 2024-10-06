@@ -1,5 +1,5 @@
 use crate::{ 
-    bot_commands::{announcment, ban_bots, bungiename, in_right_chat, is_follower, is_moderator, register_user, send_message}, 
+    bot_commands::{announcment, ban_bots, bungiename, in_right_chat, is_follower, is_moderator, register_user, send_message, shoutout}, 
     database::{get_command_response, initialize_database_async, remove_command, save_command}, 
     models::{BotConfig, BotError, ChatMessage}, SharedState
 };
@@ -7,12 +7,16 @@ use async_sqlite::Client as SqliteClient;
 use dotenv::dotenv;
 use rand::Rng;
 use regex::Regex;
-use tmi::{Client, Tag};
+use serde::{Deserialize, Serialize};
+use tmi::{Client, Event, SubOrResub, Tag};
+
+
+
 
 use std::{env::var, sync::Arc, time::{self, SystemTime}};
 use tokio::sync::Mutex;
 
-pub const CHANNELS: &[&str] = &["#krapmatt, #nyc62truck"];
+pub const CHANNELS: &[&str] = &["#krapmatt,#nyc62truck"];
 
 #[derive(Clone)]
 pub struct BotState {
@@ -37,7 +41,7 @@ impl BotState {
             nickname: nickname,
             bot_id: bot_id,
             x_api_key: x_api_key,
-            queue_config: BotConfig::load_config()
+            queue_config: BotConfig::new()
         }
     }
 
@@ -47,7 +51,7 @@ impl BotState {
         client.join_all(CHANNELS).await.unwrap();
         client
     }
-
+    
     async fn non_queue_comms(&mut self, mut client: &mut Client, msg: &tmi::Privmsg<'_>, conn: &SqliteClient, first_time: Option<&str>) -> Result<(), BotError> {
         match msg.text() {   
             
@@ -62,14 +66,8 @@ impl BotState {
             text if text.to_ascii_lowercase().starts_with("!lurk") && in_right_chat(&msg).await => {
                 send_message(&msg, &mut client, &format!("Thanks for the krapmaLurk {}! Be sure to leave the tab on low volume, or mute tab, to support stream krapmaHeart", msg.sender().name())).await?;
             }
-            text if text.to_ascii_lowercase().starts_with("!so") && is_moderator(msg, client).await && in_right_chat(&msg).await => {
-                let words:Vec<&str> = msg.text().split_ascii_whitespace().collect();
-                let mut twitch_name = words[1].to_string();
-                if twitch_name.starts_with("@") {
-                    twitch_name.remove(0);
-                }
-                send_message(&msg, &mut client, &format!("Let's give a big Shoutout to https://www.twitch.tv/{} ! Make sure to check them out and give them a FOLLOW krapmaHeart", twitch_name)).await?;
-                send_message(msg, client, &format!("/shoutout {}", twitch_name)).await?;
+            text if text.to_ascii_lowercase().contains("!so") && text.len() > 6 && in_right_chat(&msg).await => {
+                so(msg, client).await?;
             }
             text if text.to_ascii_lowercase().starts_with("!total") => {
                 self.total_raid_clears(msg, client, conn).await?;
@@ -134,8 +132,9 @@ impl BotState {
                 self.mod_removecommand(msg, client, conn).await?;
             }
             text if text == "!mod_config" && is_moderator(msg, client).await => {
-                let a = BotConfig::load_config();
-                let reply = format!("Queue: {} || Lenght: {} || Fireteam size: {}", a.open, a.len, a.teamsize);
+                let channel_name = msg.channel().replace("#", "");
+                let config = BotConfig::load_config(&channel_name);
+                let reply = format!("Queue: {} || Length: {} || Fireteam size: {}", config.open, config.len, config.teamsize);
                 send_message(msg, client, &reply).await?;
             }
             text if text.starts_with("!") => {
@@ -177,9 +176,27 @@ impl BotState {
         Ok(())
     }
 }
+
+async fn so(msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError> {
+    if is_moderator(msg, client).await {
+        let words:Vec<&str> = msg.text().split_ascii_whitespace().collect();
+        let mut twitch_name = words[1].to_string();
+        if twitch_name.starts_with("@") {
+            twitch_name.remove(0);
+        }
+        send_message(&msg, client, &format!("Let's give a big Shoutout to https://www.twitch.tv/{} ! Make sure to check them out and give them a FOLLOW krapmaHeart", twitch_name)).await?;
+    }
+    Ok(())
+}
 //Timers/Counters
 //Bungie api stuff - evade it
+//TODO Match ! as the first thing so that ! is just for commands now could clean up code
 
+//if begins with !
+// if with queue
+//  if with queue && moderator
+//   if with queue && moderator && _len
+//
 pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> Result<(), BotError> {
     let bot_state = Mutex::new(BotState::new());
 
@@ -195,6 +212,7 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
     loop {
         let msg = client.recv().await?;
         let first_time = msg.tag(Tag::FirstMsg);
+        let a = msg.tags().map(|x| println!("Tag: {:?} str: {:?}", x.0, x.1));
         match msg.as_typed()? {
             tmi::Message::Privmsg(msg) => {
                 
@@ -207,39 +225,57 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
                 shared_state.lock().unwrap().add_stats(chat_message, run_count);
       
                 let mut bot_state = bot_state.lock().await;
-                bot_state.queue_config.channel_id = Some(msg.channel().to_string());
+                bot_state.queue_config  = BotConfig::load_config(&msg.channel().replace("#", ""));
+                
+                let mut config = bot_state.queue_config.clone();
+                config.channel_id = Some(msg.channel().to_string());
+
                 match msg.text() {
-                    text if text.to_ascii_lowercase() == "!open_queue" && is_moderator(&msg, &mut client).await => {
-                        conn.conn(|conn| Ok(conn.execute("DELETE from queue", [])?)).await?;
-                        bot_state.queue_config.open = true;
-                        send_message(&msg, &mut client, "The queue is now open!").await?
+                    text if text.to_ascii_lowercase() == "!open_queue" => {
+                        if is_moderator(&msg, &mut client).await {
+                            config.open = true;
+                            send_message(&msg, &mut client, "The queue is now open!").await?
+                        }
                     }
-                    text if text.to_ascii_lowercase() == "!close_queue" && is_moderator(&msg, &mut client).await => {
-                        bot_state.queue_config.open = false;
-                        send_message(&msg, &mut client, "The queue is now closed!").await?;
+                    text if text.to_ascii_lowercase() == "!close_queue" => {
+                        if is_moderator(&msg, &mut client).await {
+                            config.open = false;
+                            send_message(&msg, &mut client, "The queue is now closed!").await?;
+                        }
                     }
-                    text if text.starts_with("!queue_len") && is_moderator(&msg, &mut client).await => {
-                        let words:Vec<&str> = text.split_whitespace().collect();
-                        if words.len() == 2 {
-                            let lenght = words[1].to_owned();
-                            bot_state.queue_config.len = lenght.parse().unwrap();
-                            client.privmsg(msg.channel(), &format!("Queue lenght has been changed to {}", lenght)).send().await?;
-                        } else {
-                            client.privmsg(msg.channel(), "Are you sure you had the right command? In case !queue_len <queue lenght>").send().await?;
+                    text if text.to_ascii_lowercase() == "!clear" => {
+                        let channel = msg.channel().replace("#", "");
+                        conn.conn(move |conn| Ok(conn.execute("DELETE from queue WHERE channel_id", [channel])?)).await?;
+                    }
+                    text if text.starts_with("!queue_len") => {
+                        if is_moderator(&msg, &mut client).await {
+                            let words:Vec<&str> = text.split_whitespace().collect();
+                            if words.len() == 2 {
+                                let length = words[1].to_owned();
+                                config.len = length.parse().unwrap();
+                                client.privmsg(msg.channel(), &format!("Queue length has been changed to {}", length)).send().await?;
+                            } else {
+                                client.privmsg(msg.channel(), "Are you sure you had the right command? In case !queue_len <queue length>").send().await?;
+                            } 
                         }
                     }
                     text if text.starts_with("!queue_size") && is_moderator(&msg, &mut client).await => {
                         let words:Vec<&str> = text.split_whitespace().collect();
                         if words.len() == 2 {
-                            let lenght = words[1].to_owned();
-                            bot_state.queue_config.teamsize = lenght.parse().unwrap();
-                            client.privmsg(msg.channel(), &format!("Queue fireteam size has been changed to {}", lenght)).send().await?;
+                            let length = words[1].to_owned();
+                            config.teamsize = length.parse().unwrap();
+                            client.privmsg(msg.channel(), &format!("Queue fireteam size has been changed to {}", length)).send().await?;
                         } else {
                             client.privmsg(msg.channel(), "Are you sure you had the right command? In case !queue_size <fireteam size>").send().await?;
                         }
                     }
                     text if text.to_ascii_lowercase().starts_with("!join") && is_follower(&msg, &mut client, &bot_state.oauth_token_bot, bot_state.bot_id.clone()).await? => {
+                        println!("{:?}", msg.text());
                         bot_state.handle_join(&msg, &mut client, &conn).await?;
+                    }
+                    text if text.starts_with("!test") => {
+                        client.privmsg("#krapmatt", "!so krapmatt").send().await?;
+                        
                     }
                     text if text.to_ascii_lowercase().starts_with("!next") && is_moderator(&msg, &mut client).await => {
                         run_count += 1;
@@ -263,7 +299,10 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
                     _ => bot_state.non_queue_comms(&mut client, &msg, &conn, first_time).await?
                     
                 }
-                messeges += 1;
+                if msg.channel() == "#krapmatt" {
+                    messeges += 1;
+                }
+                config.save_config(&msg.channel().replace("#", ""));
             }
             tmi::Message::Reconnect => {
                 client.reconnect().await?;
@@ -272,12 +311,46 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
             tmi::Message::Ping(ping) => {
                 client.pong(&ping).await?;
             }
-            
+            tmi::Message::UserNotice(notice) => {
+                println!("{:?}", notice);
+                if notice.channel() == "#krapmatt" {
+                    match notice.event() {
+                        Event::Raid(raid) => {
+                            if let Some(raider) = notice.sender() {
+                                let bot_state = bot_state.lock().await;
+                                shoutout(&bot_state.oauth_token_bot, bot_state.clone().bot_id, raider.id()).await;
+                                client.privmsg("#krapmatt", 
+                                    &format!("Let's give a BIG shoutout to https://www.twitch.tv/{:?} :krapmaHeart: They have raided us with {} people from their community! :krapmaStare: Please welcome them in :krapmaHeart:",
+                                    raider.login(), raid.viewer_count())).send().await?;
+                                
+                                client.privmsg("#krapmatt", 
+                                    &format!("They have raided us with {} people from their community! :krapmaStare: Please welcome them in :krapmaHeart:", 
+                                    raid.viewer_count())).send().await?;
+                            }
+                            
+                        }
+                        Event::SubOrResub(sub) => {
+                            let mut answer = String::new();
+
+                            answer = format!("A new sub alert! :krapmaHeart: GOAT {:?} has just subbed", notice.sender());
+
+                            if sub.is_resub() {
+                                answer = format!("Thank you {:?} for the resub! :krapmaHeart: I appreciate your support! You've been supporting for {} months! :krapmaStare:", notice.sender(), sub.cumulative_months())
+                            }
+
+                            client.privmsg("#krapmatt", &answer).send().await?;
+                        }
+                        Event::SubGift(gift) => {
+                            client.privmsg("#krapmatt", &format!("{:?} has gifted a sub to {:?}", notice.sender().unwrap(), gift.recipient())).send().await?;
+                        }
+                        _ => {}
+                        
+                    }
+                }
+            }
             _ => {}
+            
         }
-        println!("msg: {:?}", msg);
-        println!("msg_raw: {:?}", msg.raw());
-        bot_state.lock().await.queue_config.save_config();
         
         //rendom choose from preset messages
         //Add those messages into a database in future
