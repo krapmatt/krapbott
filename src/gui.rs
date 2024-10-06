@@ -1,8 +1,8 @@
-use core::f32;
+
 use std::sync::Arc;
 
 use async_sqlite::rusqlite::params;
-use egui::{text_edit::TextEditOutput, Label, Sense, TextEdit};
+use egui::{ Label, Sense, TextEdit};
 
 
 use crate::{database::{initialize_database, load_from_queue}, SharedState};

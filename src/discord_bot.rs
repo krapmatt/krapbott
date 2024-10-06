@@ -1,9 +1,9 @@
-use std::{sync::Arc, time::{Duration, SystemTime}};
+use std::{sync::Arc, time::Duration};
 
-use serenity::{all::{ChannelId, Context, CreateEmbed, CreateEmbedFooter, CreateMessage, EditMessage, EventHandler, GatewayIntents, GetMessages, Message, MessageBuilder, Ready}, async_trait, futures::StreamExt, Client};
+use serenity::{all::{ChannelId, Context, CreateEmbed, CreateEmbedFooter, CreateMessage, EditMessage, EventHandler, GatewayIntents, GetMessages, Message, MessageBuilder, Ready}, async_trait, Client};
 use tokio::{sync::Mutex, time::sleep};
 
-use crate::{database::{initialize_database, load_from_queue}, models::{BotConfig, BotError}};
+use crate::{database::{initialize_database, load_from_queue}, models::BotConfig,};
 
 struct Handler {
     queue_message: Arc<Mutex<Option<Message>>>
