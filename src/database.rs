@@ -104,9 +104,9 @@ pub async fn load_membership(conn: &Client, twitch_name: String) -> Option<Membe
     
 }
 
-pub fn load_from_queue(conn: &Connection) -> Vec<TwitchUser> {
-    let mut stmt = conn.prepare("SELECT twitch_name, bungie_name FROM queue").unwrap();
-    let queue_iter = stmt.query_map([], |row| {
+pub fn load_from_queue(conn: &Connection, channel: &str) -> Vec<TwitchUser> {
+    let mut stmt = conn.prepare("SELECT twitch_name, bungie_name FROM queue WHERE channel_id = ?1").unwrap();
+    let queue_iter = stmt.query_map([channel], |row| {
         Ok(TwitchUser {
             twitch_name: row.get(0)?,
             bungie_name: row.get(1)?,
@@ -196,6 +196,7 @@ pub async fn remove_command(conn: &Client, command: &str) -> bool {
     }
    
 }
+
 
 pub async fn pick_random(conn: Client, teamsize: usize) -> Result<(), BotError> {
     conn.conn_mut( move |conn| {

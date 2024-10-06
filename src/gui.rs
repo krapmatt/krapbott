@@ -21,7 +21,7 @@ impl AppState {
 impl eframe::App for AppState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let conn = initialize_database();
-        let mut queue = load_from_queue(&conn);
+        let mut queue = load_from_queue(&conn, "#krapmatt");
         let messages = self.shared_state.lock().unwrap().messages.clone();
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Queue Management");

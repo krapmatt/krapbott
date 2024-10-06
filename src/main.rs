@@ -4,28 +4,27 @@ mod database;
 mod gui;
 pub mod models;
 pub mod api;
+pub mod discord_bot;
 use std::{fs::File, io::Write, sync::Arc, thread::spawn, time::Duration};
 use bot::run_chat_bot;
 
-
+use discord_bot::run_discord_bot;
 use gui::AppState;
 use models::{BotConfig, SharedState};
 use tokio::time::sleep;
 
-
-pub fn check_config_file() {
-    match File::open("Config.json") {
-        Ok(..) => {return ()},
-        Err(..) => {
-            let mut file = File::create("Config.json").expect("Windows cannot create a file");
-            let _ = file.write(serde_json::to_string_pretty(&BotConfig::new()).expect("Json serialization is wrong? Check Creating config function").as_bytes());
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() {
-    check_config_file();
+    
+    spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            loop {
+                run_discord_bot().await;
+                sleep(Duration::from_secs(5)).await;
+            }
+        });
+    });
     
     let shared_state = Arc::new(std::sync::Mutex::new(SharedState::new()));
     let shared_state_clone = Arc::clone(&shared_state);

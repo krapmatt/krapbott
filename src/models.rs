@@ -95,6 +95,11 @@ impl From<reqwest::Error> for BotError {
         BotError { error_code: 105, string: Some(err.to_string()) }
     }
 }
+impl From<serenity::Error> for BotError {
+    fn from(err: serenity::Error) -> BotError {
+        BotError { error_code: 106, string: Some(err.to_string()) }
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct BotConfig {
@@ -116,17 +121,17 @@ impl BotConfig {
         }
     }
     
-    pub fn load_config() -> Self {
-        let mut file = File::open("Config.json").expect("Failed to load config. Create file Config.json");
+    pub fn load_config(channel_name: &str) -> Self {
+        let mut file = File::open(format!("D:/program/krapbott/configs/{}.json", channel_name)).expect("Failed to load config. Create file Config.json");
         let mut string = String::new();
         let _ = file.read_to_string(&mut string);
         let bot_config: BotConfig = serde_json::from_str(&string).expect("Always will be correct format");
         bot_config
     }
 
-    pub fn save_config(&self) {
+    pub fn save_config(&self, channel_name: &str) {
         let content = serde_json::to_string_pretty(self).expect("Json serialization is wrong? Check save_config function");
-        let mut file = File::create("Config.json").expect("Still the config file doesnt exist?");
+        let mut file = File::create(format!("D:/program/krapbott/configs/{}.json", channel_name)).expect("Still the config file doesnt exist?");
         file.write_all(content.as_bytes()).unwrap();
         
     }

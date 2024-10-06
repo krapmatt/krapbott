@@ -3,6 +3,7 @@ use async_sqlite::{rusqlite::{params, OptionalExtension}, Client as SqliteClient
 use dotenv::var;
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tmi::Client;
 
 use crate::{api::{get_membershipid, get_users_clears, MemberShip}, bot::{BotState, CHANNELS}, database::{load_membership, pick_random, save_to_user_database}, models::{BotError, TwitchUser}};
@@ -17,7 +18,7 @@ pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: &mut Client) -> bool {
     
 }
 pub async fn in_right_chat(msg: &tmi::Privmsg<'_>) -> bool {
-    if msg.channel() == CHANNELS[0] {
+    if msg.channel() == "#krapmatt" {
         return true
     } else {
         return false
@@ -53,6 +54,21 @@ pub async fn ban_bots(msg: &tmi::Privmsg<'_>, oauth_token: &str, client_id: Stri
         .await.expect("Bad reqwest");
     println!("{:?}", res.text().await);
 }
+
+pub async fn shoutout(oauth_token: &str, client_id: String, to_broadcaster_id: &str) {
+
+    let url = format!("https://api.twitch.tv/helix/chat/shoutouts?from_broadcaster_id=216105918&to_broadcaster_id={}&moderator_id=1091219021", to_broadcaster_id);
+
+    
+    let res = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(oauth_token)
+        .header("Client-Id", client_id)
+        .send()
+        .await.expect("Bad reqwest");
+    println!("{:?}", res.text().await);
+}
+
 #[derive(Deserialize, Debug)]
 struct data_follow {
     total: usize,
@@ -144,17 +160,17 @@ impl BotState {
     //Kicks out users that were in game
     pub async fn handle_next(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient) -> Result<(), BotError> {
         let bot_state = self.clone();
+        let channel = msg.channel().clone().to_string();
         conn.conn(move |conn| {
-            Ok(conn.execute("DELETE FROM queue WHERE id IN (SELECT id FROM queue LIMIT ?1);", params![bot_state.queue_config.teamsize])?)
-        
+            Ok(conn.execute("DELETE FROM queue WHERE channel_id = ?2 AND id IN (SELECT id FROM queue WHERE channel_id = ?2 LIMIT ?1)", params![bot_state.queue_config.teamsize, channel])?)
         }).await?;
         
         let queue_msg = Arc::new(Mutex::new(Vec::new()));
         let queue_msg_clone = Arc::clone(&queue_msg);
-
+        let channel = msg.channel().clone().to_string();
         conn.conn(move |conn| {
-            let mut stmt = conn.prepare("SELECT bungie_name FROM queue LIMIT ?1")?;
-            let queue_iter = stmt.query_map(params![bot_state.queue_config.teamsize], |row| row.get::<_, String>(0))?;
+            let mut stmt = conn.prepare("SELECT bungie_name FROM queue WHERE channel_id = ?2 LIMIT ?1")?;
+            let queue_iter = stmt.query_map(params![bot_state.queue_config.teamsize, &channel], |row| row.get::<_, String>(0))?;
             for entry in queue_iter {
                 queue_msg_clone.lock().unwrap().push(entry?);
             }
@@ -398,7 +414,7 @@ async fn send_invalid_name_reply(msg: &tmi::Privmsg<'_>, client: &mut Client) ->
 
 async fn process_queue_entry(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, conn: &SqliteClient, user: TwitchUser, channel_id: Option<String>) -> Result<(), BotError> {
    
-    let reply = if user_exists_in_queue(&conn, user.clone().twitch_name).await {
+    let reply = if user_exists_in_queue(&conn, user.clone().twitch_name, channel_id.clone()).await {
         update_queue(&conn, user.clone()).await?;
         format!("{} updated their Bungie name to {}", msg.sender().name(), user.clone().bungie_name)
     } else {
@@ -408,10 +424,11 @@ async fn process_queue_entry(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_
     Ok(())
 }
 
-async fn user_exists_in_queue(conn: &SqliteClient, twitch_name: String) -> bool {
+async fn user_exists_in_queue(conn: &SqliteClient, twitch_name: String, channel_id: Option<String>) -> bool {
     let res = conn.conn(move |conn| {
-        let mut stmt = conn.prepare("SELECT 1 FROM queue WHERE twitch_name = ?1").unwrap();
-        let exists: Result<Option<i64>, _> = stmt.query_row(params![twitch_name], |row| row.get(0));
+        let mut stmt = conn.prepare("SELECT 1 FROM queue WHERE twitch_name = ?1 AND channel_id = ?2").unwrap();
+        let params = params![twitch_name, channel_id];
+        let exists: Result<Option<i64>, _> = stmt.query_row(params, |row| row.get(0));
         Ok(exists.is_ok())
     }).await.unwrap();
     return res
