@@ -1,9 +1,12 @@
 use core::fmt;
-use std::{error::Error, fs::File, io::{Read, Write}};
+use std::{error::Error, fs::File, io::{Read, Write}, sync::Arc};
 
 use async_sqlite::rusqlite;
 use serde::{Deserialize, Serialize};
-use tmi::{client::{read::RecvError, write::SendError, ReconnectError}, MessageParseError};
+use tmi::{client::{read::RecvError, write::SendError, ReconnectError}, Client, MessageParseError};
+use tokio::sync::Mutex;
+
+use crate::bot_commands::{is_follower, is_moderator, is_vip};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TwitchUser {
@@ -18,29 +21,44 @@ impl Default for TwitchUser {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ChatMessage {
-    pub channel: String,
-    pub user: String,
-    pub text: String,
-    
-}
-
 pub struct SharedState {
-    pub messages: Vec<ChatMessage>,
     pub run_count: usize
 }
 
 impl SharedState {
     pub fn new() -> Self {
         Self {
-            messages: Vec::new(),
             run_count: 0
         }
     }
 
-    pub fn add_stats(&mut self, message: ChatMessage, run_count: usize) {
-        self.messages.push(message);
+    pub fn add_stats(&mut self, run_count: usize) {
         self.run_count = run_count
+    }
+}
+
+pub enum CommandAction {
+    Add,
+    Remove,
+    AddGlobal,
+}
+
+#[derive(Clone, Copy)]
+pub enum PermissionLevel {
+    User,
+    Follower,
+    Vip,
+    Moderator,
+    Broadcaster
+}
+
+pub async fn has_permission(msg: &tmi::Privmsg<'_>, client:Arc<Mutex<Client>>, level: PermissionLevel) -> bool {
+    match level {
+        PermissionLevel::User => true,
+        PermissionLevel::Follower => is_follower(msg, Arc::clone(&client)).await,
+        PermissionLevel::Moderator => is_moderator(msg, Arc::clone(&client)).await,
+        PermissionLevel::Broadcaster => todo!(),
+        PermissionLevel::Vip => is_vip(msg, Arc::clone(&client)).await,
     }
 }
 
@@ -98,6 +116,11 @@ impl From<reqwest::Error> for BotError {
 impl From<serenity::Error> for BotError {
     fn from(err: serenity::Error) -> BotError {
         BotError { error_code: 106, string: Some(err.to_string()) }
+    }
+}
+impl From<serde_json::Error> for BotError {
+    fn from(err: serde_json::Error) -> BotError {
+        BotError { error_code: 107, string: Some(err.to_string()) }
     }
 }
 

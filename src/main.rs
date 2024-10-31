@@ -5,7 +5,8 @@ mod gui;
 pub mod models;
 pub mod api;
 pub mod discord_bot;
-use std::{sync::Arc, thread::spawn, time::Duration};
+pub mod commands;
+use std::{sync::Arc, thread::spawn, time::{Duration, SystemTime}};
 
 use bot::run_chat_bot;
 use discord_bot::run_discord_bot;
@@ -16,15 +17,16 @@ use tokio::time::sleep;
 #[tokio::main]
 async fn main() {
     
-    /*spawn(move || {
+    spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             loop {
                 run_discord_bot().await;
+                println!("Restarting Discord Krapbott!");
                 sleep(Duration::from_secs(5)).await;
             }
         });
-    });*/
+    });
     
     let shared_state = Arc::new(std::sync::Mutex::new(SharedState::new()));
     let shared_state_clone = Arc::clone(&shared_state);
@@ -35,10 +37,11 @@ async fn main() {
             //Loop for if a error accours bot ,,doesnt" panics
             loop {   
                 if let Err(e) = run_chat_bot(shared_state_clone.clone()).await {
-                    eprintln!("Error running chat bot: {}", e);
+                    eprintln!("Error running chat bot: {} Time: {:?}", e, SystemTime::now());
                 }
                 //Pokud error je nevyhnutelný, nezaloopování
                 sleep(Duration::from_secs(5)).await;
+                println!("Restarting Twitch Krapbott!");
             }
         });
     });
