@@ -1,8 +1,7 @@
-
 use std::sync::Arc;
 
 use async_sqlite::rusqlite::params;
-use egui::{ Label, Sense, TextEdit};
+use egui::{ Color32, Label, RichText, Sense, TextEdit};
 
 
 use crate::{database::{initialize_database, load_from_queue}, SharedState};
@@ -22,59 +21,87 @@ impl eframe::App for AppState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let conn = initialize_database();
         let mut queue = load_from_queue(&conn, "#krapmatt");
-        let messages = self.shared_state.lock().unwrap().messages.clone();
+        
+        ctx.set_visuals(egui::Visuals::dark());
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Queue Management");
-            
+            ui.heading(
+                RichText::new("⚔️ Queue Management ⚔️")
+                    .color(Color32::from_rgb(75, 0, 130))
+                    .strong()
+                    .italics()
+                    .size(24.0),
+            );
+            // Queue list section with Destiny-themed hover and click effects
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for (index, item) in queue.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
-                        let text = format!("{}. {} {}", index + 1, item.twitch_name, item.bungie_name);
-                        let queue_name = ui.add(Label::new(text).sense(Sense::click()));
+                        // Alternate colors for even and odd rows to give it a sci-fi panel effect
+                        let bg_color = if index % 2 == 0 { Color32::from_rgb(44, 44, 84) } else { Color32::from_rgb(54, 54, 94) };
+                        let text = format!("{}. 🛡️ {} - 🔫 {}", index + 1, item.twitch_name, item.bungie_name);
+                        let label = Label::new(
+                            RichText::new(text)
+                                .background_color(bg_color)
+                                .color(Color32::from_rgb(180, 180, 255)),
+                        )
+                        .sense(Sense::click());
+                        
+                        let queue_name = ui.add(label);
                         if queue_name.clone().on_hover_text("Left click to copy/Right click to delete").clicked() {
                             let copied_text = item.bungie_name.clone();
-                            ui.output().copied_text = String::from(copied_text);
-                        } else if queue_name.clone().secondary_clicked() {
-                            let _ = conn.execute("DELETE FROM queue WHERE twitch_name = ?1", params![item.twitch_name]);
+                            ui.output().copied_text = copied_text;
+                        } else if queue_name.secondary_clicked() {
+                            // Remove entry and shift positions down
+                            if let Ok(pos) = conn.query_row(
+                                "SELECT position FROM queue WHERE twitch_name = ?1 AND channel_id = ?2",
+                                params![item.twitch_name, "#krapmatt"],
+                                |row| row.get::<_, i32>(0),
+                            ) {
+                                let _ = conn.execute(
+                                    "DELETE FROM queue WHERE twitch_name = ?1 AND channel_id = ?2",
+                                    params![item.twitch_name, "#krapmatt"],
+                                );
+                                let _ = conn.execute(
+                                    "UPDATE queue SET position = position - 1 WHERE position > ?1 AND channel_id = ?2",
+                                    params![pos, "#krapmatt"],
+                                );
+                            }
                         }
-
                     });
                 }
             });
+            
             ui.separator();
-            ui.heading("Statistics");
-           
+            
+            ui.label(RichText::new("📊 Statistics").color(Color32::from_rgb(245, 189, 31)).strong());
+            
+            // Display statistics with a glow effect
             ui.horizontal(|ui| {
-                let run_count_stat = format!("Run Count: {}", self.shared_state.lock().unwrap().run_count);
-                ui.label(run_count_stat);
-                
-            });
-            ui.separator();
-            ui.heading("Ban from queue");
-            ui.horizontal(|ui| {
-                
-                
-                ui.add(TextEdit::singleline(&mut self.ban_field));
-                ui.add(TextEdit::singleline(&mut self.reason_field));
-                if ui.button("Submit").clicked() {
-                    println!("Submitted text: {}", self.ban_field);
-                    conn.execute("INSERT INTO banlist (twitch_name, reason) VALUES (?1, ?2)", params![self.ban_field, self.reason_field]).unwrap();
-                }
-            });
-
-
-            ui.separator();
-            ui.heading("Chat Messages");
-            ui.push_id("2", |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for msg in messages.iter().rev() {
-                        ui.horizontal(|ui| {
-                            ui.label(format!("Channel:{} // {}: {}", msg.channel, msg.user, msg.text));
-                        });
-                    }
-                });
+                let run_count_stat = format!("Total Runs Completed: {}", self.shared_state.lock().unwrap().run_count);
+                ui.label(
+                    RichText::new(run_count_stat)
+                        .color(Color32::LIGHT_GREEN)
+                        
+                );
             });
             
+            ui.separator();
+            ui.label(RichText::new("🚫 Ban from Queue").color(Color32::from_rgb(255, 69, 0)).strong());
+            
+            // Ban entry with Destiny-themed placeholder and layout adjustments
+            ui.horizontal(|ui| {
+                ui.add(TextEdit::singleline(&mut self.ban_field).hint_text("Enter Guardian's name"));
+                ui.add(TextEdit::singleline(&mut self.reason_field).hint_text("Reason for ban (optional)"));
+            });
+            
+            if ui.button(RichText::new("🛑 Ban").color(Color32::LIGHT_RED)).clicked() {
+                conn.execute(
+                    "INSERT INTO banlist (twitch_name, reason) VALUES (?1, ?2)",
+                    params![self.ban_field, self.reason_field],
+                )
+                .unwrap();
+                self.ban_field.clear();
+                self.reason_field.clear();
+            }
         });
     }
 }

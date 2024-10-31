@@ -2,11 +2,17 @@ use async_sqlite::{rusqlite::{params, Connection, Error}, Client, ClientBuilder}
 
 use crate::{api::{get_membershipid, MemberShip}, models::{BotError, TwitchUser}};
 pub const QUEUE_TABLE: &str = "CREATE TABLE IF NOT EXISTS queue (
-    id INTEGER PRIMARY KEY,
+    position INTEGER NOT NULL,
     twitch_name TEXT NOT NULL,
     bungie_name TEXT NOT NULL,
-    channel_id VARCHAR
+    channel_id VARCHAR,
+    group_priority INTEGER DEFAULT 2,
+    locked_first BOOLEAN DEFAULT FALSE,
+    priority_runs_left INTEGER DEFAULT 0,
+    PRIMARY KEY(position, channel_id)
 )";
+
+pub const TEST_TABLE: &str = "DROP TABLE queue";
 
 pub const USER_TABLE: &str = "CREATE TABLE IF NOT EXISTS user (
     id INTEGER PRIMARY KEY,
@@ -44,6 +50,7 @@ pub fn initialize_database() -> Connection {
     conn.execute(COMMAND_TABLE, []).unwrap();
     conn.execute(ANNOUNCMENT_TABLE, []).unwrap();
     conn.execute(BAN_TABLE, []).unwrap();
+    //conn.execute(TEST_TABLE, []).unwrap();
     return conn
 }
 
