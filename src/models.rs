@@ -1,12 +1,12 @@
 use core::fmt;
-use std::{error::Error, fs::File, io::{Read, Write}, sync::Arc};
+use std::{collections::HashMap, error::Error, fs::File, io::{Read, Write}, path::Path, sync::Arc};
 
-use async_sqlite::rusqlite;
+use async_sqlite::{rusqlite::{self, params}, Client as SqliteClient};
 use serde::{Deserialize, Serialize};
 use tmi::{client::{read::RecvError, write::SendError, ReconnectError}, Client, MessageParseError};
 use tokio::sync::Mutex;
 
-use crate::bot_commands::{is_follower, is_moderator, is_vip};
+use crate::bot_commands::{is_broadcaster, is_follower, is_moderator, is_vip};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TwitchUser {
@@ -43,7 +43,7 @@ pub enum CommandAction {
     AddGlobal,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Deserialize)]
 pub enum PermissionLevel {
     User,
     Follower,
@@ -57,7 +57,7 @@ pub async fn has_permission(msg: &tmi::Privmsg<'_>, client:Arc<Mutex<Client>>, l
         PermissionLevel::User => true,
         PermissionLevel::Follower => is_follower(msg, Arc::clone(&client)).await,
         PermissionLevel::Moderator => is_moderator(msg, Arc::clone(&client)).await,
-        PermissionLevel::Broadcaster => todo!(),
+        PermissionLevel::Broadcaster => is_broadcaster(msg, Arc::clone(&client)).await,
         PermissionLevel::Vip => is_vip(msg, Arc::clone(&client)).await,
     }
 }
@@ -124,38 +124,122 @@ impl From<serde_json::Error> for BotError {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct BotConfig {
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct ChannelConfig {
     pub open: bool,
     pub len: usize,
     pub teamsize: usize,
-    pub channel_id: Option<String>,
     pub combined: bool,
+    pub queue_channel: String,
+    pub packages: Vec<String>, 
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct BotConfig {
+    pub channels: HashMap<String, ChannelConfig>, // Holds configuration for all channels
 }
 
 impl BotConfig {
     pub fn new() -> Self {
         BotConfig {
-            open: false,
-            len: 0,
-            teamsize: 0,
-            channel_id: None,
-            combined: false,
+            channels: HashMap::new(),
         }
     }
-    
-    pub fn load_config(channel_name: &str) -> Self {
-        let mut file = File::open(format!("D:/program/krapbott/configs/{}.json", channel_name)).expect("Failed to load config. Create file Config.json");
-        let mut string = String::new();
-        let _ = file.read_to_string(&mut string);
-        let bot_config: BotConfig = serde_json::from_str(&string).expect("Always will be correct format");
-        bot_config
+
+    /// Load or create a unified config file for all channels
+    pub fn load_config() -> Self {
+        let config_path = "D:/program/krapbott/configs/config.json";
+
+        if Path::new(config_path).exists() {
+            let mut file = File::open(config_path).expect("Failed to open config file.");
+            let mut content = String::new();
+            file.read_to_string(&mut content).expect("Failed to read config file.");
+            serde_json::from_str(&content).expect("Failed to parse config file.")
+        } else {
+            let new_config = BotConfig::new();
+            new_config.save_config();
+            new_config
+        }
     }
 
-    pub fn save_config(&self, channel_name: &str) {
-        let content = serde_json::to_string_pretty(self).expect("Json serialization is wrong? Check save_config function");
-        let mut file = File::create(format!("D:/program/krapbott/configs/{}.json", channel_name)).expect("Still the config file doesnt exist?");
-        file.write_all(content.as_bytes()).unwrap();
-        
+    /// Save the unified config file
+    pub fn save_config(&self) {
+        let config_path = "D:/program/krapbott/configs/config.json";
+        let content = serde_json::to_string_pretty(self).expect("Failed to serialize config.");
+        let mut file = File::create(config_path).expect("Failed to create config file.");
+        file.write_all(content.as_bytes()).expect("Failed to write config file.");
+    }
+
+    pub fn get_channel_config(&mut self, channel_name: &str) -> &mut ChannelConfig {
+        self.channels
+            .entry(channel_name.to_string())
+            .or_insert_with(|| ChannelConfig {
+                open: false,
+                len: 0,
+                teamsize: 0,
+                combined: false,
+                queue_channel: channel_name.to_string(),
+                packages: vec!["Moderation".to_string()],
+            })
+    }
+
+    pub fn print_all_configs(&self) {
+        for (channel, config) in &self.channels {
+            println!("Channel: {}\nConfig: {:#?}", channel, config);
+        }
+    }
+
+    pub fn is_group_allowed(&self, channel: &str, group_name: &str) -> bool {
+        if let Some(channel_config) = self.channels.get(channel) {
+            channel_config.packages.contains(&group_name.to_string())
+        } else {
+            false
+        }
+    }
+}
+
+pub struct TemplateManager {
+    pub conn: Arc<SqliteClient>, 
+}
+
+impl TemplateManager {
+    pub async fn get_template(&self, package: String, command: String, channel_id: Option<String>) -> Option<String> {
+        let query = if let Some(_channel) = channel_id.as_ref() {
+            "SELECT template FROM commands_template WHERE package = ?1 AND command = ?2 AND channel_id = ?3"
+        } else {
+            "SELECT template FROM commands_template WHERE package = ?1 AND command = ?2"
+        };
+
+        self.conn.conn(move |conn| {
+            conn.query_row(&*query, params![package, command, channel_id.unwrap_or_default()], |row| row.get(0))
+        }).await.ok()
+    }
+
+    pub async fn set_template(&self, package: String, command: String, template: String, channel_id: Option<String>) -> Result<(), BotError> {
+        let query = if channel_id.is_some() {
+            "INSERT INTO commands_template (package, command, template, channel_id) 
+            VALUES (?1, ?2, ?3, ?4) 
+            ON CONFLICT(channel_id, command) DO UPDATE SET template = excluded.template"
+        } else {
+            "INSERT INTO commands_template (package, command, template) 
+            VALUES (?1, ?2, ?3) 
+            ON CONFLICT(command) DO UPDATE SET template = excluded.template"
+        };
+        self.conn.conn(move |conn| {
+            conn.execute(&query, params![package, command, template, channel_id.unwrap_or_default()])
+        }).await?;
+        Ok(())
+    }
+
+    pub async fn remove_template(&self, command: String, channel_id: Option<String>) -> Result<(), BotError> {
+        let query = if channel_id.is_some() {
+            "DELETE FROM commands_template WHERE command = ?1 AND channel_id = ?2"
+        } else {
+            "DELETE FROM commands_template WHERE command = ?1"
+        };
+        self.conn.conn(move |conn| {
+            conn.execute(&query, params![command, channel_id.unwrap_or_default()])
+        }).await?;
+        Ok(())
     }
 }
