@@ -1,0 +1,73 @@
+{
+  "channels": {
+    "#laziness_maximus": {
+      "open": true,
+      "len": 5,
+      "teamsize": 1,
+      "combined": true,
+      "queue_channel": "#krapmatt",
+      "packages": [
+        "Moderation"
+      ]
+    },
+    "#krapmatt": {
+      "open": true,
+      "len": 25,
+      "teamsize": 5,
+      "combined": false,
+      "queue_channel": "#krapmatt",
+      "packages": [
+        "Shoutout",
+        "Moderation",
+        "Queue",
+        "Bungie API",
+        "Random Queue",
+        "Lurk",
+        "Database for queue",
+        "Time",
+        "Announcment"
+      ]
+    },
+    "#vhalidity": {
+      "open": false,
+      "len": 10,
+      "teamsize": 0,
+      "combined": false,
+      "queue_channel": "#vhalidity",
+      "packages": [
+        "Moderation",
+        "Queue",
+        "Database for queue",
+        "Bungie API"
+      ]
+    },
+    "#nyc62truck": {
+      "open": false,
+      "len": 10,
+      "teamsize": 1,
+      "combined": false,
+      "queue_channel": "#nyc62truck",
+      "packages": [
+        "Queue",
+        "Database for queue",
+        "Shoutout",
+        "Bungie API",
+        "Moderation"
+      ]
+    },
+    "#samoan_317": {
+      "open": false,
+      "len": 20,
+      "teamsize": 5,
+      "combined": false,
+      "queue_channel": "#samoan_317",
+      "packages": [
+        "Moderation",
+        "Bungie API",
+        "Queue",
+        "Database for queue",
+        "Time"
+      ]
+    }
+  }
+}

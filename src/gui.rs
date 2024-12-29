@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use async_sqlite::rusqlite::params;
-use egui::{ Color32, Label, RichText, Sense, TextEdit};
+use egui::{ Color32, IconData, Label, PlatformOutput, RichText, Sense, TextEdit};
+use image::GenericImageView;
 
 
-use crate::{database::{initialize_database, load_from_queue}, SharedState};
+use crate::{commands::COMMAND_GROUPS, database::{initialize_database, load_from_queue}, SharedState};
 pub struct AppState {
     shared_state: Arc<std::sync::Mutex<SharedState>>,
     ban_field: String,
@@ -20,8 +21,8 @@ impl AppState {
 impl eframe::App for AppState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let conn = initialize_database();
-        let mut queue = load_from_queue(&conn, "#krapmatt");
-        
+        let mut queue_vec = load_from_queue(&conn, "#krapmatt");
+        queue_vec.sort_by(|(a, _), (b, _)| a.cmp(b));
         ctx.set_visuals(egui::Visuals::dark());
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading(
@@ -33,11 +34,11 @@ impl eframe::App for AppState {
             );
             // Queue list section with Destiny-themed hover and click effects
             egui::ScrollArea::vertical().show(ui, |ui| {
-                for (index, item) in queue.iter_mut().enumerate() {
+                for (index, item) in queue_vec {
                     ui.horizontal(|ui| {
                         // Alternate colors for even and odd rows to give it a sci-fi panel effect
                         let bg_color = if index % 2 == 0 { Color32::from_rgb(44, 44, 84) } else { Color32::from_rgb(54, 54, 94) };
-                        let text = format!("{}. 🛡️ {} - 🔫 {}", index + 1, item.twitch_name, item.bungie_name);
+                        let text = format!("{}. 🛡️ {} - 🔫 {}", index, item.twitch_name, item.bungie_name);
                         let label = Label::new(
                             RichText::new(text)
                                 .background_color(bg_color)
@@ -48,7 +49,7 @@ impl eframe::App for AppState {
                         let queue_name = ui.add(label);
                         if queue_name.clone().on_hover_text("Left click to copy/Right click to delete").clicked() {
                             let copied_text = item.bungie_name.clone();
-                            ui.output().copied_text = copied_text;
+                            ui.output_mut(|o| o.copied_text = copied_text);
                         } else if queue_name.secondary_clicked() {
                             // Remove entry and shift positions down
                             if let Ok(pos) = conn.query_row(
@@ -68,8 +69,9 @@ impl eframe::App for AppState {
                         }
                     });
                 }
-            });
-            
+
+                });
+                
             ui.separator();
             
             ui.label(RichText::new("📊 Statistics").color(Color32::from_rgb(245, 189, 31)).strong());
@@ -102,6 +104,40 @@ impl eframe::App for AppState {
                 self.ban_field.clear();
                 self.reason_field.clear();
             }
+            
+            
+            
+            ui.heading(RichText::new("📦 Available Command Groups").color(Color32::from_rgb(245, 189, 31)).strong());
+            ui.horizontal(|ui| {
+                // Iterate over each command group and display its details
+                for command_group in COMMAND_GROUPS.iter() {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(&command_group.name).color(Color32::LIGHT_BLUE).strong());
+                        
+                        // List all commands within this command group
+                        for (command_name, _) in &command_group.command {
+                            ui.label(format!("🔹 {}", command_name));
+                        }
+                    });
+                    ui.separator();
+                }
+            })
+            
+            
         });
+        
+    }
+}
+
+pub fn load_icon(path: &str) -> IconData {
+    let image = image::open(path).expect("No image");
+    let (width, height) = image.dimensions();
+    let rgba = image.into_rgba8();
+    let pixels = rgba.into_raw();
+
+    IconData {
+        rgba: pixels,
+        width,
+        height,
     }
 }

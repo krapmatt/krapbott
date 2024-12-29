@@ -12,7 +12,16 @@ pub const QUEUE_TABLE: &str = "CREATE TABLE IF NOT EXISTS queue (
     PRIMARY KEY(position, channel_id)
 )";
 
-pub const TEST_TABLE: &str = "DROP TABLE queue";
+pub const COMMANDS_TEMPLATE: &str = "CREATE TABLE IF NOT EXISTS commands_template (
+    id INTEGER,
+    package TEXT NOT NULL,
+    command TEXT NOT NULL,
+    template TEXT,
+    channel_id VARCHAR,
+    UNIQUE (channel_id, command)
+)";
+
+pub const TEST_TABLE: &str = "DROP TABLE announcments";
 
 pub const USER_TABLE: &str = "CREATE TABLE IF NOT EXISTS user (
     id INTEGER PRIMARY KEY,
@@ -32,9 +41,10 @@ pub const COMMAND_TABLE: &str = "CREATE TABLE IF NOT EXISTS commands (
 ) ";
 
 pub const ANNOUNCMENT_TABLE: &str = "CREATE TABLE IF NOT EXISTS announcments (
-    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
     announcment TEXT NOT NULL,
-    channel TEXT
+    channel TEXT,
+    UNIQUE(name, channel)
 )";
 
 pub const BAN_TABLE: &str = "CREATE TABLE IF NOT EXISTS banlist (
@@ -50,22 +60,26 @@ pub fn initialize_database() -> Connection {
     conn.execute(COMMAND_TABLE, []).unwrap();
     conn.execute(ANNOUNCMENT_TABLE, []).unwrap();
     conn.execute(BAN_TABLE, []).unwrap();
+    conn.execute(COMMANDS_TEMPLATE, []).unwrap();
+
     //conn.execute(TEST_TABLE, []).unwrap();
     return conn
 }
 
 pub async fn initialize_database_async() -> Client {
     let client = ClientBuilder::new()
-                .path("/D:/program/krapbott/commands.db")
-                .journal_mode(async_sqlite::JournalMode::Wal)
-                .open()
-                .await.unwrap();
+        .path("/D:/program/krapbott/commands.db")
+        .journal_mode(async_sqlite::JournalMode::Wal)
+        .open()
+        .await.unwrap();
     client.conn(|conn| {
         conn.execute(USER_TABLE, []).unwrap();
         conn.execute(QUEUE_TABLE, []).unwrap();
         conn.execute(COMMAND_TABLE, []).unwrap();
         conn.execute(ANNOUNCMENT_TABLE, []).unwrap();
         conn.execute(BAN_TABLE, []).unwrap();
+        conn.execute(COMMANDS_TEMPLATE, []).unwrap();
+
         Ok(())
     }).await.expect("Failed to create database");
     client
@@ -109,20 +123,24 @@ pub async fn load_membership(conn: &Client, twitch_name: String) -> Option<Membe
     
 }
 
-pub fn load_from_queue(conn: &Connection, channel: &str) -> Vec<TwitchUser> {
-    let mut stmt = conn.prepare("SELECT twitch_name, bungie_name FROM queue WHERE channel_id = ?1").unwrap();
+pub fn load_from_queue(conn: &Connection, channel: &str) -> Vec<(usize, TwitchUser)> {
+    let mut stmt = conn.prepare("SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ?1").unwrap();
+    let mut queue_vec = vec![];
     let queue_iter = stmt.query_map([channel], |row| {
-        Ok(TwitchUser {
-            twitch_name: row.get(0)?,
-            bungie_name: row.get(1)?,
-        })
+       Ok((row.get::<_, usize>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
     }).expect("There should be only valid names");
     
-    let mut queue = Vec::new();
     for entry in queue_iter {
-        queue.push(entry.expect("How it can be a error"));
+        if let Ok(entry) = entry {
+            let twitch_user = TwitchUser {
+                twitch_name: entry.1,
+                bungie_name: entry.2
+            };
+            queue_vec.push((entry.0, twitch_user));
+        }
     }
-    queue
+
+    queue_vec
 }
 
 pub async fn save_command(conn: &Client, mut command: String, reply: String, channel: Option<String>) {
@@ -146,12 +164,10 @@ pub async fn get_command_response(conn: &Client, command: String, channel: Optio
             let mut stmt = conn.prepare("SELECT reply FROM commands WHERE command = ?1 AND channel = ?2")?;
             match stmt.query_row(params![command.clone(), &channel], |row| row.get::<_, String>(0)) {
                 Ok(reply) => {
-                    println!("Command found for channel {}: {:?}", channel, reply);
                     Ok(Some(reply))
                 }
                 Err(Error::QueryReturnedNoRows) => {
-                    println!("No command found for channel {}, checking global command", channel);
-                    Ok(None) // No channel-specific command found, proceed to check global
+                    Ok(None)
                 }
                 Err(e) => {
                     println!("Database error: {:?}", e);
@@ -172,11 +188,9 @@ pub async fn get_command_response(conn: &Client, command: String, channel: Optio
             let mut stmt = conn.prepare("SELECT reply FROM commands WHERE command = ?1 AND channel IS NULL")?;
             match stmt.query_row(params![&command_clone], |row| row.get::<_, String>(0)) {
                 Ok(reply) => {
-                    println!("Global command found: {:?}", reply);
                     Ok(Some(reply))
                 }
                 Err(Error::QueryReturnedNoRows) => {
-                    println!("No global command found");
                     Ok(None)
                 }
                 Err(e) => {
@@ -184,12 +198,8 @@ pub async fn get_command_response(conn: &Client, command: String, channel: Optio
                     Err(e.into())
                 }
             }
-        })
-        .await?;
-
-    // Return the result, whether it's found or None
+        }).await?;
     Ok(global_command)
-    
 }
 
 pub async fn remove_command(conn: &Client, command: &str) -> bool {
@@ -203,37 +213,27 @@ pub async fn remove_command(conn: &Client, command: &str) -> bool {
    
 }
 
-
-pub async fn pick_random(conn: Client, teamsize: usize) -> Result<(), BotError> {
-    conn.conn_mut( move |conn| {
-        let tx = conn.transaction().unwrap();
-        let mut stmt = tx.prepare("SELECT queue.id FROM queue ORDER BY RANDOM() LIMIT ?1")?;
+//pick random wont work anymore
+pub async fn pick_random(conn: Client, teamsize: usize) -> Result<Vec<i64>, BotError> {
+    Ok(conn.conn_mut( move |conn| {
+        
+        let mut stmt = conn.prepare("SELECT position FROM queue ORDER BY RANDOM() LIMIT ?1")?;
         let ids: Vec<i64> = stmt.query_map(params![teamsize], |row| row.get(0))?
             .map(|id| id.unwrap()).collect();
-        if ids.is_empty() {
-            println!("No rows selected.");
-            return Ok(());
-        }
+        
+        Ok(ids)
+    }).await?)
+}
 
-        //Nereálné id vybraným
-        for (i, id) in ids.iter().enumerate() {
-            tx.execute("UPDATE queue SET id = ?1 WHERE id = ?2", params![-(i as i64 + 1), id])?;
-        }
 
-        //Posunou existující id o počet aby bylo místo pro náhodně vybrané
-        tx.execute("UPDATE queue SET id = id + ?1 WHERE id >= 1", params![ids.len() as i64])?;
-
-        //vrátit nazpět správné id
-        for (new_id, _) in (1..=ids.len()).enumerate() {
-            tx.execute(
-                "UPDATE queue SET id = ?1 WHERE id = ?2",
-                params![new_id as i64 + 1, -(new_id as i64 + 1)],
-            )?;
-        }
-        drop(stmt);
-        tx.commit()?;
-        Ok(())
-    }).await?;
-    
-    Ok(())
+pub async fn user_exists_in_database(conn: &Client, twitch_name: String) -> Option<String> {
+    if let Ok(a) = conn.conn(move |conn| {
+        conn.query_row("SELECT bungie_name FROM user WHERE twitch_name = ?1", params![twitch_name], |row| {
+            Ok(row.get::<_, String>(0)?)
+        })
+    }).await {
+        Some(a)
+    } else {
+        None
+    }
 }
