@@ -20,7 +20,7 @@ pub const COMMANDS_TEMPLATE: &str = "CREATE TABLE IF NOT EXISTS commands_templat
     channel_id VARCHAR,
     UNIQUE (channel_id, command)
 )";
-
+#[warn(dead_code)]
 pub const TEST_TABLE: &str = "DROP TABLE announcments";
 
 pub const USER_TABLE: &str = "CREATE TABLE IF NOT EXISTS user (
@@ -54,7 +54,7 @@ pub const BAN_TABLE: &str = "CREATE TABLE IF NOT EXISTS banlist (
 )";
 
 pub fn initialize_database() -> Connection {
-    let conn = Connection::open("D:/program/krapbott/commands.db").unwrap();
+    let conn = Connection::open("D:/program/krapbott/public/commands.db").unwrap();
     conn.execute(USER_TABLE, []).unwrap();
     conn.execute(QUEUE_TABLE, []).unwrap();
     conn.execute(COMMAND_TABLE, []).unwrap();
@@ -68,7 +68,7 @@ pub fn initialize_database() -> Connection {
 
 pub async fn initialize_database_async() -> Client {
     let client = ClientBuilder::new()
-        .path("/D:/program/krapbott/commands.db")
+        .path("/D:/program/krapbott/public/commands.db")
         .journal_mode(async_sqlite::JournalMode::Wal)
         .open()
         .await.unwrap();
@@ -103,7 +103,7 @@ pub async fn save_to_user_database(conn: &Client, user: TwitchUser, x_api_key: S
     }
 
 }
-//  Queue is open use !join <bungiename#0000> >> DO NOT KILL ANYTHING EXCEPT WIZARD. Do not pull to orbit, always change characters!
+
 pub async fn load_membership(conn: &Client, twitch_name: String) -> Option<MemberShip> {
     let a = conn.conn(move |conn | {
         let mut stmt = conn.prepare("SELECT membership_id, membership_type FROM user WHERE twitch_name = ?1").unwrap();

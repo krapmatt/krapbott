@@ -2,14 +2,17 @@ use std::{sync::Arc, time::Duration};
 
 
 use serde::{Deserialize, Serialize};
-use serenity::{all::{ButtonStyle, ChannelId, Context, CreateActionRow, CreateButton, CreateEmbed, CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, EditMessage, EventHandler, GatewayIntents, GetMessages, Guild, GuildId, Interaction, InteractionResponseFlags, Message, MessageBuilder, Ready}, async_trait, Client, Error};
+use serenity::{all::{ButtonStyle, ChannelId, Context, CreateActionRow, CreateButton, CreateEmbed, CreateEmbedFooter, 
+    CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, EditMessage, EventHandler, 
+    GatewayIntents, GetMessages, GuildId, Interaction, Message, MessageBuilder, Ready}, 
+    async_trait, Client
+};
 use tokio::{sync::Mutex, time::sleep};
 
-use crate::{bot::BotState, commands::COMMAND_GROUPS, database::{initialize_database, load_from_queue}, models::BotConfig};
+use crate::{commands::COMMAND_GROUPS, database::{initialize_database, load_from_queue}, models::BotConfig};
 
 struct Handler {
     queue_truck: Arc<Mutex<Option<Message>>>,
-    queue_samoan: Arc<Mutex<Option<Message>>>,
     queue_vha: Arc<Mutex<Option<Message>>>,
     info_truck: Arc<Mutex<Option<Message>>>,
     info_samoan: Arc<Mutex<Option<Message>>>
@@ -41,7 +44,6 @@ impl EventHandler for Handler {
         println!("{} is connected!", ready.user.name);
 
         let channel_ids = vec![
-            ChannelId::new(1298990333891182664),
             ChannelId::new(1291081521935159418),
             ChannelId::new(1304452829737521184),
             ChannelId::new(1306951678691643472),
@@ -58,7 +60,6 @@ impl EventHandler for Handler {
         display_packages(&ctx, 1306951678691643472).await;
         display_packages(&ctx, 1320511012687843338).await;
         loop {
-            discord_queue_embed(ChannelId::new(1298990333891182664), &self.queue_samoan, "samoan_317", &ctx).await;
             discord_queue_embed(ChannelId::new(1291081521935159418), &self.queue_truck, "nyc62truck", &ctx).await;
             discord_queue_embed(ChannelId::new(1304452829737521184), &self.queue_vha, "vhalidity", &ctx).await;
             display_info(&ctx, 1306951678691643472, 1061466442849075290, &self.info_truck).await;
@@ -70,7 +71,6 @@ impl EventHandler for Handler {
 //vzít channel infa ze všech
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::Component(component) = interaction {
-            let user_id = component.user.id;
             let package_name = component.data.custom_id.strip_prefix("add_").or_else(|| component.data.custom_id.strip_prefix("remove_"));
             
             if let Some(package) = package_name {
@@ -96,7 +96,7 @@ impl EventHandler for Handler {
                 }
                 let response_id = component.get_response(&ctx.http).await.unwrap();
                 sleep(Duration::from_secs(5)).await;
-                response_id.delete(&ctx.http).await;
+                let _ = response_id.delete(&ctx.http).await;
             }
         }
     }
@@ -108,7 +108,6 @@ pub async fn run_discord_bot() {
     let token = dotenv::var("DISCORD_TOKEN").expect("Expected a token in the environment");
     let intents = GatewayIntents::all();
     let handler = Handler {
-        queue_samoan: Arc::new(Mutex::new(None)),
         queue_truck: Arc::new(Mutex::new(None)),
         queue_vha: Arc::new(Mutex::new(None)),
         info_truck: Arc::new(Mutex::new(None)),
@@ -193,8 +192,8 @@ async fn discord_queue_embed(channel_id: ChannelId, queue_message: &Arc<Mutex<Op
             let mut bot_config = BotConfig::load_config();
             let config = bot_config.get_channel_config(&format!("#{}", channel));
 
-            let mut twitch = String::new();
-            let mut bungie = String::new();
+            let twitch;
+            let bungie;
             if i < config.teamsize {
                 twitch = format!("🎮 {}. ```{}```", i, entry.twitch_name);
                 bungie = format!("**Bungie Name**: ```{}```\n", entry.bungie_name);

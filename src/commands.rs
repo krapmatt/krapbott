@@ -158,92 +158,6 @@ pub fn create_command_dispatcher(config: &BotConfig, channel_name: &str) -> Hash
     commands
 }
 
-fn list_of_packages() -> Command {
-    Command {
-        permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg, client, _conn, bot_state| {
-        let fut = async move {
-            let mut bot_state = bot_state.lock().await; 
-            let config = bot_state.config.get_channel_config(msg.channel());
-            let streamer_packages = &config.packages;
-            let mut missing_packages: Vec<&str>= vec![];
-            for package in &*COMMAND_GROUPS {
-                if !streamer_packages.contains(&package.name) {
-                    missing_packages.push(&package.name);
-                }
-            }
-            let reply = if missing_packages.is_empty() {
-                format!("You have all packages activated!")
-            } else {
-                format!("Currently you have these packages on your channel: {}. And you can add: {}. Use: !add_package <name>", streamer_packages.join(", "), missing_packages.join(", "))
-            };
-
-            send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
-            Ok(())
-        };
-        Box::pin(fut)
-    })}
-}
-
-fn addplayertoqueue() -> Command {
-    Command {
-        permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg, client, conn, bot_state| {
-        let fut = async move {
-            let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
-            let twitch_name = words[1].strip_prefix("@").unwrap_or(&words[1]).to_string();
-            //add twitchname bungiename
-            let user = TwitchUser {
-                twitch_name: twitch_name,
-                bungie_name: words[2..].join(" ").to_string(),
-            };
-            let queue_len = bot_state.lock().await.config.get_channel_config(msg.channel()).len;
-            process_queue_entry(&msg, client.lock().await.borrow_mut(), queue_len, &conn, user, Some(msg.channel().to_string())).await?;
-            Ok(())
-        };
-        Box::pin(fut)
-    })}
-}
-
-fn matt_time() -> Command {
-    Command {
-        permission: PermissionLevel::User, 
-        handler: Arc::new(|msg, client, _conn, _bot_state| {
-        let fut = async move {
-            let time = chrono::Utc::now().with_timezone(&FixedOffset::east_opt(3600).unwrap());
-            send_message(&msg, client.lock().await.borrow_mut(), &format!("Matt time: {}", time.time().format("%-I:%M %p"))).await?;
-            Ok(())
-        };
-        Box::pin(fut)
-    })}
-}
-
-fn samosa_time() -> Command {
-    Command {
-        permission: PermissionLevel::User, 
-        handler: Arc::new(|msg, client, _conn, _bot_state| {
-        let fut = async move {
-            let time = chrono::Utc::now().with_timezone(&FixedOffset::west_opt(3600 * 5).unwrap());
-            send_message(&msg, client.lock().await.borrow_mut(), &format!("Samoan time: {}", time.time().format("%-I:%M %p"))).await?;
-            println!("{}", time);
-            Ok(())
-        };
-        Box::pin(fut)
-    })}
-}
-
-fn addpackage() -> Command {
-    Command {
-        permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg, client, _conn, bot_state| {
-        let fut = async move {
-            bot_state.lock().await.add_package(&msg, client).await?;
-            Ok(())
-        };
-        Box::pin(fut)
-    })}
-}
-
 fn parse_template(template: &str, variables: &HashMap<String, String>) -> String {
     let mut result = template.to_string();
     for (key, value) in variables {
@@ -889,6 +803,93 @@ fn play_announcement()-> Command {
                 announcement(&channel, "1091219021", &bot_state.oauth_token_bot, bot_state.clone().bot_id, announ).await?;
             } 
             
+            Ok(())
+        };
+        Box::pin(fut)
+    })}
+}
+
+
+fn list_of_packages() -> Command {
+    Command {
+        permission: PermissionLevel::Moderator, 
+        handler: Arc::new(|msg, client, _conn, bot_state| {
+        let fut = async move {
+            let mut bot_state = bot_state.lock().await; 
+            let config = bot_state.config.get_channel_config(msg.channel());
+            let streamer_packages = &config.packages;
+            let mut missing_packages: Vec<&str>= vec![];
+            for package in &*COMMAND_GROUPS {
+                if !streamer_packages.contains(&package.name) {
+                    missing_packages.push(&package.name);
+                }
+            }
+            let reply = if missing_packages.is_empty() {
+                format!("You have all packages activated!")
+            } else {
+                format!("Currently you have these packages on your channel: {}. And you can add: {}. Use: !add_package <name>", streamer_packages.join(", "), missing_packages.join(", "))
+            };
+
+            send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+            Ok(())
+        };
+        Box::pin(fut)
+    })}
+}
+
+fn addplayertoqueue() -> Command {
+    Command {
+        permission: PermissionLevel::Moderator, 
+        handler: Arc::new(|msg, client, conn, bot_state| {
+        let fut = async move {
+            let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
+            let twitch_name = words[1].strip_prefix("@").unwrap_or(&words[1]).to_string();
+            //add twitchname bungiename
+            let user = TwitchUser {
+                twitch_name: twitch_name,
+                bungie_name: words[2..].join(" ").to_string(),
+            };
+            let queue_len = bot_state.lock().await.config.get_channel_config(msg.channel()).len;
+            process_queue_entry(&msg, client.lock().await.borrow_mut(), queue_len, &conn, user, Some(msg.channel().to_string())).await?;
+            Ok(())
+        };
+        Box::pin(fut)
+    })}
+}
+
+fn matt_time() -> Command {
+    Command {
+        permission: PermissionLevel::User, 
+        handler: Arc::new(|msg, client, _conn, _bot_state| {
+        let fut = async move {
+            let time = chrono::Utc::now().with_timezone(&FixedOffset::east_opt(3600).unwrap());
+            send_message(&msg, client.lock().await.borrow_mut(), &format!("Matt time: {}", time.time().format("%-I:%M %p"))).await?;
+            Ok(())
+        };
+        Box::pin(fut)
+    })}
+}
+
+fn samosa_time() -> Command {
+    Command {
+        permission: PermissionLevel::User, 
+        handler: Arc::new(|msg, client, _conn, _bot_state| {
+        let fut = async move {
+            let time = chrono::Utc::now().with_timezone(&FixedOffset::west_opt(3600 * 5).unwrap());
+            send_message(&msg, client.lock().await.borrow_mut(), &format!("Samoan time: {}", time.time().format("%-I:%M %p"))).await?;
+            println!("{}", time);
+            Ok(())
+        };
+        Box::pin(fut)
+    })}
+}
+
+fn addpackage() -> Command {
+    Command {
+        permission: PermissionLevel::Moderator, 
+        handler: Arc::new(|msg, client, _conn, bot_state| {
+        let fut = async move {
+            bot_state.lock().await.add_package(&msg, client).await?;
             Ok(())
         };
         Box::pin(fut)

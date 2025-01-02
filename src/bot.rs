@@ -1,13 +1,15 @@
 use crate::{ 
-    bot_commands::{announcement, ban_bots, get_twitch_user_id, send_message, shoutout}, commands::create_command_dispatcher, database::{get_command_response, initialize_database_async}, models::{has_permission, BotConfig, BotError}, SharedState
+    bot_commands::{announcement, ban_bots, get_twitch_user_id, send_message, shoutout}, commands::create_command_dispatcher, 
+    database::{get_command_response, initialize_database_async}, models::{has_permission, BotConfig, BotError},
 };
 use async_sqlite::rusqlite::params;
 use dotenv::dotenv;
+use rand::{thread_rng, Rng};
 use regex::Regex;
-use tmi::{irc, Client, Event, Ritual, Tag};
+use tmi::{Client, Event, Tag};
 
 use std::{borrow::BorrowMut, collections::{HashMap, HashSet}, env::var, sync::Arc, time::{self, SystemTime}};
-use tokio::sync::{Mutex, OnceCell};
+use tokio::sync::Mutex;
 
 
 #[derive(Clone)]
@@ -59,7 +61,7 @@ impl BotState {
 //sa !pos for jk -> how much of piece of shit he is
 //Timers/Counters
 //Bungie api stuff - evade it
-pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> Result<(), BotError> {
+pub async fn run_chat_bot() -> Result<(), BotError> {
     
     let mut channel_id_map: HashMap<String, String> = HashMap::new();
             
@@ -70,13 +72,10 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
         let id = get_twitch_user_id(&channel).await?;
         channel_id_map.insert(id, format!("#{}", channel));
     }
-    println!("test: {:?}", channel_id_map.get("216105918"));
-    println!("Channel id map: {:?}", channel_id_map);
     
     let bot_state = Arc::new(Mutex::new(BotState::new()));
 
     let mut messeges = 0;
-    let mut run_count = 0;
 
     let mut start_time = SystemTime::now();
     let client = Arc::new(Mutex::new(bot_state.lock().await.client_builder().await));
@@ -88,15 +87,13 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
         let first_time = irc_msg.tag(Tag::FirstMsg).map(|x| x.to_string());
         
         if let Some(source_room_id) = irc_msg.tags().find(|(key, _)| *key == "source-room-id").map(|(_, value)| value) {
-            println!("Source Room ID: {}", source_room_id);
-            
+
             //Streamer doesnt own krapbott, skip messages from that channel
             
             if !channel_id_map.contains_key(source_room_id) {
                 continue;
             }
             if let Some(room_id) = irc_msg.tags().find(|(key, _)| *key == "room-id").map(|(_, value)| value) {
-                println!("Room ID: {}", room_id);
                 if room_id != source_room_id {
                     continue;
                 }
@@ -107,13 +104,11 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
                 let mut locked_state = bot_state.lock().await;
                 locked_state.first_time_tag = first_time.clone();
                 locked_state.config = BotConfig::load_config();
-                
-                let command_dispatcher = create_command_dispatcher(&locked_state.config, msg.channel());
-                                
-                if msg.text().starts_with("!next") {
-                    run_count += 1;
-                    shared_state.lock().unwrap().add_stats(run_count);
+                if msg.text().starts_with("!next") && msg.sender().login().to_ascii_lowercase() == "thatjk" {
+                    let number = thread_rng().gen_range(1..1000);
+                    send_message(&msg, client.lock().await.borrow_mut(), &format!("Jk you are {}% PoS krapmaHeart", number)).await?;
                 }
+                let command_dispatcher = create_command_dispatcher(&locked_state.config, msg.channel());
                 
                 if is_bannable_link(msg.text()) && first_time == Some("1".to_string()) {
                     ban_bots(&msg, &locked_state.oauth_token_bot, locked_state.bot_id.clone()).await;
@@ -167,7 +162,7 @@ pub async fn run_chat_bot(shared_state: Arc<std::sync::Mutex<SharedState>>) -> R
                             }
                         }
                         Event::SubOrResub(sub) => {
-                            let mut answer = String::new();
+                            let mut answer;
 
                             answer = format!("A new sub alert! krapmaHeart GOAT {} has just subbed", notice.sender().unwrap().name().to_string().replace('"', ""));
 
