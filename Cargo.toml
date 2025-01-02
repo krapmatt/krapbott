@@ -1,6 +1,6 @@
 [package]
 name = "krapbott"
-version = "2.0.0"
+version = "2.5.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -12,12 +12,9 @@ serde_json = "1.0.134"
 serde = {version = "1.0.216", features = ["derive"]}
 dotenv = "0.15"
 reqwest = {version = "0.12.4", features = ["json"]}
-egui = "0.29.1"
-eframe = "0.29.1"
-egui_dnd = "0.10.0"
 async-sqlite = "0.3.1"
 regex = "1.11.1"
-twitch_api = {version = "0.7.0-rc.7", features = ["all"]}
+twitch_api = {version = "0.7.0-rc.7", features = ["all", "reqwest"]}
 lazy_static = "1.5.0"
 serenity = { version = "0.12.4", features = ["client", "gateway"] }
 futures = "0.3.31"
@@ -25,3 +22,5 @@ image = "0.25.5"
 chrono = "0.4.39"
 tokio-tungstenite = "0.26"
 warp = "0.3.7"
+rand = "0.8.5"
+

@@ -131,7 +131,8 @@ pub struct ChannelConfig {
     pub teamsize: usize,
     pub combined: bool,
     pub queue_channel: String,
-    pub packages: Vec<String>, 
+    pub packages: Vec<String>,
+    pub runs: usize, 
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -180,6 +181,7 @@ impl BotConfig {
                 combined: false,
                 queue_channel: channel_name.to_string(),
                 packages: vec!["Moderation".to_string()],
+                runs: 0,
             })
     }
 

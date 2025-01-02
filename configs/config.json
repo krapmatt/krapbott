@@ -1,5 +1,34 @@
 {
   "channels": {
+    "#vhalidity": {
+      "open": false,
+      "len": 10,
+      "teamsize": 0,
+      "combined": false,
+      "queue_channel": "#vhalidity",
+      "packages": [
+        "Moderation",
+        "Queue",
+        "Database for queue",
+        "Bungie API"
+      ],
+      "runs": 0
+    },
+    "#samoan_317": {
+      "open": false,
+      "len": 40,
+      "teamsize": 5,
+      "combined": false,
+      "queue_channel": "#samoan_317",
+      "packages": [
+        "Moderation",
+        "Bungie API",
+        "Queue",
+        "Database for queue",
+        "Time"
+      ],
+      "runs": 0
+    },
     "#laziness_maximus": {
       "open": true,
       "len": 5,
@@ -8,11 +37,27 @@
       "queue_channel": "#krapmatt",
       "packages": [
         "Moderation"
-      ]
+      ],
+      "runs": 0
+    },
+    "#nyc62truck": {
+      "open": true,
+      "len": 10,
+      "teamsize": 1,
+      "combined": false,
+      "queue_channel": "#nyc62truck",
+      "packages": [
+        "Queue",
+        "Database for queue",
+        "Shoutout",
+        "Bungie API",
+        "Moderation"
+      ],
+      "runs": 0
     },
     "#krapmatt": {
       "open": true,
-      "len": 25,
+      "len": 40,
       "teamsize": 5,
       "combined": false,
       "queue_channel": "#krapmatt",
@@ -26,48 +71,8 @@
         "Database for queue",
         "Time",
         "Announcment"
-      ]
-    },
-    "#vhalidity": {
-      "open": false,
-      "len": 10,
-      "teamsize": 0,
-      "combined": false,
-      "queue_channel": "#vhalidity",
-      "packages": [
-        "Moderation",
-        "Queue",
-        "Database for queue",
-        "Bungie API"
-      ]
-    },
-    "#nyc62truck": {
-      "open": false,
-      "len": 10,
-      "teamsize": 1,
-      "combined": false,
-      "queue_channel": "#nyc62truck",
-      "packages": [
-        "Queue",
-        "Database for queue",
-        "Shoutout",
-        "Bungie API",
-        "Moderation"
-      ]
-    },
-    "#samoan_317": {
-      "open": false,
-      "len": 20,
-      "teamsize": 5,
-      "combined": false,
-      "queue_channel": "#samoan_317",
-      "packages": [
-        "Moderation",
-        "Bungie API",
-        "Queue",
-        "Database for queue",
-        "Time"
-      ]
+      ],
+      "runs": 0
     }
   }
 }

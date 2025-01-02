@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Viewer Queue</title>
+    <style>
+        /* General Styles */
+        body {
+            font-family: "Arial", sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #7000cc;
+            font-weight: 700;
+        }
+
+        /* Notification Styles */
+        #notification {
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        /* Input and Button */
+        #channel-input {
+            width: calc(100% - 140px);
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            outline: none;
+            background-color: #2a2a2a;
+            color: #ffffff;
+        }
+
+        #fetch-button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            background-color: #7000cc;
+            color: #121212;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        #fetch-button:hover {
+            background-color: #7000cc;
+        }
+
+        /* Table Styles */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background-color: #1e1e1e;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }
+
+        th {
+            background-color: #2b2b2b;
+            color: #7000cc;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            letter-spacing: 0.1em;
+        }
+
+        td {
+            color: #ffffff;
+            font-size: 0.95rem;
+        }
+
+        tr:nth-child(even) td {
+            background-color: #252525;
+        }
+
+        .copyable {
+            cursor: pointer;
+            color: #7000cc;
+            text-decoration: underline;
+            transition: color 0.3s;
+        }
+
+        .copyable:hover {
+            color: #7000cc;
+            text-decoration: none;
+        }
+
+        .remove-button {
+            padding: 5px 10px;
+            border: none;
+            border-radius: 5px;
+            background-color: #ff4444;
+            color: #ffffff;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .remove-button:hover {
+            background-color: #ff2222;
+        }
+    </style>
+</head>
+<body>
+    <div id="notification" style="display: none; padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; margin-bottom: 10px; border-radius: 5px;"></div>
+    <h1>Viewer Queue</h1>
+    <input type="text" id="channel-input" placeholder="Enter Channel Name">
+    <button id="fetch-button">Fetch Queue</button>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>Position</th>
+                <th>Twitch Name</th>
+                <th>Bungie Name</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="queue-body">
+            <!-- Queue data will be populated here -->
+        </tbody>
+    </table>
+
+    <script>
+        function showNotification(message, type = "error") {
+            const notification = document.getElementById("notification");
+            notification.textContent = message;
+        
+            // Adjust styles based on type (e.g., error, success, info)
+            if (type === "error") {
+                notification.style.backgroundColor = "#f8d7da";
+                notification.style.color = "#721c24";
+                notification.style.borderColor = "#f5c6cb";
+            } else if (type === "success") {
+                notification.style.backgroundColor = "#d4edda";
+                notification.style.color = "#155724";
+                notification.style.borderColor = "#c3e6cb";
+            } else if (type === "info") {
+                notification.style.backgroundColor = "#d1ecf1";
+                notification.style.color = "#0c5460";
+                notification.style.borderColor = "#bee5eb";
+            }
+        
+            notification.style.display = "block";
+        
+            // Auto-hide after 5 seconds
+            setTimeout(() => {
+                notification.style.display = "none";
+            }, 5000);
+        }
+        let channelId = "";
+        const baseURL = window.location.origin;
+        async function fetchQueueForChannel(channelId) {
+            try {
+                const response = await fetch(`${baseURL}/queue/${channelId}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+        
+                const groupedData = await response.json();
+                const tbody = document.getElementById("queue-body");
+                tbody.innerHTML = "";
+
+                if (groupedData.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="3">No data found for this channel.</td></tr>`;
+                    return;
+                }
+        
+                groupedData.forEach((group, index) => {
+                    const groupRow = document.createElement("tr");
+                    groupRow.innerHTML = `<td colspan="3"><strong>Group ${index + 1}</strong></td>`;
+                    tbody.appendChild(groupRow);
+        
+                    group.forEach(entry => {
+                        const row = document.createElement("tr");
+                        row.innerHTML = `
+                            <td>${entry.position}</td>
+                            <td>${entry.twitch_name}</td>
+                            <td class="copyable">${entry.bungie_name}</td>
+                            <td><button class="remove-button" data-twitch="${entry.twitch_name}">Remove</button></td>
+                        `;
+                        tbody.appendChild(row);
+                    });
+                });
+
+                document.querySelectorAll('.copyable').forEach(element => {
+                    element.addEventListener('click', () => {
+                        const textToCopy = element.textContent.trim();
+                
+                        // First, try Clipboard API
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            navigator.clipboard.writeText(textToCopy)
+                                .then(() => {
+                                })
+                                .catch(err => {
+                                    fallbackExecCommandCopy(textToCopy);
+                                });
+                        } else {
+                            // Fallback to execCommand
+                            fallbackExecCommandCopy(textToCopy);
+                        }
+                    });
+                });
+                
+                function fallbackExecCommandCopy(text) {
+                    const textarea = document.createElement("textarea");
+                    textarea.value = text;
+                
+                    // Hide the textarea off-screen
+                    textarea.style.position = "fixed";
+                    textarea.style.top = "-9999px";
+                    document.body.appendChild(textarea);
+                
+                    // Select the text in the textarea
+                    textarea.select();
+                
+                    try {
+                        const successful = document.execCommand("copy");
+                        if (successful) {
+                        } else {
+                        }
+                    } catch (err) {
+                        showNotification("Fallback copy failed:", err);
+                    } finally {
+                        // Remove the temporary textarea
+                        document.body.removeChild(textarea);
+                    }
+                }
+
+                // Add remove button functionality
+                document.querySelectorAll('.remove-button').forEach(button => {
+                    button.addEventListener('click', async () => {
+                        const twitchName = button.getAttribute('data-twitch');
+                    
+                        try {
+                            const removeResponse = await fetch(`${baseURL}/remove`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({ twitch_name: twitchName }),
+                            });
+
+                            if (removeResponse.ok) {
+                                fetchQueueForChannel(channelId); // Refresh the queue
+                            } else {
+                                showNotification("Failed to remove from queue.");
+                            }
+                        } catch (error) {
+                            showNotification("Error removing user from queue.");
+                        }
+                    });
+                });
+            } catch (error) {
+                showNotification("Failed to fetch queue data. Please check the channel name and try again.");
+            }
+        }
+
+        document.getElementById("fetch-button").addEventListener("click", async function() {
+            // Get the channel ID entered by the user
+            const channelId = document.getElementById("channel-input").value.trim();
+        
+            if (!channelId) {
+                showNotification("Please enter a channel name.", "error");
+                return;
+            }
+        
+            // Fetch the queue for the given channel
+            fetchQueueForChannel(channelId);
+        });
+
+        setInterval(() => {
+            const channelInput = document.getElementById("channel-input").value.trim();
+            if (channelInput) {
+                fetchQueueForChannel(channelInput);
+            }
+        }, 5000);
+    </script>
+</body>
+</html>

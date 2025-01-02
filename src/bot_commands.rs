@@ -1,4 +1,6 @@
 use async_sqlite::rusqlite::params;
+use lazy_static::lazy_static;
+use regex::Regex;
 use serde::Serialize;
 use std::{borrow::BorrowMut, cmp::min, sync::{Arc, Mutex}};
 use async_sqlite::{rusqlite::OptionalExtension, Client as SqliteClient};
@@ -136,9 +138,12 @@ pub async fn is_follower(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<
         true
     }
 }
-
-pub fn is_valid_bungie_name(name: &str) -> bool {
-    name.contains('#') && name.split_once('#').unwrap().1.len() == 4
+lazy_static::lazy_static!{
+    static ref BUNGIE_REGEX: Regex = Regex::new(r"^(?P<name>.+)#(?P<digits>\d{4})").unwrap();
+}
+pub fn is_valid_bungie_name(name: &str) -> Option<String> {
+    BUNGIE_REGEX.captures(name).map(|caps| format!("{}#{}", &caps["name"].trim(), &caps["digits"]))
+    //name.contains('#') && name.split_once('#').unwrap().1.len() == 4
 }
 
 async fn is_banned_from_queue(msg: &tmi::Privmsg<'_>, conn: &SqliteClient, client: &mut Client) -> Result<bool, BotError> {
@@ -166,7 +171,7 @@ impl BotState {
         if config.open {
             if !is_banned_from_queue(msg, conn, &mut client).await? {
                 if let Some((_join, name)) = msg.text().split_once(" ") {
-                    if is_valid_bungie_name(name.trim()) {
+                    if let Some(name) = is_valid_bungie_name(name) {
                         let mut new_user = TwitchUser {
                             twitch_name: msg.sender().name().to_string(),
                             bungie_name: name.trim().to_string(),
@@ -217,8 +222,7 @@ impl BotState {
                 SELECT twitch_name, priority_runs_left
                 FROM queue
                 WHERE channel_id = ?1
-                ORDER BY
-                    CASE
+                ORDER BY CASE
                         WHEN priority_runs_left > 0 THEN 0
                         ELSE 1
                     END,
@@ -273,7 +277,8 @@ impl BotState {
     
             Ok(result)
         }).await?;
-    
+        config.runs += 1;
+        bot_state.config.save_config();
         let reply = if queue_msg.is_empty() {
             "Queue is empty".to_string()
         } else {
@@ -397,12 +402,24 @@ impl BotState {
                 ) {
                     Ok(position) => {
                         conn.execute("DELETE FROM queue WHERE twitch_name = ?1 AND channel_id = ?2", params![twitch_name, channel])?;
-                        conn.execute("UPDATE queue SET position = position - 1 WHERE channel_id = ?1 AND position > ?2", params![channel, position])?;
-                        return Ok(format!("{} has been removed from the queue.", twitch_name));
+                        let mut stmt = conn.prepare(
+                            "SELECT twitch_name FROM queue WHERE channel_id = ?1 ORDER BY position ASC",
+                        )?;
+                        let mut rows = stmt.query(params![channel])?;
+                        let mut new_position = 1;
+                        while let Some(row) = rows.next()? {
+                            let name: String = row.get(0)?;
+                            conn.execute(
+                                "UPDATE queue SET position = ?1 WHERE twitch_name = ?2 AND channel_id = ?3",
+                                params![new_position, name, channel],
+                            )?;
+                            new_position += 1;
+                        }
+                        Ok(format!("{} has been removed from the queue.", twitch_name))
                     }
 
                     Err(_err) => {
-                        return Ok(format!("User {} not found in the queue. FailFish ", twitch_name));
+                        Ok(format!("User {} not found in the queue. FailFish ", twitch_name))
                     }
                 }
             }).await?;
@@ -607,7 +624,7 @@ impl BotState {
         let reply = if words.len() > 1 {
         let mut name = words[1..].to_vec().join(" ").to_string();
         
-        if is_valid_bungie_name(&name) {
+        if let Some(name) = is_valid_bungie_name(&name) {
             match get_membershipid(name.clone(), self.x_api_key.clone()).await {
                 Ok(ship) => membership = ship,
                 Err(err) => client.privmsg(msg.channel(), &format!("Error: {}", err)).send().await?,
@@ -790,7 +807,7 @@ async fn add_to_queue<'a>(msg: &tmi::Privmsg<'_>, queue_len: usize, conn: &Sqlit
 pub async fn register_user(conn: &SqliteClient, twitch_name: &str, bungie_name: &str) -> Result<String, BotError> {
     dotenv::dotenv().ok();
     let x_api_key = var("XAPIKEY").expect("No bungie api key");
-    let reply = if is_valid_bungie_name(bungie_name) {
+    let reply = if let Some(bungie_name) = is_valid_bungie_name(bungie_name) {
         let new_user = TwitchUser {
             twitch_name: twitch_name.to_string(),
             bungie_name: bungie_name.to_string()
