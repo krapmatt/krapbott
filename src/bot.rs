@@ -1,14 +1,15 @@
 use crate::{ 
     bot_commands::{announcement, ban_bots, get_twitch_user_id, send_message, shoutout}, commands::create_command_dispatcher, 
-    database::{get_command_response, initialize_database_async}, models::{has_permission, BotConfig, BotError},
+    database::{get_command_response, initialize_database_async}, models::{has_permission, AnnouncementState, BotConfig, BotError},
 };
-use async_sqlite::rusqlite::params;
+use async_sqlite::rusqlite::{params, Connection, OptionalExtension};
 use dotenv::dotenv;
 use rand::{thread_rng, Rng};
 use regex::Regex;
+use reqwest::redirect::Policy;
 use tmi::{Client, Event, Tag};
 
-use std::{borrow::BorrowMut, collections::{HashMap, HashSet}, env::var, sync::Arc, time::{self, SystemTime}};
+use std::{borrow::BorrowMut, collections::{HashMap, HashSet}, env::var, sync::Arc, time::{self, Duration, Instant, SystemTime}};
 use tokio::sync::Mutex;
 
 
@@ -20,7 +21,7 @@ pub struct BotState {
     pub x_api_key: String,
     pub first_time_tag: Option<String>,
     pub config: BotConfig,
-    pub streaming_together: HashMap<String, HashSet<String>>
+    pub streaming_together: HashMap<String, HashSet<String>>,
 }
 
 impl BotState {
@@ -47,7 +48,6 @@ impl BotState {
         let credentials = tmi::Credentials::new(self.nickname.clone(), self.oauth_token_bot.clone());
         let mut client = tmi::Client::builder().credentials(credentials).connect().await.unwrap();
         println!("{:?}", self.clone().config.channels.into_keys().collect::<Vec<String>>());
-        
         client.join_all(self.clone().config.channels.into_keys().collect::<Vec<String>>()).await.unwrap();
         client
     }
@@ -56,13 +56,8 @@ impl BotState {
 
 
 // Zapnout bota -> každý channel bude mít v configu queue_channel_name -> if combined true -> upravit channel pro source id channel  
-
-
-//sa !pos for jk -> how much of piece of shit he is
-//Timers/Counters
 //Bungie api stuff - evade it
-pub async fn run_chat_bot() -> Result<(), BotError> {
-    
+pub async fn run_chat_bot() -> Result<(), BotError> {    
     let mut channel_id_map: HashMap<String, String> = HashMap::new();
             
     let channels = BotConfig::load_config().channels.into_keys().collect::<Vec<String>>();
@@ -75,9 +70,6 @@ pub async fn run_chat_bot() -> Result<(), BotError> {
     
     let bot_state = Arc::new(Mutex::new(BotState::new()));
 
-    let mut messeges = 0;
-
-    let mut start_time = SystemTime::now();
     let client = Arc::new(Mutex::new(bot_state.lock().await.client_builder().await));
 
     let conn = initialize_database_async().await;
@@ -104,12 +96,12 @@ pub async fn run_chat_bot() -> Result<(), BotError> {
                 let mut locked_state = bot_state.lock().await;
                 locked_state.first_time_tag = first_time.clone();
                 locked_state.config = BotConfig::load_config();
-                if msg.text().starts_with("!next") && msg.sender().login().to_ascii_lowercase() == "thatjk" {
+                
+                if msg.text().starts_with("!pos") && (msg.sender().login().to_ascii_lowercase() == "thatjk" || msg.channel() == "#samoan_317") {
                     let number = thread_rng().gen_range(1..1000);
-                    send_message(&msg, client.lock().await.borrow_mut(), &format!("Jk you are {}% PoS krapmaHeart", number)).await?;
+                    send_message(&msg, client.lock().await.borrow_mut(), &format!("{} you are {}% PoS krapmaHeart",msg.sender().name().to_string(), number)).await?;
                 }
                 let command_dispatcher = create_command_dispatcher(&locked_state.config, msg.channel());
-                
                 if is_bannable_link(msg.text()) && first_time == Some("1".to_string()) {
                     ban_bots(&msg, &locked_state.oauth_token_bot, locked_state.bot_id.clone()).await;
                     client.lock().await.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await?;
@@ -132,9 +124,8 @@ pub async fn run_chat_bot() -> Result<(), BotError> {
                         }
                     }
                 }
-                if msg.channel() == "#krapmatt" {
-                    messeges += 1;
-                }
+
+                start_annnouncement_scheduler(bot_state.clone(), msg.channel_id().to_string(), msg.channel().to_string(), conn.clone()).await?;
             }
             tmi::Message::Reconnect => {
                 let mut client = client.lock().await;
@@ -187,21 +178,7 @@ pub async fn run_chat_bot() -> Result<(), BotError> {
         //rendom choose from preset messages
         //Add those messages into a database in future
 
-        if start_time.elapsed().unwrap() > time::Duration::from_secs(800) && messeges >= 10 {
-            let bot_state = bot_state.lock().await; 
-            
-            let ann = conn.clone().conn(move |conn| {
-                let mut stmt = conn.prepare("SELECT announcment, channel FROM announcments ORDER BY RANDOM() LIMIT 1")?;
-                let result = stmt.query_row(params![], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
-
-                return Ok(result);
-            }).await?;
-            
-            announcement("216105918", "1091219021",&bot_state.oauth_token_bot , bot_state.bot_id.to_string(), ann.0).await?;
-            
-            messeges = 0;
-            start_time = SystemTime::now();
-        }
+        
     }
             
 } 
@@ -224,6 +201,59 @@ fn is_bannable_link(text: &str) -> bool {
     (CHEAP_VIEWERS_RE.is_match(&cleaned_text) || BEST_VIEWERS_RE.is_match(&cleaned_text) && text.contains(".")) ||
         PROMO_RE.is_match(&cleaned_text)
 }
+
+
+
+async fn start_annnouncement_scheduler(bot_state: Arc<Mutex<BotState>>, channel_id: String, channel_name: String, conn: async_sqlite::Client) -> Result<(), BotError> { 
+    let (state, last_sent, interval) = {
+        let mut bot_config = BotConfig::load_config();
+        let config = bot_config.get_channel_config(&channel_name);
+        (
+            config.announcement_config.state.clone(),
+            config.announcement_config.last_sent,
+            config.announcement_config.interval,
+        )
+    };
+    let id_clone = channel_id.clone();
+    match state {
+        AnnouncementState::Paused => {
+            // Do nothing while paused
+        }
+        AnnouncementState::Active | AnnouncementState::Custom(_) => {
+            if last_sent.map_or(true, |last| last.elapsed() > interval) {
+                let message = match state {
+                    AnnouncementState::Active => {
+                        conn.conn( move |conn| {
+                            conn.query_row("SELECT announcement FROM announcements WHERE state = 'Active' AND channel = ?1 ORDER BY RANDOM() LIMIT 1", params![channel_id.clone()], |row| {
+                                Ok(row.get::<_, String>(0).optional())
+                            })?
+                        }).await?
+                    }
+                    AnnouncementState::Custom(activity) => {
+                        conn.conn( move |conn| {
+                            conn.query_row("SELECT announcement FROM announcements WHERE (state = 'Active' OR state = ?1) AND channel = ?2 ORDER BY RANDOM() LIMIT 1", params![activity, channel_id.clone()], |row| {
+                                Ok(row.get::<_, String>(0).optional())
+                            })?
+                        }).await?
+                    },
+                    _ => unreachable!(),
+                };
+                let mut bot_state = bot_state.lock().await;
+                if let Some(message) = message {
+                    announcement(&id_clone.clone(), "1091219021", &bot_state.oauth_token_bot, bot_state.clone().bot_id, message).await?;
+                }
+                let bot_state_config = &mut bot_state.config;
+                let config = bot_state_config.get_channel_config(&channel_name.clone());
+                config.announcement_config.last_sent = Some(Instant::now());
+                bot_state_config.save_config();
+            }
+        }
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    Ok(())
+}
+
+
 
 #[cfg(test)]
 mod tests {

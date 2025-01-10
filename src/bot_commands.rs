@@ -1,5 +1,4 @@
 use async_sqlite::rusqlite::params;
-use lazy_static::lazy_static;
 use regex::Regex;
 use serde::Serialize;
 use std::{borrow::BorrowMut, cmp::min, sync::{Arc, Mutex}};
@@ -143,7 +142,6 @@ lazy_static::lazy_static!{
 }
 pub fn is_valid_bungie_name(name: &str) -> Option<String> {
     BUNGIE_REGEX.captures(name).map(|caps| format!("{}#{}", &caps["name"].trim(), &caps["digits"]))
-    //name.contains('#') && name.split_once('#').unwrap().1.len() == 4
 }
 
 async fn is_banned_from_queue(msg: &tmi::Privmsg<'_>, conn: &SqliteClient, client: &mut Client) -> Result<bool, BotError> {

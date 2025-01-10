@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{collections::HashMap, error::Error, fs::File, io::{Read, Write}, path::Path, sync::Arc};
+use std::{collections::HashMap, error::Error, fs::File, io::{Read, Write}, path::Path, sync::Arc, time::{Duration, Instant, UNIX_EPOCH}};
 
 use async_sqlite::{rusqlite::{self, params}, Client as SqliteClient};
 use serde::{Deserialize, Serialize};
@@ -125,6 +125,31 @@ impl From<serde_json::Error> for BotError {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
+pub enum AnnouncementState {
+    Paused,
+    Active,
+    Custom(String), //Pro specifické aktivity
+}
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct AnnouncementConfig {
+    pub state: AnnouncementState,
+    pub interval: Duration,
+    #[serde(with = "serde_millis")]
+    pub last_sent: Option<Instant>,
+}
+
+impl AnnouncementConfig {
+    fn new() -> AnnouncementConfig {
+        AnnouncementConfig {
+            state: AnnouncementState::Paused,
+            interval: Duration::from_secs(5*60),
+            last_sent: None
+        }
+    }
+}
+
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct ChannelConfig {
     pub open: bool,
     pub len: usize,
@@ -132,7 +157,8 @@ pub struct ChannelConfig {
     pub combined: bool,
     pub queue_channel: String,
     pub packages: Vec<String>,
-    pub runs: usize, 
+    pub runs: usize,
+    pub announcement_config: AnnouncementConfig, 
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -176,13 +202,15 @@ impl BotConfig {
             .entry(channel_name.to_string())
             .or_insert_with(|| ChannelConfig {
                 open: false,
-                len: 0,
-                teamsize: 0,
+                len: 1,
+                teamsize: 1,
                 combined: false,
                 queue_channel: channel_name.to_string(),
                 packages: vec!["Moderation".to_string()],
                 runs: 0,
+                announcement_config: AnnouncementConfig::new(),
             })
+
     }
 
     pub fn print_all_configs(&self) {
