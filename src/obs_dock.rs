@@ -1,7 +1,7 @@
 
 use async_sqlite::rusqlite::params;
 use futures::{SinkExt, StreamExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -67,7 +67,7 @@ pub async fn get_queue_handler(channel_id: String) -> Result<impl warp::Reply, w
 }
 use warp::{http::StatusCode, reject};
 
-use crate::{database::initialize_database, models::BotConfig};
+use crate::{database::initialize_database, models::{BotConfig, BotError}};
 
 pub async fn remove_from_queue_handler(
     body: serde_json::Value,
@@ -109,4 +109,31 @@ pub async fn remove_from_queue_handler(
             StatusCode::INTERNAL_SERVER_ERROR,
         )),
     }
+}
+
+#[derive(Deserialize)]
+struct UpdateQueueOrderRequest {
+    channel_id: String,
+    new_order: Vec<QueueUpdate>,
+}
+
+#[derive(Deserialize)]
+struct QueueUpdate {
+    twitch_name: String,
+    position: i64,
+}
+
+async fn update_queue_order(data: UpdateQueueOrderRequest) -> Result<(), BotError> {
+    let mut conn = initialize_database();
+    let transaction = conn.transaction()?;
+
+    for entry in &data.new_order {
+        transaction.execute(
+            "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
+            (entry.position, &entry.twitch_name, &data.channel_id),
+        )?;
+    }
+
+    transaction.commit()?;
+    Ok(())
 }

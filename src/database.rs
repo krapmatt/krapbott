@@ -20,7 +20,7 @@ pub const COMMANDS_TEMPLATE: &str = "CREATE TABLE IF NOT EXISTS commands_templat
     channel_id VARCHAR,
     UNIQUE (channel_id, command)
 )";
-#[warn(dead_code)]
+
 pub const TEST_TABLE: &str = "DROP TABLE announcments";
 
 pub const USER_TABLE: &str = "CREATE TABLE IF NOT EXISTS user (
@@ -40,10 +40,11 @@ pub const COMMAND_TABLE: &str = "CREATE TABLE IF NOT EXISTS commands (
     UNIQUE(command, channel)
 ) ";
 
-pub const ANNOUNCMENT_TABLE: &str = "CREATE TABLE IF NOT EXISTS announcments (
+pub const ANNOUNCEMENT_TABLE: &str = "CREATE TABLE IF NOT EXISTS announcements (
     name TEXT NOT NULL,
-    announcment TEXT NOT NULL,
+    announcement TEXT NOT NULL,
     channel TEXT,
+    state TEXT,
     UNIQUE(name, channel)
 )";
 
@@ -58,11 +59,10 @@ pub fn initialize_database() -> Connection {
     conn.execute(USER_TABLE, []).unwrap();
     conn.execute(QUEUE_TABLE, []).unwrap();
     conn.execute(COMMAND_TABLE, []).unwrap();
-    conn.execute(ANNOUNCMENT_TABLE, []).unwrap();
+    conn.execute(ANNOUNCEMENT_TABLE, []).unwrap();
     conn.execute(BAN_TABLE, []).unwrap();
     conn.execute(COMMANDS_TEMPLATE, []).unwrap();
 
-    //conn.execute(TEST_TABLE, []).unwrap();
     return conn
 }
 
@@ -76,9 +76,11 @@ pub async fn initialize_database_async() -> Client {
         conn.execute(USER_TABLE, []).unwrap();
         conn.execute(QUEUE_TABLE, []).unwrap();
         conn.execute(COMMAND_TABLE, []).unwrap();
-        conn.execute(ANNOUNCMENT_TABLE, []).unwrap();
+        conn.execute(ANNOUNCEMENT_TABLE, []).unwrap();
         conn.execute(BAN_TABLE, []).unwrap();
         conn.execute(COMMANDS_TEMPLATE, []).unwrap();
+        //conn.execute(TEST_TABLE, []).unwrap();
+
 
         Ok(())
     }).await.expect("Failed to create database");

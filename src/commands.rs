@@ -6,12 +6,14 @@ use crate::bot_commands::get_twitch_user_id;
 use crate::bot_commands::modify_command;
 use crate::bot_commands::process_queue_entry;
 use crate::bot_commands::unban_player_from_queue;
+use crate::models::AnnouncementState;
 use crate::models::CommandAction;
 use crate::models::TemplateManager;
 use crate::models::TwitchUser;
 use crate::BotConfig;
 use crate::bot_commands::register_user;
 use std::collections::HashSet;
+use std::time::Duration;
 use std::{borrow::BorrowMut, collections::HashMap, sync::Arc};
 
 use crate::{bot::BotState, bot_commands::{bungiename, is_moderator, send_message}, models::{BotError, PermissionLevel}};
@@ -60,7 +62,10 @@ lazy_static::lazy_static! {
         command: vec![
             ("!add_announcement".to_string(), add_announcement()),
             ("!remove_announcement".to_string(), remove_announcement()),
-            ("!play_announcement".to_string(), play_announcement()),    
+            ("!play_announcement".to_string(), play_announcement()),
+            ("!announcement_interval".to_string(), announcement_freq()),
+            ("!announcement_stat".to_string(), announcement_state()),    
+
         ].into_iter().collect() 
     };
     pub static ref TIME: CommandGroup = CommandGroup { name: "Time".to_string(), 
@@ -744,16 +749,23 @@ fn add_announcement() -> Command {
         handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, _bot_state: Arc<Mutex<BotState>>| {
         let fut = async move {
             
-            let channel = "216105918";
+            let channel = msg.channel_id().to_string();
             
             let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
             
-            let name = msg_vec[1].to_string();
-            let announcment = msg_vec[2..].to_owned().join(" ");
-            conn.conn(move |conn| conn.execute("INSERT INTO announcments (name, announcment, channel) VALUES (?1, ?2, ?3) ON CONFLICT(name, channel) DO UPDATE SET announcment = excluded.announcment", 
-                params![name, announcment, channel])
-            ).await?;
-            send_message(&msg, client.lock().await.borrow_mut(), &format!("Announcement {} has been added!", msg_vec[1])).await?;
+            let reply = if msg_vec.len() >= 4 {
+                let name = msg_vec[2].to_string();
+                let state = msg_vec[1].to_string();
+                let announcment = msg_vec[3..].to_owned().join(" ");
+                conn.conn(move |conn| conn.execute("INSERT INTO announcements (name, announcement, channel, state) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(name, channel) DO UPDATE SET announcement = excluded.announcement", 
+                    params![name, announcment, channel, state])
+                ).await?;
+                &format!("Announcement {} has been added!", msg_vec[2])
+            } else {
+                "Use: !add_announcement <state: Active/NameofActivity> <name> <Message>"
+            };
+            send_message(&msg, client.lock().await.borrow_mut(), reply).await?;
+
             Ok(())
         };
         Box::pin(fut)
@@ -765,15 +777,14 @@ fn remove_announcement() -> Command {
         permission: PermissionLevel::Moderator, 
         handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, _bot_state: Arc<Mutex<BotState>>| {
         let fut = async move {
-            let channel = "216105918";
             let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
-
+            let channel_id = msg.channel_id().to_string();
             let reply = if msg_vec.len() <= 1 {
                 "Use: !remove_announcemnt <name>"
             } else if msg_vec.len() == 2 {
                 let name = msg_vec[1].to_string();
-                conn.conn(move |conn| conn.execute("DELETE FROM announcments WHERE name = ?1 AND channel = ?2", 
-                    params![name, channel])
+                conn.conn(move |conn| conn.execute("DELETE FROM announcements WHERE name = ?1 AND channel = ?2", 
+                    params![name, channel_id])
                 ).await?;
                 "Announcement has been removed!"
             } else {
@@ -791,16 +802,16 @@ fn play_announcement()-> Command {
         permission: PermissionLevel::Moderator, 
         handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
         let fut = async move {
-            let channel = "216105918";
             let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
 
             if msg_vec.len() == 2 {
+                let channel_id = msg.channel_id().to_string();
                 let name = msg_vec[1].to_string();
-                let announ = conn.conn(move |conn| conn.query_row("SELECT announcment FROM announcments WHERE name = ?1 AND channel = ?2", 
-                    params![name, channel], |row| Ok(row.get::<_, String>(0)?))
+                let announ = conn.conn(move |conn| conn.query_row("SELECT announcement FROM announcements WHERE name = ?1 AND channel = ?2", 
+                    params![name, channel_id.clone()], |row| Ok(row.get::<_, String>(0)?))
                 ).await?;
                 let bot_state = bot_state.lock().await;
-                announcement(&channel, "1091219021", &bot_state.oauth_token_bot, bot_state.clone().bot_id, announ).await?;
+                announcement(msg.channel_id(), "1091219021", &bot_state.oauth_token_bot, bot_state.clone().bot_id, announ).await?;
             } 
             
             Ok(())
@@ -890,6 +901,57 @@ fn addpackage() -> Command {
         handler: Arc::new(|msg, client, _conn, bot_state| {
         let fut = async move {
             bot_state.lock().await.add_package(&msg, client).await?;
+            Ok(())
+        };
+        Box::pin(fut)
+    })}
+}
+
+fn announcement_freq() -> Command {
+    Command {
+        permission: PermissionLevel::Moderator, 
+        handler: Arc::new(|msg, client, _conn, bot_state| {
+        let fut = async move {
+            let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
+            if msg_vec.len() == 2 {
+                let mut bot_state = bot_state.lock().await;
+                match msg_vec[1].to_string().parse() {
+                    Ok(res) => {
+                        bot_state.config.get_channel_config(msg.channel()).announcement_config.interval = Duration::from_secs(res);
+                        bot_state.config.save_config();
+                    },
+                    Err(_) => ()
+                }
+            }
+
+            Ok(())
+        };
+        Box::pin(fut)
+    })}
+}
+
+fn announcement_state() -> Command {
+    Command {
+        permission: PermissionLevel::Moderator, 
+        handler: Arc::new(|msg, client, _conn, bot_state| {
+        let fut = async move {
+            let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
+            if msg_vec.len() == 2 {
+                let mut bot_state = bot_state.lock().await;
+                let mes = msg_vec[1..].join(" ").to_string();
+                let state = if mes=="Paused".to_owned() {
+                    AnnouncementState::Paused
+                } else if mes == "Active".to_owned() {
+                    AnnouncementState::Active
+                } else {
+                    AnnouncementState::Custom(mes)
+                };
+
+                    
+                bot_state.config.get_channel_config(msg.channel()).announcement_config.state = state;
+                bot_state.config.save_config();
+            }
+
             Ok(())
         };
         Box::pin(fut)
