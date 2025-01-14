@@ -1,10 +1,56 @@
 {
   "channels": {
-    "#krapmatt": {
+    "#xcindi_": {
       "open": false,
       "len": 20,
-      "teamsize": 5,
-      "combined": true,
+      "teamsize": 2,
+      "combined": false,
+      "queue_channel": "#xcindi_",
+      "packages": [
+        "Moderation",
+        "Database for queue",
+        "Announcement",
+        "Time"
+      ],
+      "runs": 0,
+      "announcement_config": {
+        "state": "Active",
+        "interval": {
+          "secs": 600,
+          "nanos": 0
+        },
+        "last_sent": 1736785431949
+      }
+    },
+    "#samoan_317": {
+      "open": false,
+      "len": 99,
+      "teamsize": 1,
+      "combined": false,
+      "queue_channel": "#samoan_317",
+      "packages": [
+        "Moderation",
+        "Queue",
+        "Database for queue",
+        "Bungie API",
+        "Announcement",
+        "Time"
+      ],
+      "runs": 25,
+      "announcement_config": {
+        "state": "Paused",
+        "interval": {
+          "secs": 300,
+          "nanos": 0
+        },
+        "last_sent": null
+      }
+    },
+    "#krapmatt": {
+      "open": true,
+      "len": 20,
+      "teamsize": 2,
+      "combined": false,
       "queue_channel": "#krapmatt",
       "packages": [
         "Moderation",
@@ -15,13 +61,34 @@
         "Bungie API",
         "Database for queue",
         "Time",
-        "Announcment"
+        "Announcement"
       ],
-      "runs": 16,
+      "runs": 28,
       "announcement_config": {
-        "state": {
-          "Custom": "crotayeet"
+        "state": "Active",
+        "interval": {
+          "secs": 240,
+          "nanos": 0
         },
+        "last_sent": 1736807896088
+      }
+    },
+    "#nyc62truck": {
+      "open": false,
+      "len": 10,
+      "teamsize": 1,
+      "combined": false,
+      "queue_channel": "#nyc62truck",
+      "packages": [
+        "Moderation",
+        "Shoutout",
+        "Queue",
+        "Database for queue",
+        "Bungie API"
+      ],
+      "runs": 21,
+      "announcement_config": {
+        "state": "Paused",
         "interval": {
           "secs": 300,
           "nanos": 0
@@ -39,74 +106,6 @@
         "Moderation"
       ],
       "runs": 0,
-      "announcement_config": {
-        "state": "Paused",
-        "interval": {
-          "secs": 300,
-          "nanos": 0
-        },
-        "last_sent": null
-      }
-    },
-    "#nyc62truck": {
-      "open": false,
-      "len": 10,
-      "teamsize": 1,
-      "combined": false,
-      "queue_channel": "#nyc62truck",
-      "packages": [
-        "Moderation",
-        "Shoutout",
-        "Queue",
-        "Database for queue",
-        "Bungie API"
-      ],
-      "runs": 3,
-      "announcement_config": {
-        "state": "Paused",
-        "interval": {
-          "secs": 300,
-          "nanos": 0
-        },
-        "last_sent": null
-      }
-    },
-    "#xcindi_": {
-      "open": false,
-      "len": 20,
-      "teamsize": 4,
-      "combined": false,
-      "queue_channel": "#xcindi_",
-      "packages": [
-        "Moderation",
-        "Queue",
-        "Database for queue",
-        "Announcment",
-        "Time"
-      ],
-      "runs": 0,
-      "announcement_config": {
-        "state": "Active",
-        "interval": {
-          "secs": 300,
-          "nanos": 0
-        },
-        "last_sent": null
-      }
-    },
-    "#samoan_317": {
-      "open": false,
-      "len": 99,
-      "teamsize": 1,
-      "combined": false,
-      "queue_channel": "#samoan_317",
-      "packages": [
-        "Moderation",
-        "Queue",
-        "Database for queue",
-        "Bungie API"
-      ],
-      "runs": 12,
       "announcement_config": {
         "state": "Paused",
         "interval": {
