@@ -53,25 +53,27 @@ lazy_static::lazy_static! {
         &*DATABASE_FOR_QUEUE,
         &*TIME,
         &*MODERATION,
-        &*ANNOUNCMENT,
+        &*ANNOUNCEMENT,
     ];
 }
 
 lazy_static::lazy_static! {
-    pub static ref ANNOUNCMENT: CommandGroup = CommandGroup { name: "Announcment".to_string(), 
+    pub static ref ANNOUNCEMENT: CommandGroup = CommandGroup { name: "Announcement".to_string(), 
         command: vec![
             ("!add_announcement".to_string(), add_announcement()),
             ("!remove_announcement".to_string(), remove_announcement()),
             ("!play_announcement".to_string(), play_announcement()),
             ("!announcement_interval".to_string(), announcement_freq()),
-            ("!announcement_stat".to_string(), announcement_state()),    
+            ("!announcement_state".to_string(), announcement_state()),    
 
         ].into_iter().collect() 
     };
     pub static ref TIME: CommandGroup = CommandGroup { name: "Time".to_string(), 
         command: vec![
             ("!mattbed".to_string(), matt_time()),
-            ("!samoanbed".to_string(), samosa_time()),  
+            ("!samoanbed".to_string(), samosa_time()),
+            ("!cindibed".to_string(), cindi_time()),  
+
         ].into_iter().collect() 
     };
     pub static ref QUEUE_COMMANDS: CommandGroup = CommandGroup { name: "Queue".to_string(), 
@@ -888,7 +890,19 @@ fn samosa_time() -> Command {
         let fut = async move {
             let time = chrono::Utc::now().with_timezone(&FixedOffset::west_opt(3600 * 5).unwrap());
             send_message(&msg, client.lock().await.borrow_mut(), &format!("Samoan time: {}", time.time().format("%-I:%M %p"))).await?;
-            println!("{}", time);
+            Ok(())
+        };
+        Box::pin(fut)
+    })}
+}
+
+fn cindi_time() -> Command {
+    Command {
+        permission: PermissionLevel::User, 
+        handler: Arc::new(|msg, client, _conn, _bot_state| {
+        let fut = async move {
+            let time = chrono::Utc::now();
+            send_message(&msg, client.lock().await.borrow_mut(), &format!("Cindi time: {}", time.time().format("%-I:%M %p"))).await?;
             Ok(())
         };
         Box::pin(fut)
@@ -919,6 +933,7 @@ fn announcement_freq() -> Command {
                     Ok(res) => {
                         bot_state.config.get_channel_config(msg.channel()).announcement_config.interval = Duration::from_secs(res);
                         bot_state.config.save_config();
+                        send_message(&msg, client.lock().await.borrow_mut(), "Frequency has been updated").await?;
                     },
                     Err(_) => ()
                 }
