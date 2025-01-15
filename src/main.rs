@@ -51,12 +51,10 @@ async fn main() {
     
     
     //Loop for if a error accours bot ,,doesnt" panics
-    loop {   
-        if let Err(e) = run_chat_bot().await {
-            eprintln!("Error running chat bot: {} Time: {:?}", e, SystemTime::now());
-        }
-        //Pokud error je nevyhnutelný, nezaloopování
-        sleep(Duration::from_secs(5)).await;
-        println!("Restarting Twitch Krapbott!");
+
+    if let Err(e) = run_chat_bot().await {
+        eprintln!("Error running chat bot: {} Time: {:?}", e, SystemTime::now());
     }
+
+    
 }

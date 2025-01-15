@@ -2,7 +2,7 @@ use crate::{
     bot_commands::{announcement, ban_bots, get_twitch_user_id, send_message, shoutout}, commands::create_command_dispatcher, 
     database::{get_command_response, initialize_database_async}, models::{has_permission, AnnouncementState, BotConfig, BotError},
 };
-use async_sqlite::rusqlite::{params, Connection, OptionalExtension};
+use async_sqlite::{rusqlite::{params, Connection, OptionalExtension}};
 use dotenv::dotenv;
 use rand::{thread_rng, Rng};
 use regex::Regex;
@@ -10,7 +10,7 @@ use reqwest::redirect::Policy;
 use tmi::{Client, Event, Tag};
 
 use std::{borrow::BorrowMut, collections::{HashMap, HashSet}, env::var, sync::Arc, time::{self, Duration, Instant, SystemTime}};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 
 #[derive(Clone)]
@@ -51,13 +51,113 @@ impl BotState {
         client.join_all(self.clone().config.channels.into_keys().collect::<Vec<String>>()).await.unwrap();
         client
     }
+    pub async fn client_channel(&mut self, channel: String) -> Client {
+        let credentials = tmi::Credentials::new(self.nickname.clone(), self.oauth_token_bot.clone());
+        let mut client = tmi::Client::builder().credentials(credentials).connect().await.unwrap();
+        client.join(channel).await.unwrap();
+        client
+    }
+}
+
+pub async fn bot_task(channel: String, state: Arc<Mutex<BotState>>, conn: async_sqlite::Client) -> Result<(), BotError> {
+    let client = {
+        let mut bot_state = state.lock().await;
+        Arc::new(Mutex::new(bot_state.client_channel(channel.clone()).await))
+    };
+    
+    loop {
+        let irc_msg = client.lock().await.recv().await?;
+
+        match irc_msg.as_ref().as_typed()? {
+            tmi::Message::Privmsg(msg) => {
+                handle_privmsg(msg, Arc::clone(&state), conn.clone(), Arc::clone(&client)).await?;
+            }
+            tmi::Message::Reconnect => {
+                let mut client = client.lock().await;
+                client.reconnect().await?;
+            }
+            tmi::Message::Ping(ping) => {
+                client.lock().await.pong(&ping).await?;
+            }
+            _ => {}
+        }
+    }
 }
 
 
+pub async fn manage_channels(state: Arc<Mutex<BotState>>, config: Arc<Mutex<BotConfig>>, conn: async_sqlite::Client) {
+    let mut tasks: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+    loop {
+        // Periodically check for new channels in the configuration
+        let bot_config = config.lock().await;
 
+        for (channel, _) in &bot_config.channels {
+            if !tasks.contains_key(channel) {
+                // Spawn a new bot task for this channel
+                let channel_clone = channel.clone();
+                let state_clone = Arc::clone(&state);
+                let conn_clone = conn.clone();
+
+                let handle = tokio::spawn(async move {
+                    bot_task(channel_clone, state_clone, conn_clone).await;
+                });
+
+                tasks.insert(channel.clone(), handle);
+            }
+        }
+
+        // Clean up tasks for removed channels
+        tasks.retain(|channel, handle| {
+            if !bot_config.channels.contains_key(channel) {
+                handle.abort();
+                return false;
+            }
+            true
+        });
+        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+    }
+}
 // Zapnout bota -> každý channel bude mít v configu queue_channel_name -> if combined true -> upravit channel pro source id channel  
 //Bungie api stuff - evade it
 pub async fn run_chat_bot() -> Result<(), BotError> {    
+    let config = Arc::new(Mutex::new(BotConfig::load_config()));
+    let bot_state = Arc::new(Mutex::new(BotState::new()));
+    let conn = initialize_database_async().await;
+    
+    manage_channels(bot_state, config, conn).await;
+        
+    Ok(())
+}
+            
+async fn handle_privmsg(msg: tmi::Privmsg<'_>, bot_state: Arc<Mutex<BotState>>, conn: async_sqlite::Client, client: Arc<Mutex<Client>>) -> Result<(), BotError> {
+    let mut locked_state = bot_state.lock().await;
+    
+    locked_state.config = BotConfig::load_config();
+    println!("here1");
+    if msg.text().starts_with("!pos") && (msg.sender().login().to_ascii_lowercase() == "thatjk" || msg.channel() == "#samoan_317") {
+        let number = thread_rng().gen_range(1..1000);
+        send_message(&msg, client.lock().await.borrow_mut(), &format!("{} you are {}% PoS krapmaHeart",msg.sender().name().to_string(), number)).await?;
+    }
+    let command_dispatcher = create_command_dispatcher(&locked_state.config, msg.channel());
+    
+    drop(locked_state);
+    if msg.text().starts_with("!") {
+        let command = msg.text().split_whitespace().next().unwrap_or_default().to_string().to_lowercase();
+        if let Some(cmd) = command_dispatcher.get(&command) {
+            let msg = msg.clone();
+            if has_permission(&msg, Arc::clone(&client), cmd.permission).await {
+                (cmd.handler)(msg.into_owned().clone(), Arc::clone(&client), conn.clone(), Arc::clone(&bot_state)).await?;
+            }
+        } else {
+            if let Ok(Some(reply)) = get_command_response(&conn, msg.text().to_string().to_ascii_lowercase(), Some(msg.channel().to_string())).await {
+                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn handle_channel_events(msg: tmi::Privmsg<'_>, bot_state: Arc<Mutex<BotState>>, conn: async_sqlite::Client, client: Arc<Mutex<Client>>) -> Result<(), BotError> {
     let mut channel_id_map: HashMap<String, String> = HashMap::new();
             
     let channels = BotConfig::load_config().channels.into_keys().collect::<Vec<String>>();
@@ -67,121 +167,109 @@ pub async fn run_chat_bot() -> Result<(), BotError> {
         let id = get_twitch_user_id(&channel).await?;
         channel_id_map.insert(id, format!("#{}", channel));
     }
-    
-    let bot_state = Arc::new(Mutex::new(BotState::new()));
-
-    let client = Arc::new(Mutex::new(bot_state.lock().await.client_builder().await));
-
-    let conn = initialize_database_async().await;
-    
-    loop {
-        let irc_msg = client.lock().await.recv().await?;
-        let first_time = irc_msg.tag(Tag::FirstMsg).map(|x| x.to_string());
-        
-        if let Some(source_room_id) = irc_msg.tags().find(|(key, _)| *key == "source-room-id").map(|(_, value)| value) {
-
-            //Streamer doesnt own krapbott, skip messages from that channel
-            
-            if !channel_id_map.contains_key(source_room_id) {
-                continue;
-            }
-            if let Some(room_id) = irc_msg.tags().find(|(key, _)| *key == "room-id").map(|(_, value)| value) {
-                if room_id != source_room_id {
-                    continue;
+//locked_state.first_time_tag = first_time.clone();
+    /*if is_bannable_link(msg.text()) && first_time == Some("1".to_string()) {
+        ban_bots(&msg, &locked_state.oauth_token_bot, locked_state.bot_id.clone()).await;
+        client.lock().await.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await?;
+    }*/
+            //let first_time = irc_msg.tag(Tag::FirstMsg).map(|x| x.to_string());
+           /*println!("here5");
+            if let Some(source_room_id) = irc_msg.tags().find(|(key, _)| *key == "source-room-id").map(|(_, value)| value) {
+                //Streamer doesnt own krapbott, skip messages from that channel
+                if !channel_id_map.contains_key(source_room_id) {
+                    return Ok(());
                 }
-            }
-        }
-        match irc_msg.as_ref().as_typed()? {
-            tmi::Message::Privmsg(msg) => {
-                let mut locked_state = bot_state.lock().await;
-                locked_state.first_time_tag = first_time.clone();
-                locked_state.config = BotConfig::load_config();
-                
-                if msg.text().starts_with("!pos") && (msg.sender().login().to_ascii_lowercase() == "thatjk" || msg.channel() == "#samoan_317") {
-                    let number = thread_rng().gen_range(1..1000);
-                    send_message(&msg, client.lock().await.borrow_mut(), &format!("{} you are {}% PoS krapmaHeart",msg.sender().name().to_string(), number)).await?;
+                if let Some(room_id) = irc_msg.tags().find(|(key, _)| *key == "room-id").map(|(_, value)| value) {
+                    if room_id != source_room_id {
+                        return Ok(());
+                    }
                 }
-                let command_dispatcher = create_command_dispatcher(&locked_state.config, msg.channel());
-                if is_bannable_link(msg.text()) && first_time == Some("1".to_string()) {
-                    ban_bots(&msg, &locked_state.oauth_token_bot, locked_state.bot_id.clone()).await;
-                    client.lock().await.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await?;
-                }
-                drop(locked_state);
-                if msg.text().starts_with("!") {
-                    let command = msg.text().split_whitespace().next().unwrap_or_default().to_string().to_lowercase();
-                    if let Some(cmd) = command_dispatcher.get(&command) {
-                        let msg_clone = msg.clone().into_owned(); 
-                        let conn_clone = conn.clone(); 
-                        let client_arc = Arc::clone(&client);
+            }*/
 
-                        if has_permission(&msg, Arc::clone(&client), cmd.permission).await {
-                            // Execute the command handler if permission is granted
-                            (cmd.handler)(msg_clone, client_arc, conn_clone, Arc::clone(&bot_state)).await?;
+            //match irc_msg.as_ref().as_typed()? {
+                //tmi::Message::Privmsg(msg) => {
+                    let mut locked_state = bot_state.lock().await;
+                    //locked_state.first_time_tag = first_time.clone();
+                    locked_state.config = BotConfig::load_config();
+                    println!("here1");
+                    if msg.text().starts_with("!pos") && (msg.sender().login().to_ascii_lowercase() == "thatjk" || msg.channel() == "#samoan_317") {
+                        let number = thread_rng().gen_range(1..1000);
+                        send_message(&msg, client.lock().await.borrow_mut(), &format!("{} you are {}% PoS krapmaHeart",msg.sender().name().to_string(), number)).await?;
+                    }
+                    let command_dispatcher = create_command_dispatcher(&locked_state.config, msg.channel());
+                    /*if is_bannable_link(msg.text()) && first_time == Some("1".to_string()) {
+                        ban_bots(&msg, &locked_state.oauth_token_bot, locked_state.bot_id.clone()).await;
+                        client.lock().await.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await?;
+                    }*/
+                    drop(locked_state);
+                    if msg.text().starts_with("!") {
+                        println!("here2");
+                        let command = msg.text().split_whitespace().next().unwrap_or_default().to_string().to_lowercase();
+                        if let Some(cmd) = command_dispatcher.get(&command) {
+                            let msg = msg.clone();
+                            if has_permission(&msg, Arc::clone(&client), cmd.permission).await {
+                                (cmd.handler)(
+                                    msg.into_owned().clone(),
+                                    Arc::clone(&client),
+                                    conn.clone(),
+                                    Arc::clone(&bot_state),
+                                )
+                                .await?;
+                            }
+                        } else {
+                            println!("here3");
+                            if let Ok(Some(reply)) = get_command_response(&conn, msg.text().to_string().to_ascii_lowercase(), Some(msg.channel().to_string())).await {
+                                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+                            }
                         }
-                    } else {
-                        if let Ok(Some(reply)) = get_command_response(&conn, msg.text().to_string().to_ascii_lowercase(), Some(msg.channel().to_string())).await {
-                            send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+                    }
+    
+                    start_annnouncement_scheduler(bot_state.clone(), msg.channel_id().to_string(), msg.channel().to_string(), conn.clone()).await?;
+                //}
+                /*
+                tmi::Message::UserNotice(notice) => {
+                    if notice.channel() == "#krapmatt" {
+                        match notice.event() {
+                            Event::Raid(raid) => {
+                                if let Some(raider) = notice.sender() {
+                                    let bot_state = bot_state.lock().await;
+                                    shoutout(&bot_state.oauth_token_bot, bot_state.clone().bot_id, raider.id(), notice.channel_id()).await;
+                                    let mut client = client.lock().await;
+                                    client.privmsg("#krapmatt", 
+                                        &format!("Let's give a BIG shoutout to https://www.twitch.tv/{} krapmaHeart",
+                                        raider.name().to_string().replace('"', ""))).send().await?;
+                                    
+                                    client.privmsg("#krapmatt", 
+                                        &format!("{} has raided us with {} people from their community! krapmaStare Please welcome them in krapmaHeart", 
+                                        raider.name().to_string().replace('"', ""), raid.viewer_count())).send().await?;
+                                }
+                            }
+                            Event::SubOrResub(sub) => {
+                                let mut answer;
+    
+                                answer = format!("A new sub alert! krapmaHeart GOAT {} has just subbed", notice.sender().unwrap().name().to_string().replace('"', ""));
+    
+                                if sub.is_resub() {
+                                    answer = format!("Thank you {} for the resub! krapmaHeart I appreciate your support! You've been supporting for {} months! krapmaStare", notice.sender().unwrap().name().to_string().replace('"', ""), sub.cumulative_months())
+                                }
+    
+                                client.lock().await.borrow_mut().privmsg("#krapmatt", &answer).send().await?;
+                            }
+                            Event::SubGift(gift) => {
+                                if let Some(sender) = notice.sender() {
+                                    client.lock().await.borrow_mut().privmsg("#krapmatt", &format!("{} has gifted a sub to {}", sender.name().replace('"', ""), gift.recipient().name())).send().await?;
+                                }
+                            }
+                            
+                            _ => {}
                         }
                     }
                 }
+                _ => {}
+            }*/
+    Ok(())
 
-                start_annnouncement_scheduler(bot_state.clone(), msg.channel_id().to_string(), msg.channel().to_string(), conn.clone()).await?;
-            }
-            tmi::Message::Reconnect => {
-                let mut client = client.lock().await;
-                client.reconnect().await?;
-                client.join_all(channel_id_map.clone().into_values()).await?;
-            }
-            tmi::Message::Ping(ping) => {
-                client.lock().await.pong(&ping).await?;
-            }
-            tmi::Message::UserNotice(notice) => {
-                if notice.channel() == "#krapmatt" {
-                    match notice.event() {
-                        Event::Raid(raid) => {
-                            if let Some(raider) = notice.sender() {
-                                let bot_state = bot_state.lock().await;
-                                shoutout(&bot_state.oauth_token_bot, bot_state.clone().bot_id, raider.id(), notice.channel_id()).await;
-                                let mut client = client.lock().await;
-                                client.privmsg("#krapmatt", 
-                                    &format!("Let's give a BIG shoutout to https://www.twitch.tv/{} krapmaHeart",
-                                    raider.name().to_string().replace('"', ""))).send().await?;
-                                
-                                client.privmsg("#krapmatt", 
-                                    &format!("{} has raided us with {} people from their community! krapmaStare Please welcome them in krapmaHeart", 
-                                    raider.name().to_string().replace('"', ""), raid.viewer_count())).send().await?;
-                            }
-                        }
-                        Event::SubOrResub(sub) => {
-                            let mut answer;
-
-                            answer = format!("A new sub alert! krapmaHeart GOAT {} has just subbed", notice.sender().unwrap().name().to_string().replace('"', ""));
-
-                            if sub.is_resub() {
-                                answer = format!("Thank you {} for the resub! krapmaHeart I appreciate your support! You've been supporting for {} months! krapmaStare", notice.sender().unwrap().name().to_string().replace('"', ""), sub.cumulative_months())
-                            }
-
-                            client.lock().await.borrow_mut().privmsg("#krapmatt", &answer).send().await?;
-                        }
-                        Event::SubGift(gift) => {
-                            if let Some(sender) = notice.sender() {
-                                client.lock().await.borrow_mut().privmsg("#krapmatt", &format!("{} has gifted a sub to {}", sender.name().replace('"', ""), gift.recipient().name())).send().await?;
-                            }
-                        }
-                        
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-        //rendom choose from preset messages
-        //Add those messages into a database in future
-
-        
-    }
-            
-} 
+}
 
 lazy_static::lazy_static! {
     static ref CHEAP_VIEWERS_RE: Regex = Regex::new(r"cheap\s*viewers\s*on").unwrap();

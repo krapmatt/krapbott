@@ -1,51 +1,5 @@
 {
   "channels": {
-    "#xcindi_": {
-      "open": false,
-      "len": 20,
-      "teamsize": 2,
-      "combined": false,
-      "queue_channel": "#xcindi_",
-      "packages": [
-        "Moderation",
-        "Database for queue",
-        "Announcement",
-        "Time"
-      ],
-      "runs": 0,
-      "announcement_config": {
-        "state": "Active",
-        "interval": {
-          "secs": 600,
-          "nanos": 0
-        },
-        "last_sent": 1736785431949
-      }
-    },
-    "#samoan_317": {
-      "open": false,
-      "len": 99,
-      "teamsize": 1,
-      "combined": false,
-      "queue_channel": "#samoan_317",
-      "packages": [
-        "Moderation",
-        "Queue",
-        "Database for queue",
-        "Bungie API",
-        "Announcement",
-        "Time"
-      ],
-      "runs": 25,
-      "announcement_config": {
-        "state": "Paused",
-        "interval": {
-          "secs": 300,
-          "nanos": 0
-        },
-        "last_sent": null
-      }
-    },
     "#krapmatt": {
       "open": true,
       "len": 20,
@@ -70,7 +24,31 @@
           "secs": 240,
           "nanos": 0
         },
-        "last_sent": 1736807896088
+        "last_sent": 1736941529056
+      }
+    },
+    "#samoan_317": {
+      "open": false,
+      "len": 99,
+      "teamsize": 1,
+      "combined": false,
+      "queue_channel": "#samoan_317",
+      "packages": [
+        "Moderation",
+        "Queue",
+        "Database for queue",
+        "Bungie API",
+        "Announcement",
+        "Time"
+      ],
+      "runs": 25,
+      "announcement_config": {
+        "state": "Paused",
+        "interval": {
+          "secs": 300,
+          "nanos": 0
+        },
+        "last_sent": null
       }
     },
     "#nyc62truck": {
@@ -113,6 +91,28 @@
           "nanos": 0
         },
         "last_sent": null
+      }
+    },
+    "#xcindi_": {
+      "open": false,
+      "len": 20,
+      "teamsize": 2,
+      "combined": false,
+      "queue_channel": "#xcindi_",
+      "packages": [
+        "Moderation",
+        "Database for queue",
+        "Announcement",
+        "Time"
+      ],
+      "runs": 0,
+      "announcement_config": {
+        "state": "Active",
+        "interval": {
+          "secs": 280,
+          "nanos": 0
+        },
+        "last_sent": 1736895983768
       }
     }
   }
