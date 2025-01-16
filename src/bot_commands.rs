@@ -203,11 +203,10 @@ impl BotState {
         }
     }
     
-    pub async fn handle_next(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, conn: &SqliteClient) -> Result<(), BotError> {
-        let mut client = client.lock().await;
+    pub async fn handle_next(&mut self, channel_id: String, conn: &SqliteClient) -> Result<String, BotError> {
         
         let mut bot_state = self.clone();
-        let config = bot_state.config.get_channel_config(msg.channel());
+        let config = bot_state.config.get_channel_config(&channel_id);
         let channel = config.clone().queue_channel;
 
         let teamsize = config.teamsize;
@@ -282,10 +281,7 @@ impl BotState {
         } else {
             format!("Next Group: {}", queue_msg.join(", "))
         };
-    
-        send_message(msg, &mut client, &reply).await?;
-    
-        Ok(())
+        return Ok(reply);
     }
 
     pub async fn prio(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, conn: &SqliteClient) -> Result<(), BotError> {

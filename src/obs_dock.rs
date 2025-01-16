@@ -3,6 +3,7 @@ use async_sqlite::rusqlite::params;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::mpsc::{self, Sender};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[derive(Serialize, Clone)]
@@ -65,9 +66,9 @@ pub async fn get_queue_handler(channel_id: String) -> Result<impl warp::Reply, w
     Ok(warp::reply::json(&grouped_queue))
     
 }
-use warp::{http::StatusCode, reject};
+use warp::{http::StatusCode, reject, reply::json};
 
-use crate::{database::initialize_database, models::{BotConfig, BotError}};
+use crate::{database::{initialize_database, initialize_database_async}, models::{BotConfig, BotError}};
 
 pub async fn remove_from_queue_handler(
     body: serde_json::Value,
@@ -136,4 +137,58 @@ async fn update_queue_order(data: UpdateQueueOrderRequest) -> Result<(), BotErro
 
     transaction.commit()?;
     Ok(())
+}
+
+pub async fn next_queue_handler(channel_id: String, sender: Sender<(String, String)>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Err(err) = sender.send((channel_id.clone(), "next".to_string())).await {
+        eprintln!("Failed to send message: {:?}", err);
+        return Ok(warp::reply::with_status(
+            "Failed to send message",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ));
+    }
+
+    Ok(warp::reply::with_status(
+        "Next group message sent",
+        StatusCode::OK,
+    ))
+}
+
+pub async fn get_run_counter_handler(channel_id: String) -> Result<impl warp::Reply, warp::Rejection> {
+    let mut config = BotConfig::load_config();
+    let channel_id = format!("#{}", channel_id);
+    if config.channels.contains_key(&channel_id) {
+        let channel_config = config.get_channel_config(&channel_id);
+        let runs = channel_config.runs;
+        return Ok(json(&json!({"run_counter": runs})))
+    } else {
+        Err(reject())
+    }
+}
+
+pub async fn get_queue_state_handler(channel_id: String) -> Result<impl warp::Reply, warp::Rejection> {
+    let mut config = BotConfig::load_config();
+    let channel_id = format!("#{}", channel_id);
+    let config = config.get_channel_config(&channel_id);
+    let is_open = config.open;
+    println!("{}", is_open);
+    Ok(warp::reply::json(&serde_json::json!({ "is_open": is_open })))
+}
+pub async fn toggle_queue_handler(toggle_action: String, channel_id: String) -> Result<impl warp::Reply, warp::Rejection> {
+    let mut config = BotConfig::load_config();
+    let channel_id = format!("#{}", channel_id);
+    let channel_config = config.get_channel_config(&channel_id);
+    match toggle_action.as_str() {
+        "open" => {
+            channel_config.open = true;
+            config.save_config();
+            Ok(warp::reply::json(&serde_json::json!({ "success": true, "state": "open" })))
+        }
+        "close" => {
+            channel_config.open = false;
+            config.save_config();
+            Ok(warp::reply::json(&serde_json::json!({ "success": true, "state": "closed" })))
+        }
+        _ => Err(warp::reject()),
+    }
 }

@@ -554,7 +554,8 @@ fn next() -> Command {
         handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
         let fut = async move {
             let mut bot_state = bot_state.lock().await;
-            bot_state.handle_next(&msg, client, &conn).await?;
+            let reply = bot_state.handle_next(msg.channel().to_string(), &conn).await?;
+            send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
             Ok(())
         };
         Box::pin(fut)

@@ -20,13 +20,6 @@
             font-weight: 700;
         }
 
-        /* Container to hold all elements */
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-
         /* Notification Styles */
         #notification {
             padding: 10px;
@@ -36,35 +29,27 @@
             display: none;
         }
 
-        /* Input and Buttons */
-        .input-group {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-
+        /* Input and Button */
         #channel-input {
-            width: 100%;
+            width: calc(100% - 140px);
             padding: 10px;
             border: none;
             border-radius: 5px;
+            margin-bottom: 10px;
             outline: none;
             background-color: #2a2a2a;
             color: #ffffff;
         }
 
-        button {
+        #fetch-button {
             padding: 10px 15px;
             border: none;
             border-radius: 5px;
-            cursor: pointer;
-            transition: background-color 0.3s;
-            font-weight: bold;
-        }
-
-        #fetch-button {
             background-color: #7000cc;
             color: #d4d4d4;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.3s;
         }
 
         #fetch-button:hover {
@@ -74,9 +59,15 @@
         #next-button {
             background-color: #df1919;
             color: #ffffff;
+            margin-top: 10px;
             width: 100%;
             font-size: 1.5rem;
+            font-weight: bold;
             padding: 15px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background-color 0.3s;
         }
 
         #next-button:hover {
@@ -86,9 +77,15 @@
         #toggle-queue-button {
             background-color: #13c513;
             color: #ffffff;
+            margin-top: 10px;
             width: 100%;
             font-size: 1.2rem;
+            font-weight: bold;
             padding: 15px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background-color 0.3s;
         }
 
         #toggle-queue-button.open {
@@ -157,53 +154,37 @@
         .remove-button:hover {
             background-color: #ff2222;
         }
-
-        /* Counter Style */
-        #run-counter {
-            font-size: 1.2rem;
-            font-weight: bold;
-        }
-
     </style>
 </head>
 <body>
-    <div class="container">
-        <div id="notification"></div>
-        <h1>Viewer Queue</h1>
-        
-        <!-- Input and Button Section -->
-        <div class="input-group">
-            <input type="text" id="channel-input" placeholder="Enter Channel Name">
-            <button id="fetch-button">Fetch Queue</button>
-        </div>
-        <div class="input-group">
-            <button id="next-button">Next</button>
-            <button id="toggle-queue-button">Toggle Queue</button>
-        </div>
-
-        <h2>Runs: <span id="run-counter">0</span></h2>
-        
-        <!-- Queue Table -->
-        <table>
-            <thead>
-                <tr>
-                    <th>Position</th>
-                    <th>Twitch Name</th>
-                    <th>Bungie Name</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="queue-body">
-                <!-- Queue data will be populated here -->
-            </tbody>
-        </table>
-    </div>
+    <div id="notification" style="display: none; padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; margin-bottom: 10px; border-radius: 5px;"></div>
+    <h1>Viewer Queue</h1>
+    <input type="text" id="channel-input" placeholder="Enter Channel Name">
+    <button id="fetch-button">Fetch Queue</button>
+    <button id="next-button">Next</button>
+    <button id="toggle-queue-button">Toggle Queue</button>
+    <h2>Runs: <span id="run-counter">0</span></h2>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>Position</th>
+                <th>Twitch Name</th>
+                <th>Bungie Name</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="queue-body">
+            <!-- Queue data will be populated here -->
+        </tbody>
+    </table>
 
     <script>
         function showNotification(message, type = "error") {
             const notification = document.getElementById("notification");
             notification.textContent = message;
         
+            // Adjust styles based on type (e.g., error, success, info)
             if (type === "error") {
                 notification.style.backgroundColor = "#f8d7da";
                 notification.style.color = "#721c24";
@@ -220,14 +201,13 @@
         
             notification.style.display = "block";
         
+            // Auto-hide after 5 seconds
             setTimeout(() => {
                 notification.style.display = "none";
             }, 5000);
         }
-
         let channelId = "";
         const baseURL = window.location.origin;
-        
         async function updateQueueToggleButton(channelId) {
             try {
                 const response = await fetch(`${baseURL}/queue/state/${channelId}`);
@@ -243,7 +223,6 @@
                 showNotification("Error fetching queue state.", "error");
             }
         }
-
         async function fetchQueueForChannel(channelId) {
             try {
                 const response = await fetch(`${baseURL}/queue/${channelId}`);
@@ -255,6 +234,7 @@
                 const runCounterResponse = await fetch(`${baseURL}/run-counter/${channelId}`);
                 const { run_counter } = await runCounterResponse.json();
 
+                // Update the run counter display
                 document.getElementById("run-counter").textContent = run_counter;
                 const tbody = document.getElementById("queue-body");
                 tbody.innerHTML = "";
@@ -263,7 +243,7 @@
                     tbody.innerHTML = `<tr><td colspan="3">No data found for this channel.</td></tr>`;
                     return;
                 }
-
+        
                 groupedData.forEach((group, index) => {
                     const groupRow = document.createElement("tr");
                     groupRow.innerHTML = `<td colspan="3"><strong>Group ${index + 1}</strong></td>`;
@@ -281,10 +261,11 @@
                     });
                 });
 
-                document.querySectorAll('.copyable').forEach(element => {
+                document.querySelectorAll('.copyable').forEach(element => {
                     element.addEventListener('click', () => {
                         const textToCopy = element.textContent.trim();
                 
+                        // First, try Clipboard API
                         if (navigator.clipboard && navigator.clipboard.writeText) {
                             navigator.clipboard.writeText(textToCopy)
                                 .then(() => {
@@ -306,7 +287,7 @@
                     // Hide the textarea off-screen
                     textarea.style.position = "fixed";
                     textarea.style.top = "-9999px";
-                    document.body.aelppendChild(textarea);
+                    document.body.appendChild(textarea);
                 
                     // Select the text in the textarea
                     textarea.select();
@@ -349,41 +330,22 @@
                     });
                 });
             } catch (error) {
-                showNotification("Error fetching queue.", "error");
+                showNotification("Failed to fetch queue data. Please check the channel name and try again.");
             }
         }
-        // Event listeners for buttons
-        document.getElementById("fetch-button").addEventListener("click", () => {
-            channelId = document.getElementById("channel-input").value.trim();
-            if (!channelId) {
-                showNotification("Please enter a valid channel name.", "error");
-            } else {
-                fetchQueueForChannel(channelId);
-                updateQueueToggleButton(channelId);
-            }
-        });
 
-        document.getElementById("next-button").addEventListener("click", async function() {
+        document.getElementById("fetch-button").addEventListener("click", async function() {
+            // Get the channel ID entered by the user
             const channelId = document.getElementById("channel-input").value.trim();
+        
             if (!channelId) {
                 showNotification("Please enter a channel name.", "error");
                 return;
             }
-
-            try {
-                const response = await fetch(`${baseURL}/next/${channelId}`, {
-                    method: "POST",
-                });
-
-                if (response.ok) {
-                    showNotification("Moved to the next entry!", "success");
-                    await fetchQueueForChannel(channelId);
-                } else {
-                    showNotification("Failed to move to the next entry.", "error");
-                }
-            } catch (error) {
-                showNotification("Error moving to the next entry.", "error");
-            }
+        
+            // Fetch the queue for the given channel
+            fetchQueueForChannel(channelId);
+            await updateQueueToggleButton(channelId);
         });
 
         document.getElementById("toggle-queue-button").addEventListener("click", async function () {
@@ -423,12 +385,36 @@
                 showNotification("Error toggling queue state.", "error");
             }
         });
+
+        document.getElementById("next-button").addEventListener("click", async function() {
+            const channelId = document.getElementById("channel-input").value.trim();
+            if (!channelId) {
+                showNotification("Please enter a channel name.", "error");
+                return;
+            }
+
+            try {
+                const response = await fetch(`${baseURL}/next/${channelId}`, {
+                    method: "POST",
+                });
+
+                if (response.ok) {
+                    showNotification("Moved to the next entry!", "success");
+                    await fetchQueueForChannel(channelId);
+                } else {
+                    showNotification("Failed to move to the next entry.", "error");
+                }
+            } catch (error) {
+                showNotification("Error moving to the next entry.", "error");
+            }
+        });
+
         setInterval(() => {
             const channelInput = document.getElementById("channel-input").value.trim();
             if (channelInput) {
                 fetchQueueForChannel(channelInput);
             }
-        }, 1000);
+        }, 5000);
     </script>
 </body>
 </html>
