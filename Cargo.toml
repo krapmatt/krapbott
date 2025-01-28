@@ -1,6 +1,6 @@
 [package]
 name = "krapbott"
-version = "2.5.0"
+version = "2.9.5"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -21,7 +21,7 @@ futures = "0.3.31"
 image = "0.25.5"
 chrono = "0.4.39"
 tokio-tungstenite = "0.26"
-warp = "0.3.7"
+warp = { version = "0.3.7", features = ["tls"] }
 rand = "0.8.5"
 serde_millis = "0.1.1"
 

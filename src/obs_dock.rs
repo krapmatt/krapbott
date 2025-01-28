@@ -1,9 +1,11 @@
 
+use std::sync::Arc;
+
 use async_sqlite::rusqlite::params;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::{mpsc::{self, Sender, UnboundedSender}, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[derive(Serialize, Clone)]
@@ -66,7 +68,7 @@ pub async fn get_queue_handler(channel_id: String) -> Result<impl warp::Reply, w
     Ok(warp::reply::json(&grouped_queue))
     
 }
-use warp::{http::StatusCode, reject, reply::json};
+use warp::{http::StatusCode, reject, reply::json, Filter};
 
 use crate::{database::{initialize_database, initialize_database_async}, models::{BotConfig, BotError}};
 
@@ -76,28 +78,31 @@ pub async fn remove_from_queue_handler(
     let twitch_name = body["twitch_name"].as_str().ok_or_else(|| {
         reject()
     })?;
-
+    let channel_name = body["channel_id"].as_str().ok_or_else(|| {
+        reject()
+    })?;
+    let channel_id = format!("#{}", channel_name);
     let conn = initialize_database();
     let mut result = Ok(0);
     if let Ok(_pos) = conn.query_row(
         "SELECT position FROM queue WHERE twitch_name = ?1 AND channel_id = ?2",
-        params![twitch_name, "#krapmatt"],
+        params![twitch_name, channel_id],
         |row| row.get::<_, i32>(0),
     ) {
         result = conn.execute(
             "DELETE FROM queue WHERE twitch_name = ?1 AND channel_id = ?2",
-            params![twitch_name, "#krapmatt"],
+            params![twitch_name, channel_id],
         );
         let mut stmt = conn.prepare(
             "SELECT twitch_name FROM queue WHERE channel_id = ?1 ORDER BY position ASC",
         ).unwrap();
-        let mut rows = stmt.query(params!["#krapmatt"]).unwrap();
+        let mut rows = stmt.query(params![channel_id]).unwrap();
         let mut new_position = 1;
         while let Ok(Some(row)) = rows.next() {
             let name: String = row.get(0).unwrap();
             let _ = conn.execute(
                 "UPDATE queue SET position = ?1 WHERE twitch_name = ?2 AND channel_id = ?3",
-                params![new_position, name, "#krapmatt"],
+                params![new_position, name, channel_id],
             ); 
             new_position += 1;
         }
@@ -112,35 +117,62 @@ pub async fn remove_from_queue_handler(
     }
 }
 
-#[derive(Deserialize)]
-struct UpdateQueueOrderRequest {
-    channel_id: String,
-    new_order: Vec<QueueUpdate>,
+#[derive(Deserialize, Debug)]
+pub struct UpdateQueueOrderRequest {
+    pub channel_id: String,
+    pub new_order: Vec<QueueUpdate>,
 }
 
-#[derive(Deserialize)]
-struct QueueUpdate {
-    twitch_name: String,
-    position: i64,
+#[derive(Deserialize, Debug)]
+pub struct QueueUpdate {
+    pub twitch_name: String,
+    pub position: i64,
 }
 
-async fn update_queue_order(data: UpdateQueueOrderRequest) -> Result<(), BotError> {
-    let mut conn = initialize_database();
-    let transaction = conn.transaction()?;
+pub async fn update_queue_order(data: UpdateQueueOrderRequest) -> Result<impl warp::Reply, warp::Rejection> {
+    let mut conn = initialize_database_async().await;
+    conn.conn(move |conn| {
+        let tx = conn.unchecked_transaction().unwrap();
+        for entry in &data.new_order {
+            conn.execute(
+                "UPDATE queue SET position = ?1 WHERE twitch_name = ?2 AND channel_id = ?3",
+                params![entry.position, &entry.twitch_name, "#krapmatt"]
+            ).unwrap();
+            println!("data {:?}", entry);
 
-    for entry in &data.new_order {
-        transaction.execute(
-            "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
-            (entry.position, &entry.twitch_name, &data.channel_id),
-        )?;
+        }
+        println!("channel {}", data.channel_id);
+        tx.commit();
+        Ok(())
+    }).await;
+    println!("here");
+    /*for entry in &data.new_order {
+        tx.execute(
+            "UPDATE queue SET position = ?1 WHERE twitch_name = ?2 AND channel_id = ?3",
+            params![entry.position, &entry.twitch_name, format!("#{}", &data.channel_id)]
+        );
+
+    }*/
+    
+    Ok(warp::reply::json(&"Queue order updated"))
+}
+
+pub async fn next_queue_handler(channel_id: String, sender: Arc<UnboundedSender<(String, String)>>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Err(err) = sender.send((channel_id.clone(), "next".to_string())) {
+        eprintln!("Failed to send message: {:?}", err);
+        return Ok(warp::reply::with_status(
+            "Failed to send message",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ));
     }
 
-    transaction.commit()?;
-    Ok(())
+    Ok(warp::reply::with_status(
+        "Next group message sent",
+        StatusCode::OK,
+    ))
 }
-
-pub async fn next_queue_handler(channel_id: String, sender: Sender<(String, String)>) -> Result<impl warp::Reply, warp::Rejection> {
-    if let Err(err) = sender.send((channel_id.clone(), "next".to_string())).await {
+pub async fn keep_channel_alive(sender: Arc<Mutex<UnboundedSender<(String, String)>>>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Err(err) = sender.lock().await.send(("keep".to_string(), "alive".to_string())) {
         eprintln!("Failed to send message: {:?}", err);
         return Ok(warp::reply::with_status(
             "Failed to send message",
@@ -192,3 +224,12 @@ pub async fn toggle_queue_handler(toggle_action: String, channel_id: String) -> 
         _ => Err(warp::reject()),
     }
 }
+
+pub async fn sabotage_truck_queue() -> Result<impl warp::Reply, warp::Rejection> {
+    let mut config = BotConfig::load_config();
+    config.get_channel_config("#nyc62truck").open = !config.get_channel_config("#nyc62truck").open;
+    config.save_config();
+    Ok(warp::reply::with_status("Sabotaged", StatusCode::OK))
+
+}
+

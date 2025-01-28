@@ -1,7 +1,7 @@
 use async_sqlite::rusqlite::params;
 use regex::Regex;
 use serde::Serialize;
-use std::{borrow::BorrowMut, cmp::min, sync::{Arc, Mutex}};
+use std::{borrow::BorrowMut, cmp::min, collections::HashSet, sync::{Arc, Mutex}};
 use async_sqlite::{rusqlite::OptionalExtension, Client as SqliteClient};
 use dotenv::var;
 
@@ -84,6 +84,18 @@ pub async fn shoutout(oauth_token: &str, client_id: String, to_broadcaster_id: &
     .await.expect("Bad reqwest");
     println!("{:?}", res.text().await);
 
+}
+
+pub async fn is_channel_live(channel_id: &str, token: &str, client_id: &str) -> Result<bool, reqwest::Error> {
+    let url = format!("https://api.twitch.tv/helix/streams?user_login={}", channel_id);
+    let response = reqwest::Client::new()
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Client-ID", client_id)
+        .send()
+        .await?;
+    let json: serde_json::Value = response.json().await?;
+    Ok(json["data"].as_array().map_or(false, |data| !data.is_empty()))
 }
 
 pub async fn get_twitch_user_id(username: &str) -> Result<String, BotError> {
@@ -594,7 +606,7 @@ impl BotState {
         let live_names = Arc::new(Mutex::new(Vec::new()));
         let live_names_clone = Arc::clone(&live_names);
         conn.conn(move |conn| {
-            let mut stmt = conn.prepare("SELECT twitch_name, bungie_name from queue WHERE position = ?1 AND channel_id = ?2").unwrap();
+            let mut stmt = conn.prepare("SELECT twitch_name, bungie_name from queue WHERE position = ?1 AND channel_id = ?2")?;
             
             for position in positions {
                 let name = stmt.query_row(params![position, channel], |row| {
@@ -702,8 +714,7 @@ impl BotState {
             
             
         }).await?;
-        let mut client = client.lock().await;
-        send_message(msg, &mut client, &reply).await?;
+        send_message(msg, client.lock().await.borrow_mut(), &reply).await?;
         
         Ok(())
     }
@@ -714,7 +725,9 @@ impl BotState {
         
         if let Some(shared_chats) = self.streaming_together.get(msg.channel()) {
             let source_config = self.config.get_channel_config(msg.channel());
-            for channel in shared_chats {
+            let mut all_channels = shared_chats.clone();
+            all_channels.insert(msg.channel().to_string());
+            for channel in all_channels {
                 let channel_config = config.get_channel_config(&channel);
                 channel_config.combined = !channel_config.combined;
                 channel_config.open = !channel_config.open;
@@ -722,12 +735,17 @@ impl BotState {
                 channel_config.teamsize = source_config.teamsize;
                 if channel_config.combined {
                     channel_config.queue_channel = msg.channel().to_string();
-                    send_message(&msg, client.lock().await.borrow_mut(), "Combined Queue activated").await?;
                 } else {
                     channel_config.queue_channel = channel.clone();
-                    send_message(&msg, client.lock().await.borrow_mut(), "Combined Queue deactivated").await?;
                 }
             }
+            let reply = if !source_config.combined {
+                "Combined Queue activated"
+            } else {
+                "Combined Queue deactivated"
+            };
+            send_message(&msg, client.lock().await.borrow_mut(), reply).await?;
+
             config.save_config();
         }
     
@@ -755,7 +773,7 @@ pub async fn process_queue_entry(msg: &tmi::Privmsg<'_>, client: &mut Client, qu
 
 async fn user_exists_in_queue(conn: &SqliteClient, twitch_name: String, channel_id: Option<String>) -> bool {
     let res = conn.conn(move |conn| {
-        let mut stmt = conn.prepare("SELECT 1 FROM queue WHERE twitch_name = ?1 AND channel_id = ?2").unwrap();
+        let mut stmt = conn.prepare("SELECT 1 FROM queue WHERE twitch_name = ?1 AND channel_id = ?2")?;
         let params = params![twitch_name, channel_id];
         let exists: Result<Option<i64>, _> = stmt.query_row(params, |row| row.get(0));
         Ok(exists.is_ok())
@@ -763,14 +781,14 @@ async fn user_exists_in_queue(conn: &SqliteClient, twitch_name: String, channel_
     return res
 }
 
-async fn update_queue(conn: &SqliteClient, user: TwitchUser) -> Result<(), BotError>{
+async fn update_queue(conn: &SqliteClient, user: TwitchUser) -> Result<(), BotError> {
     conn.conn(move |conn| 
-        Ok(conn.execute("UPDATE queue SET bungie_name = ?1 WHERE twitch_name = ?2", params![user.bungie_name, user.twitch_name]).unwrap())
+        Ok(conn.execute("UPDATE queue SET bungie_name = ?1 WHERE twitch_name = ?2", params![user.bungie_name, user.twitch_name])?)
     ).await?;
     Ok(())
 }
 //TODO! redo the queue so that combined/solo settings
-async fn add_to_queue<'a>(msg: &tmi::Privmsg<'_>, queue_len: usize, conn: &SqliteClient, user: TwitchUser, channel_id: Option<String>) -> Result<String, BotError>{
+async fn add_to_queue<'a>(msg: &tmi::Privmsg<'_>, queue_len: usize, conn: &SqliteClient, user: TwitchUser, channel_id: Option<String>) -> Result<String, BotError> {
     let reply;
     let channel_id_clone = channel_id.clone();
     let count: i64 = conn.conn(move |conn| Ok(conn.query_row("SELECT COUNT(*) FROM queue WHERE channel_id = ?1", params![channel_id_clone.unwrap()], |row| row.get::<_,i64>(0))?)).await?;
@@ -816,11 +834,11 @@ pub async fn register_user(conn: &SqliteClient, twitch_name: &str, bungie_name: 
 //if is/not in database
 pub async fn bungiename(msg: &tmi::Privmsg<'_>, client: &mut Client, conn: &SqliteClient, twitch_name: String) -> Result<(), BotError> {
     let reply = conn.conn(move |conn| {
-        let mut stmt = conn.prepare("SELECT rowid, * FROM user WHERE twitch_name = ?1").unwrap();
+        let mut stmt = conn.prepare("SELECT rowid, * FROM user WHERE twitch_name = ?1")?;
         let reply = if let Some(bungie_name) = stmt.query_row(params![twitch_name], |row| {
             Ok(row.get::<_, String>(3)?)
         }).optional()? {
-            format!("@{} || BungieName: {}||", twitch_name, bungie_name).to_string()
+            format!("@{} || BungieName: {} ||", twitch_name, bungie_name).to_string()
         } else {
             format!("{}, you are not registered", twitch_name).to_string()
         };

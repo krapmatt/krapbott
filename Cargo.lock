@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "krapbott"
-version = "2.5.0"
+version = "2.9.5"
 dependencies = [
  "async-sqlite",
  "chrono",
@@ -3140,11 +3140,13 @@ dependencies = [
  "multer",
  "percent-encoding",
  "pin-project",
+ "rustls-pemfile 2.2.0",
  "scoped-tls",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "tokio",
+ "tokio-rustls 0.25.0",
  "tokio-tungstenite 0.21.0",
  "tokio-util",
  "tower-service",

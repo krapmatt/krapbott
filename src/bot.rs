@@ -1,16 +1,15 @@
 use crate::{ 
-    bot_commands::{announcement, ban_bots, get_twitch_user_id, send_message, shoutout}, commands::create_command_dispatcher, 
+    bot_commands::{announcement, ban_bots, get_twitch_user_id, is_channel_live, send_message, shoutout}, commands::create_command_dispatcher, 
     database::{get_command_response, initialize_database_async}, models::{has_permission, AnnouncementState, BotConfig, BotError},
 };
-use async_sqlite::{rusqlite::{params, Connection, OptionalExtension}};
+use async_sqlite::rusqlite::{params, OptionalExtension};
 use dotenv::dotenv;
 use rand::{thread_rng, Rng};
 use regex::Regex;
-use reqwest::redirect::Policy;
-use tmi::{Client, Event, Tag};
+use tmi::{Client, Tag};
 
 use std::{borrow::BorrowMut, collections::{HashMap, HashSet}, env::var, sync::Arc, time::{self, Duration, Instant, SystemTime}};
-use tokio::sync::{mpsc::{self, Receiver}, Mutex};
+use tokio::sync::{mpsc::{self, Receiver, UnboundedReceiver}, Mutex};
 
 
 #[derive(Clone)]
@@ -73,6 +72,15 @@ pub async fn bot_task(channel: String, state: Arc<Mutex<BotState>>, conn: async_
         let id = get_twitch_user_id(&channel).await?;
         channel_id_map.insert(id, format!("#{}", channel));
     }
+    let bot_state_clone = Arc::clone(&state);
+    let conn_clone = conn.clone();
+    tokio::spawn(async move {
+        let channel = channel.strip_prefix("#").unwrap_or(&channel).to_string();
+        let id = get_twitch_user_id(&channel).await.unwrap();
+        if let Err(e) = start_annnouncement_scheduler(bot_state_clone, id, channel.clone(), conn_clone).await {
+            eprintln!("Announcement error: {}", e);
+        }
+    });
 
     loop {
         let irc_msg = client.lock().await.recv().await?;
@@ -95,7 +103,6 @@ pub async fn bot_task(channel: String, state: Arc<Mutex<BotState>>, conn: async_
                     client.lock().await.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await?;
                 }
                 handle_privmsg(msg.clone(), Arc::clone(&state), conn.clone(), Arc::clone(&client)).await?;
-                start_annnouncement_scheduler(Arc::clone(&state), msg.clone().channel_id().to_string(), msg.channel().to_string(), conn.clone()).await?;
             }
             tmi::Message::Reconnect => {
                 let mut client = client.lock().await;
@@ -147,30 +154,27 @@ pub async fn run_chat_bot() -> Result<(), BotError> {
     let config = Arc::new(Mutex::new(BotConfig::load_config()));
     let bot_state = Arc::new(Mutex::new(BotState::new()));
     let conn = initialize_database_async().await;
+
     manage_channels(Arc::clone(&bot_state), config, conn).await;
         
     Ok(())
 }
 
-pub async fn create_obs_bot(mut rx: Receiver<(String, String)>) -> Result<(), BotError> {
+pub async fn handle_obs_message(channel_id: String, command: String) -> Result<(), BotError> {
     let conn = initialize_database_async().await;
     let mut bot_state = BotState::new();
     let mut client = bot_state.client_builder().await;
-    
-    while let Some(message) = rx.recv().await {
-        let channel_id = format!("#{}",message.0);
-        
-        println!("{:?}", rx);
-        println!("{:?}", message);
-        if message.1 == "next" {
-            let reply = match bot_state.handle_next(channel_id.clone(), &conn).await {
-                Ok(reply) => reply,
-                Err(e) => format!("Next has failed! Err: {}", e)
-            };
-            client.privmsg(&channel_id, &reply).send().await?;
-        };
-        tokio::time::sleep(Duration::from_secs(2)).await;
+
+    println!("Processing OBS message: {} -> {}", channel_id, command);
+    if command == "next" {
+        let reply = bot_state
+            .handle_next(format!("#{}", channel_id), &conn)
+            .await
+            .unwrap_or_else(|e| format!("Next failed: {}", e));
+
+        client.privmsg(&format!("#{}", channel_id), &reply).send().await?;
     }
+
     Ok(())
 }
 
@@ -178,7 +182,6 @@ async fn handle_privmsg(msg: tmi::Privmsg<'_>, bot_state: Arc<Mutex<BotState>>, 
     let mut locked_state = bot_state.lock().await;
     
     locked_state.config = BotConfig::load_config();
-    println!("here1");
     if msg.text().starts_with("!pos") && (msg.sender().login().to_ascii_lowercase() == "thatjk" || msg.channel() == "#samoan_317") {
         let number = thread_rng().gen_range(1..1000);
         send_message(&msg, client.lock().await.borrow_mut(), &format!("{} you are {}% PoS krapmaHeart",msg.sender().name().to_string(), number)).await?;
@@ -229,51 +232,73 @@ fn is_bannable_link(text: &str) -> bool {
 
 
 async fn start_annnouncement_scheduler(bot_state: Arc<Mutex<BotState>>, channel_id: String, channel_name: String, conn: async_sqlite::Client) -> Result<(), BotError> { 
-    let (state, last_sent, interval) = {
-        let mut bot_config = BotConfig::load_config();
-        let config = bot_config.get_channel_config(&channel_name);
-        (
-            config.announcement_config.state.clone(),
-            config.announcement_config.last_sent,
-            config.announcement_config.interval,
-        )
-    };
-    let id_clone = channel_id.clone();
-    match state {
-        AnnouncementState::Paused => {
-            // Do nothing while paused
-        }
-        AnnouncementState::Active | AnnouncementState::Custom(_) => {
-            if last_sent.map_or(true, |last| last.elapsed() > interval) {
-                let message = match state {
-                    AnnouncementState::Active => {
-                        conn.conn( move |conn| {
-                            conn.query_row("SELECT announcement FROM announcements WHERE state = 'Active' AND channel = ?1 ORDER BY RANDOM() LIMIT 1", params![channel_id.clone()], |row| {
-                                Ok(row.get::<_, String>(0).optional())
-                            })?
-                        }).await?
-                    }
-                    AnnouncementState::Custom(activity) => {
-                        conn.conn( move |conn| {
-                            conn.query_row("SELECT announcement FROM announcements WHERE (state = 'Active' OR state = ?1) AND channel = ?2 ORDER BY RANDOM() LIMIT 1", params![activity, channel_id.clone()], |row| {
-                                Ok(row.get::<_, String>(0).optional())
-                            })?
-                        }).await?
-                    },
-                    _ => unreachable!(),
+    let mut sleep_duration = Duration::from_secs(60);
+    let channel = format!("#{}", channel_name);
+
+    loop {
+        let id_clone = channel_id.clone();
+
+        let is_live = {
+            let bot_state = bot_state.lock().await;
+            is_channel_live(&channel_name, &bot_state.oauth_token_bot, &bot_state.bot_id).await
+        };
+
+        if let Ok(is_live) = is_live {
+            if is_live {
+                let (state, last_sent, interval) = {
+                    let mut bot_config = BotConfig::load_config();
+                    let config = bot_config.get_channel_config(&channel);
+                    (
+                        config.announcement_config.state.clone(),
+                        config.announcement_config.last_sent,
+                        config.announcement_config.interval,
+                    )
                 };
-                let mut bot_state = bot_state.lock().await;
-                if let Some(message) = message {
-                    announcement(&id_clone.clone(), "1091219021", &bot_state.oauth_token_bot, bot_state.clone().bot_id, message).await?;
+    
+                match state {
+                    AnnouncementState::Paused => {
+                        // Do nothing while paused
+                    }
+                    AnnouncementState::Active | AnnouncementState::Custom(_) => {
+                        if last_sent.map_or(true, |last| last.elapsed() > interval) {
+                            let message = match state {
+                                AnnouncementState::Active => {
+                                    conn.conn( move |conn| {
+                                        conn.query_row("SELECT announcement FROM announcements WHERE state = 'Active' AND channel = ?1 ORDER BY RANDOM() LIMIT 1", params![id_clone.clone()], |row| {
+                                            Ok(row.get::<_, String>(0).optional())
+                                        })?
+                                    }).await?
+                                }
+                                AnnouncementState::Custom(activity) => {
+                                    conn.conn( move |conn| {
+                                        conn.query_row("SELECT announcement FROM announcements WHERE (state = 'Active' OR state = ?1) AND channel = ?2 ORDER BY RANDOM() LIMIT 1", params![activity, id_clone.clone()], |row| {
+                                            Ok(row.get::<_, String>(0).optional())
+                                        })?
+                                    }).await?
+                                },
+                                _ => unreachable!(),
+                            };
+                            if let Some(message) = message {
+                                let bot_state = bot_state.lock().await;
+                                announcement(&channel_id.clone(), "1091219021", &bot_state.oauth_token_bot, bot_state.clone().bot_id, message).await?;
+                            }
+                            {
+                                let bot_state_config = &mut bot_state.lock().await.config;
+                                let config = bot_state_config.get_channel_config(&channel.clone());
+                                config.announcement_config.last_sent = Some(Instant::now());
+                                sleep_duration = interval;
+                                bot_state_config.save_config();
+                            }
+                            
+                            
+                        }
+                    }
                 }
-                let bot_state_config = &mut bot_state.config;
-                let config = bot_state_config.get_channel_config(&channel_name.clone());
-                config.announcement_config.last_sent = Some(Instant::now());
-                bot_state_config.save_config();
             }
+            
         }
+        tokio::time::sleep(sleep_duration).await;
     }
-    tokio::time::sleep(Duration::from_secs(1)).await;
     Ok(())
 }
 
