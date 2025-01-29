@@ -1,5 +1,27 @@
 {
   "channels": {
+    "#xcindi_": {
+      "open": true,
+      "len": 30,
+      "teamsize": 3,
+      "combined": false,
+      "queue_channel": "#xcindi_",
+      "packages": [
+        "Moderation",
+        "Database for queue",
+        "Announcement",
+        "Time"
+      ],
+      "runs": 0,
+      "announcement_config": {
+        "state": "Paused",
+        "interval": {
+          "secs": 600,
+          "nanos": 0
+        },
+        "last_sent": null
+      }
+    },
     "#krapmatt": {
       "open": false,
       "len": 20,
@@ -22,6 +44,29 @@
         "state": "Active",
         "interval": {
           "secs": 400,
+          "nanos": 0
+        },
+        "last_sent": null
+      }
+    },
+    "#nyc62truck": {
+      "open": false,
+      "len": 10,
+      "teamsize": 1,
+      "combined": false,
+      "queue_channel": "#nyc62truck",
+      "packages": [
+        "Moderation",
+        "Shoutout",
+        "Queue",
+        "Database for queue",
+        "Bungie API"
+      ],
+      "runs": 48,
+      "announcement_config": {
+        "state": "Paused",
+        "interval": {
+          "secs": 300,
           "nanos": 0
         },
         "last_sent": null
@@ -50,52 +95,7 @@
           "secs": 600,
           "nanos": 0
         },
-        "last_sent": 1738038048172
-      }
-    },
-    "#nyc62truck": {
-      "open": false,
-      "len": 10,
-      "teamsize": 1,
-      "combined": false,
-      "queue_channel": "#nyc62truck",
-      "packages": [
-        "Moderation",
-        "Shoutout",
-        "Queue",
-        "Database for queue",
-        "Bungie API"
-      ],
-      "runs": 48,
-      "announcement_config": {
-        "state": "Paused",
-        "interval": {
-          "secs": 300,
-          "nanos": 0
-        },
-        "last_sent": null
-      }
-    },
-    "#xcindi_": {
-      "open": true,
-      "len": 30,
-      "teamsize": 3,
-      "combined": false,
-      "queue_channel": "#xcindi_",
-      "packages": [
-        "Moderation",
-        "Database for queue",
-        "Announcement",
-        "Time"
-      ],
-      "runs": 0,
-      "announcement_config": {
-        "state": "Paused",
-        "interval": {
-          "secs": 600,
-          "nanos": 0
-        },
-        "last_sent": null
+        "last_sent": 1738138771389
       }
     }
   }

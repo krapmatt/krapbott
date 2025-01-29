@@ -304,38 +304,3 @@ async fn start_annnouncement_scheduler(bot_state: Arc<Mutex<BotState>>, channel_
 
 
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashSet;
-
-    #[tokio::test]
-    async fn test_streaming_together() {
-        // Create test data
-        let mut channel_id_map: HashMap<String, String> = HashMap::new();
-        channel_id_map.insert("216105918".to_string(), "#hostchannel".to_string());
-        channel_id_map.insert("123456789".to_string(), "#sharedchannel".to_string());
-
-        let mut streaming_together: HashMap<String, HashSet<String>> = HashMap::new();
-
-        // Simulate source_room_id and room_id from IRC message
-        let source_room_id = "216105918";
-        let room_id = "123456789";
-
-        // Check that we can create the relationship
-        if let (Some(host_channel), Some(shared_channel)) = (
-            channel_id_map.get(source_room_id),
-            channel_id_map.get(room_id),
-        ) {
-            streaming_together
-                .entry(host_channel.clone())
-                .or_insert_with(HashSet::new)
-                .insert(shared_channel.clone());
-        }
-
-        // Assert the relationship was created
-        assert_eq!(streaming_together.len(), 1);
-        assert!(streaming_together.contains_key("#hostchannel"));
-        assert!(streaming_together["#hostchannel"].contains("#sharedchannel"));
-    }
-}

@@ -561,6 +561,7 @@
                     throw new Error(`Failed to update queue: ${response.status}`);
                 }
                 showNotification("Queue updated successfully!", "success");
+                fetchQueueForChannel(channelId);
             } catch (error) {
                 showNotification("Error updating queue. Please try again.", "error");
             }

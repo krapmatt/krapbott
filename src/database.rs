@@ -1,4 +1,5 @@
 use async_sqlite::{rusqlite::{params, Connection, Error}, Client, ClientBuilder};
+use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite, SqlitePool};
 
 use crate::{api::{get_membershipid, MemberShip}, models::{BotError, TwitchUser}};
 pub const QUEUE_TABLE: &str = "CREATE TABLE IF NOT EXISTS queue (
@@ -53,6 +54,32 @@ pub const BAN_TABLE: &str = "CREATE TABLE IF NOT EXISTS banlist (
     twitch_name TEXT NOT NULL,
     reason TEXT
 )";
+
+pub async fn initialize_database_sqlx() -> Result<SqlitePool, sqlx::Error> {
+    let database_url = "sqlite:/D:/program/krapbott/public/commands.db";
+    
+    // Create the connection pool
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(database_url)
+        .await?;
+
+    // Initialize tables
+    let queries = [
+        QUEUE_TABLE,
+        COMMANDS_TEMPLATE,
+        USER_TABLE,
+        COMMAND_TABLE,
+        ANNOUNCEMENT_TABLE,
+        BAN_TABLE,
+    ];
+
+    for query in queries {
+        sqlx::query(query).execute(&pool).await?;
+    }
+
+    Ok(pool)
+}
 
 pub fn initialize_database() -> Connection {
     let conn = Connection::open("D:/program/krapbott/public/commands.db").unwrap();

@@ -1,10 +1,11 @@
 
 use std::sync::Arc;
 
-use async_sqlite::rusqlite::params;
+use async_sqlite::rusqlite::{params, Transaction, Result};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sqlx::query;
 use tokio::sync::{mpsc::{self, Sender, UnboundedSender}, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -70,7 +71,7 @@ pub async fn get_queue_handler(channel_id: String) -> Result<impl warp::Reply, w
 }
 use warp::{http::StatusCode, reject, reply::json, Filter};
 
-use crate::{database::{initialize_database, initialize_database_async}, models::{BotConfig, BotError}};
+use crate::{database::{initialize_database, initialize_database_async, initialize_database_sqlx}, models::{BotConfig, BotError}};
 
 pub async fn remove_from_queue_handler(
     body: serde_json::Value,
@@ -130,30 +131,18 @@ pub struct QueueUpdate {
 }
 
 pub async fn update_queue_order(data: UpdateQueueOrderRequest) -> Result<impl warp::Reply, warp::Rejection> {
-    let mut conn = initialize_database_async().await;
-    conn.conn(move |conn| {
-        let tx = conn.unchecked_transaction().unwrap();
-        for entry in &data.new_order {
-            conn.execute(
-                "UPDATE queue SET position = ?1 WHERE twitch_name = ?2 AND channel_id = ?3",
-                params![entry.position, &entry.twitch_name, "#krapmatt"]
-            ).unwrap();
-            println!("data {:?}", entry);
+    let mut conn = initialize_database();
+    let channel_id = format!("#{}", &data.channel_id);
+    let update_stmt = "UPDATE queue SET position = position + 10000 WHERE channel_id = ?1";
+    conn.execute(update_stmt, params![channel_id]).unwrap();
 
-        }
-        println!("channel {}", data.channel_id);
-        tx.commit();
-        Ok(())
-    }).await;
-    println!("here");
-    /*for entry in &data.new_order {
-        tx.execute(
-            "UPDATE queue SET position = ?1 WHERE twitch_name = ?2 AND channel_id = ?3",
-            params![entry.position, &entry.twitch_name, format!("#{}", &data.channel_id)]
-        );
+    let mut stmt = conn.prepare("UPDATE queue SET position = ?1 WHERE twitch_name = ?2 AND channel_id = ?3").unwrap();
+    for entry in &data.new_order {
+        stmt.execute(params![entry.position, &entry.twitch_name, channel_id]).unwrap();
+        println!("{}", entry.twitch_name);
+        println!("Updated data {:?}", entry);
+    }
 
-    }*/
-    
     Ok(warp::reply::json(&"Queue order updated"))
 }
 
