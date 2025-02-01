@@ -82,13 +82,7 @@ pub async fn initialize_currency_database() -> Result<SqlitePool, sqlx::Error> {
 
     Ok(pool)
 }
-pub async fn initialize_database_sqlx() -> Result<SqlitePool, sqlx::Error> {
-    let pool = SqlitePool::connect_with(
-        SqliteConnectOptions::from_str("sqlite:/D:/program/krapbott/public/commands.db")?
-            .create_if_missing(true)
-    ).await?;
-    Ok(pool)
-}
+
 pub fn initialize_database() -> Connection {
     let conn = Connection::open("D:/program/krapbott/public/commands.db").unwrap();
     conn.execute(USER_TABLE, []).unwrap();
