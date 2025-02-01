@@ -1,7 +1,7 @@
 {
   "channels": {
     "#xcindi_": {
-      "open": true,
+      "open": false,
       "len": 30,
       "teamsize": 3,
       "combined": false,
@@ -10,7 +10,8 @@
         "Moderation",
         "Database for queue",
         "Announcement",
-        "Time"
+        "Time",
+        "Queue"
       ],
       "runs": 0,
       "announcement_config": {
@@ -20,11 +21,12 @@
           "nanos": 0
         },
         "last_sent": null
-      }
+      },
+      "sub_only": false
     },
     "#krapmatt": {
       "open": false,
-      "len": 20,
+      "len": 25,
       "teamsize": 5,
       "combined": false,
       "queue_channel": "#krapmatt",
@@ -39,15 +41,18 @@
         "Time",
         "Announcement"
       ],
-      "runs": 0,
+      "runs": 80,
       "announcement_config": {
-        "state": "Active",
+        "state": {
+          "Custom": "crotayeet"
+        },
         "interval": {
-          "secs": 400,
+          "secs": 600,
           "nanos": 0
         },
-        "last_sent": null
-      }
+        "last_sent": 1738365704512
+      },
+      "sub_only": false
     },
     "#nyc62truck": {
       "open": false,
@@ -62,7 +67,7 @@
         "Database for queue",
         "Bungie API"
       ],
-      "runs": 48,
+      "runs": 58,
       "announcement_config": {
         "state": "Paused",
         "interval": {
@@ -70,13 +75,14 @@
           "nanos": 0
         },
         "last_sent": null
-      }
+      },
+      "sub_only": false
     },
     "#samoan_317": {
       "open": false,
       "len": 30,
-      "teamsize": 2,
-      "combined": true,
+      "teamsize": 3,
+      "combined": false,
       "queue_channel": "#samoan_317",
       "packages": [
         "Moderation",
@@ -86,7 +92,7 @@
         "Time",
         "Queue"
       ],
-      "runs": 188,
+      "runs": 0,
       "announcement_config": {
         "state": {
           "Custom": "active"
@@ -95,8 +101,9 @@
           "secs": 600,
           "nanos": 0
         },
-        "last_sent": 1738138771389
-      }
+        "last_sent": 1738392109995
+      },
+      "sub_only": false
     }
   }
 }

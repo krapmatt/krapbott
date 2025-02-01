@@ -133,6 +133,7 @@ lazy_static::lazy_static! {
             ("!register".to_string(), register()),
             ("!mod_register".to_string(), mod_register()),
             ("!bungiename".to_string(), bungie_name()),
+            ("!add_to_database".to_string(), add_manually_to_database()),
         ].into_iter().collect() 
     };
 
@@ -263,6 +264,22 @@ pub fn delete_template() -> Command {
     }
 }
 
+fn join_cmd() -> Command { 
+    Command {
+        permission: PermissionLevel::Follower,
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+            let fut = async move {
+                let mut bot_state = bot_state.lock().await;
+                bot_state.handle_join(&msg, client, &conn).await?;
+                Ok(())
+            };
+            Box::pin(fut)
+        }),
+        description: "Join the queue".to_string(),
+        usage: "!join bungiename#0000".to_string()
+    }
+}
+
 pub fn lurk() -> Command {
     Command {
         permission: PermissionLevel::User,
@@ -296,18 +313,19 @@ pub fn so() -> Command {
         handler: Arc::new(move |msg: Privmsg<'_>, client: Arc<Mutex<tmi::Client>>, conn, bot_state| {
             let template_manager = TemplateManager {conn: Arc::new(conn)};
             let fut = async move {
-                let template = template_manager
+                let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
+                let reply =  if words.len() == 2 {
+                    let template = template_manager
                     .get_template("Shoutout".to_string(), "!so".to_string(), Some(msg.channel().to_string())).await.unwrap_or("Let's give a big Shoutout to https://www.twitch.tv/%receiver% ! Make sure to check them out and give them a FOLLOW <3! They are amazing person!".to_string());
-                let variables = generate_variables(&msg);
-
-                let reply = parse_template(&template, &variables);
-                let bot_state = bot_state.lock().await;
-                let twitch_name: Vec<&str> = msg.text().split_ascii_whitespace().collect();
-                let mut twitch_name = twitch_name[1].to_string();
-                if twitch_name.contains("@") {
-                    twitch_name.remove(0);
-                }
-                bot_commands::shoutout(&bot_state.oauth_token_bot, bot_state.clone().bot_id, &get_twitch_user_id(&twitch_name).await?, msg.channel_id()).await;
+                    let variables = generate_variables(&msg);
+                    let twitch_name = words[1].strip_prefix("@").unwrap_or(words[1]).to_string();
+                    let bot_state = bot_state.lock().await;
+                    bot_commands::shoutout(&bot_state.oauth_token_bot, bot_state.clone().bot_id, &get_twitch_user_id(&twitch_name).await?, msg.channel_id()).await;
+                    drop(bot_state);
+                    parse_template(&template, &variables)
+                } else {
+                    "Arent you missing something?".to_string()
+                };
                 client.lock().await.privmsg(msg.channel(), &reply).send().await?;
                 Ok(())
             };
@@ -543,22 +561,6 @@ fn random() -> Command {
         }),
         description: "Select random users in queue".to_string(),
         usage: "!random".to_string()
-    }
-}
-
-fn join_cmd() -> Command { 
-    Command {
-        permission: PermissionLevel::Follower,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
-            let fut = async move {
-                let mut bot_state = bot_state.lock().await;
-                bot_state.handle_join(&msg, client, &conn).await?;
-                Ok(())
-            };
-            Box::pin(fut)
-        }),
-        description: "Join the queue".to_string(),
-        usage: "!join bungiename#0000".to_string()
     }
 }
 
@@ -896,7 +898,7 @@ fn add_announcement() -> Command {
                 
                 let reply = if msg_vec.len() >= 4 {
                     let name = msg_vec[2].to_string();
-                    let state = msg_vec[1].to_string();
+                    let state = msg_vec[1].to_string().to_lowercase();
                     let announcment = msg_vec[3..].to_owned().join(" ");
                     conn.conn(move |conn| conn.execute("INSERT INTO announcements (name, announcement, channel, state) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(name, channel) DO UPDATE SET announcement = excluded.announcement", 
                         params![name, announcment, channel, state])
@@ -1122,16 +1124,16 @@ fn announcement_state() -> Command {
                 let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
                 if msg_vec.len() == 2 {
                     let mut bot_state = bot_state.lock().await;
-                    let mes = msg_vec[1..].join(" ").to_string();
-                    let state = if mes=="Paused".to_owned() {
+                    let mes = msg_vec[1..].join(" ").to_string().to_lowercase();
+                    let state = if mes =="paused".to_owned() {
                         AnnouncementState::Paused
-                    } else if mes == "Active".to_owned() {
+                    } else if mes == "active".to_owned() {
                         AnnouncementState::Active
                     } else {
                         AnnouncementState::Custom(mes)
                     };
 
-                        
+                    send_message(&msg, client.lock().await.borrow_mut(), &format!("State of announcements is {:?}", state)).await?;
                     bot_state.config.get_channel_config(msg.channel()).announcement_config.state = state;
                     bot_state.config.save_config();
                 }
@@ -1186,7 +1188,7 @@ fn help_command() -> Command {
 
                 let reply = if words.len() == 2 {
                     // Specific command help
-                    let command_name = words[1];//.trim_start_matches('!'); // Remove '!' prefix
+                    let command_name = words[1];
                     if let Some((package_name, command)) = find_command(command_name) {
                         format!(
                             "Command: {} || Group: {} || Description: {} || Usage: {}",
@@ -1215,5 +1217,35 @@ fn help_command() -> Command {
         }),
         description: "Displays this help message or details about a specific command.".to_string(),
         usage: "!help [!<command>]".to_string(),
+    }
+}
+
+fn add_manually_to_database() -> Command {
+    Command {
+        permission: PermissionLevel::Moderator, // Allow all users to use this command
+        handler: Arc::new(|msg, client, conn, _bot_state| {
+            let msg_text = msg.text().to_string();
+            Box::pin(async move {
+                let words: Vec<&str> = msg_text.split_whitespace().collect();
+                let reply = if words.len() == 3 {
+                    let twitch_name = words[1].strip_prefix("@").unwrap_or(words[1]).to_string();
+                    let bungie_name = words[2].to_string();
+                    let twitch_name_clone = twitch_name.clone();
+                    let bungie_name_clone = bungie_name.clone();
+
+                    conn.conn(move |conn| {
+                        conn.execute("INSERT INTO user (twitch_name, bungie_name) VALUES (?1, ?2)
+                            ON CONFLICT(twitch_name) DO UPDATE SET bungie_name = excluded.bungie_name", params![twitch_name, bungie_name])
+                    }).await?;
+                    format!("{} has been added as {}", twitch_name_clone, bungie_name_clone)
+                } else {
+                    "Something wrong".to_string()
+                };
+                client.lock().await.privmsg(msg.channel(), &reply).send().await?;
+                Ok(())
+            })
+        }),
+        description: "Adds a user to the database.".to_string(),
+        usage: "!add_to_database @twitch_name bungie_name#0000".to_string()
     }
 }

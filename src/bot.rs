@@ -59,29 +59,51 @@ impl BotState {
 }
 
 pub async fn bot_task(channel: String, state: Arc<Mutex<BotState>>, conn: async_sqlite::Client) -> Result<(), BotError> {
-    let client = {
-        let mut bot_state = state.lock().await;
-        Arc::new(Mutex::new(bot_state.client_channel(channel.clone()).await))
-    };
-    let mut channel_id_map: HashMap<String, String> = HashMap::new();
-     //ADD CHANNEL ID MAP TO BOTSTATE       
-    let channels = BotConfig::load_config().channels.into_keys().collect::<Vec<String>>();
-    
-    for mut channel in channels {
-        channel.remove(0);
-        let id = get_twitch_user_id(&channel).await?;
-        channel_id_map.insert(id, format!("#{}", channel));
-    }
-    let bot_state_clone = Arc::clone(&state);
-    let conn_clone = conn.clone();
-    tokio::spawn(async move {
-        let channel = channel.strip_prefix("#").unwrap_or(&channel).to_string();
-        let id = get_twitch_user_id(&channel).await.unwrap();
-        if let Err(e) = start_annnouncement_scheduler(bot_state_clone, id, channel.clone(), conn_clone).await {
-            eprintln!("Announcement error: {}", e);
+    let mut retry_attempts = 0;
+    let channel_clone = channel.clone();
+    loop {
+        let client = {
+            let mut bot_state = state.lock().await;
+            Arc::new(Mutex::new(bot_state.client_channel(channel_clone.clone()).await))
+        };
+        let mut channel_id_map: HashMap<String, String> = HashMap::new();
+        //ADD CHANNEL ID MAP TO BOTSTATE       
+        let channels = BotConfig::load_config().channels.into_keys().collect::<Vec<String>>();
+        for mut channel in channels {
+            channel.remove(0);
+            let id = get_twitch_user_id(&channel).await?;
+            channel_id_map.insert(id, format!("#{}", channel));
         }
-    });
+        
+        let bot_state_clone = Arc::clone(&state);
+        let conn_clone = conn.clone();
+        let channel_clone = channel_clone.clone();
+        tokio::spawn(async move {
+            let channel = channel_clone.strip_prefix("#").unwrap_or(&channel_clone).to_string();
+            let id = get_twitch_user_id(&channel).await.unwrap();
+            if let Err(e) = start_annnouncement_scheduler(bot_state_clone, id, channel.clone(), conn_clone).await {
+                eprintln!("Announcement error: {}", e);
+            }
+        });
+        match run_bot_loop(Arc::clone(&state), client, conn.clone(), channel_id_map).await {
+            Ok(_) => {
+                // If bot exits cleanly, break out of loop
+                break Ok(());
+            }
+            Err(e) => {
+                eprintln!("Bot task for {} failed: {}. Restarting in 5 seconds...", channel, e);
+                retry_attempts += 1;
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
+        }
+        if retry_attempts >= 10 {
+            eprintln!("Bot task for {} has failed too many times. Giving up.", channel);
+            break Ok(());
+        }
+    } 
+}
 
+async fn run_bot_loop(state: Arc<Mutex<BotState>>, client: Arc<Mutex<Client>>, conn: async_sqlite::Client, channel_id_map: HashMap<String, String>) -> Result<(), BotError> {
     loop {
         let irc_msg = client.lock().await.recv().await?;
         if let Some(source_room_id) = irc_msg.tags().find(|(key, _)| *key == "source-room-id").map(|(_, value)| value) {
@@ -116,12 +138,11 @@ pub async fn bot_task(channel: String, state: Arc<Mutex<BotState>>, conn: async_
     }
 }
 
-
-pub async fn manage_channels(state: Arc<Mutex<BotState>>, config: Arc<Mutex<BotConfig>>, conn: async_sqlite::Client) {
+pub async fn manage_channels(state: Arc<Mutex<BotState>>, conn: async_sqlite::Client) {
     let mut tasks: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
     loop {
         // Periodically check for new channels in the configuration
-        let bot_config = config.lock().await;
+        let bot_config = BotConfig::load_config();
 
         for (channel, _) in &bot_config.channels {
             if !tasks.contains_key(channel) {
@@ -137,25 +158,45 @@ pub async fn manage_channels(state: Arc<Mutex<BotState>>, config: Arc<Mutex<BotC
                 tasks.insert(channel.clone(), handle);
             }
         }
-        
-        // Clean up tasks for removed channels
-        tasks.retain(|channel, handle| {
-            if !bot_config.channels.contains_key(channel) {
-                handle.abort();
-                return false;
+        for (channel, _) in &bot_config.channels {
+            let should_restart = match tasks.get(channel) {
+                Some(handle) => handle.is_finished(), // If finished (crashed/exited), restart
+                None => true,
+            };
+
+            if should_restart {
+                println!("Restarting bot task for channel: {}", channel);
+                let channel_clone = channel.clone();
+                let state_clone = Arc::clone(&state);
+                let conn_clone = conn.clone();
+
+                let handle = tokio::spawn(async move {
+                    if let Err(e) = bot_task(channel_clone, state_clone, conn_clone).await {
+                        eprintln!("Bot task for channel failed: {}", e);
+                    }
+                });
+
+                tasks.insert(channel.clone(), handle);
             }
-            true
-        });
+        }
+        let existing_channels: Vec<String> = tasks.keys().cloned().collect();
+        for channel in existing_channels {
+            if !bot_config.channels.contains_key(&channel) {
+                if let Some(handle) = tasks.remove(&channel) {
+                    handle.abort();
+                }
+            }
+        }
+        drop(bot_config);
         tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
     }
 }
 
 pub async fn run_chat_bot() -> Result<(), BotError> {    
-    let config = Arc::new(Mutex::new(BotConfig::load_config()));
     let bot_state = Arc::new(Mutex::new(BotState::new()));
     let conn = initialize_database_async().await;
 
-    manage_channels(Arc::clone(&bot_state), config, conn).await;
+    manage_channels(Arc::clone(&bot_state), conn).await;
         
     Ok(())
 }
@@ -264,14 +305,14 @@ async fn start_annnouncement_scheduler(bot_state: Arc<Mutex<BotState>>, channel_
                             let message = match state {
                                 AnnouncementState::Active => {
                                     conn.conn( move |conn| {
-                                        conn.query_row("SELECT announcement FROM announcements WHERE state = 'Active' AND channel = ?1 ORDER BY RANDOM() LIMIT 1", params![id_clone.clone()], |row| {
+                                        conn.query_row("SELECT announcement FROM announcements WHERE state = 'active' AND channel = ?1 ORDER BY RANDOM() LIMIT 1", params![id_clone.clone()], |row| {
                                             Ok(row.get::<_, String>(0).optional())
                                         })?
                                     }).await?
                                 }
                                 AnnouncementState::Custom(activity) => {
                                     conn.conn( move |conn| {
-                                        conn.query_row("SELECT announcement FROM announcements WHERE (state = 'Active' OR state = ?1) AND channel = ?2 ORDER BY RANDOM() LIMIT 1", params![activity, id_clone.clone()], |row| {
+                                        conn.query_row("SELECT announcement FROM announcements WHERE (state = 'active' OR state = ?1) AND channel = ?2 ORDER BY RANDOM() LIMIT 1", params![activity, id_clone.clone()], |row| {
                                             Ok(row.get::<_, String>(0).optional())
                                         })?
                                     }).await?

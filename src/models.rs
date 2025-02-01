@@ -158,7 +158,8 @@ pub struct ChannelConfig {
     pub queue_channel: String,
     pub packages: Vec<String>,
     pub runs: usize,
-    pub announcement_config: AnnouncementConfig, 
+    pub announcement_config: AnnouncementConfig,
+    pub sub_only: bool, 
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -209,6 +210,7 @@ impl BotConfig {
                 packages: vec!["Moderation".to_string()],
                 runs: 0,
                 announcement_config: AnnouncementConfig::new(),
+                sub_only: false,
             })
 
     }

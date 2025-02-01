@@ -1,5 +1,7 @@
+use std::str::FromStr;
+
 use async_sqlite::{rusqlite::{params, Connection, Error}, Client, ClientBuilder};
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite, SqlitePool};
+use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Pool, Sqlite, SqlitePool};
 
 use crate::{api::{get_membershipid, MemberShip}, models::{BotError, TwitchUser}};
 pub const QUEUE_TABLE: &str = "CREATE TABLE IF NOT EXISTS queue (
@@ -22,7 +24,7 @@ pub const COMMANDS_TEMPLATE: &str = "CREATE TABLE IF NOT EXISTS commands_templat
     UNIQUE (channel_id, command)
 )";
 
-pub const TEST_TABLE: &str = "DROP TABLE announcments";
+pub const TEST_TABLE: &str = "UPDATE announcements SET state = 'active' WHERE state = 'Active'";
 
 pub const USER_TABLE: &str = "CREATE TABLE IF NOT EXISTS user (
     id INTEGER PRIMARY KEY,
@@ -55,8 +57,13 @@ pub const BAN_TABLE: &str = "CREATE TABLE IF NOT EXISTS banlist (
     reason TEXT
 )";
 
-pub async fn initialize_database_sqlx() -> Result<SqlitePool, sqlx::Error> {
-    let database_url = "sqlite:/D:/program/krapbott/public/commands.db";
+pub const CURRENCY_TABLE: &str = "CREATE TABLE IF NOT EXISTS currency (
+    twitch_name TEXT NOT NULL,
+    points INTEGER NOT NULL DEFAULT 0
+)";
+
+pub async fn initialize_currency_database() -> Result<SqlitePool, sqlx::Error> {
+    let database_url = "sqlite:/D:/program/krapbott/public/currency.db";
     
     // Create the connection pool
     let pool = SqlitePoolOptions::new()
@@ -66,12 +73,7 @@ pub async fn initialize_database_sqlx() -> Result<SqlitePool, sqlx::Error> {
 
     // Initialize tables
     let queries = [
-        QUEUE_TABLE,
-        COMMANDS_TEMPLATE,
-        USER_TABLE,
-        COMMAND_TABLE,
-        ANNOUNCEMENT_TABLE,
-        BAN_TABLE,
+        CURRENCY_TABLE
     ];
 
     for query in queries {
@@ -80,7 +82,13 @@ pub async fn initialize_database_sqlx() -> Result<SqlitePool, sqlx::Error> {
 
     Ok(pool)
 }
-
+pub async fn initialize_database_sqlx() -> Result<SqlitePool, sqlx::Error> {
+    let pool = SqlitePool::connect_with(
+        SqliteConnectOptions::from_str("sqlite:/D:/program/krapbott/public/commands.db")?
+            .create_if_missing(true)
+    ).await?;
+    Ok(pool)
+}
 pub fn initialize_database() -> Connection {
     let conn = Connection::open("D:/program/krapbott/public/commands.db").unwrap();
     conn.execute(USER_TABLE, []).unwrap();
@@ -112,6 +120,23 @@ pub async fn initialize_database_async() -> Client {
         Ok(())
     }).await.expect("Failed to create database");
     client
+}
+
+pub async fn is_bungiename(x_api_key: String, bungie_name: String, twitch_name: String, conn: &Client) -> bool {
+    if let Ok(user_info) = get_membershipid(bungie_name.clone(), x_api_key).await {
+        if user_info.type_m == -1 {
+            false
+        } else {
+            conn.conn(move |conn| Ok(conn.execute(
+            "INSERT INTO user (twitch_name, bungie_name, membership_id, membership_type) VALUES (?1, ?2, ?3, ?4)
+                ON CONFLICT(twitch_name) DO UPDATE SET bungie_name = excluded.bungie_name",
+                params![twitch_name, bungie_name, user_info.id, user_info.type_m],        
+            )?)).await;
+            true
+        }
+    } else {
+        false
+    }
 }
 
 pub async fn save_to_user_database(conn: &Client, user: TwitchUser, x_api_key: String) -> Result<String, BotError> {

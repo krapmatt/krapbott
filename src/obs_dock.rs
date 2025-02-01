@@ -71,7 +71,7 @@ pub async fn get_queue_handler(channel_id: String) -> Result<impl warp::Reply, w
 }
 use warp::{http::StatusCode, reject, reply::json, Filter};
 
-use crate::{database::{initialize_database, initialize_database_async, initialize_database_sqlx}, models::{BotConfig, BotError}};
+use crate::{database::initialize_database, models::{BotConfig, BotError}};
 
 pub async fn remove_from_queue_handler(
     body: serde_json::Value,

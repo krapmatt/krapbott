@@ -7,9 +7,9 @@ use dotenv::var;
 
 
 use serde_json::Value;
-use tmi::Client;
+use tmi::{Badge, Client};
 
-use crate::database::user_exists_in_database;
+use crate::database::{is_bungiename, user_exists_in_database};
 use crate::{api::{get_membershipid, get_users_clears, MemberShip}, bot::BotState, database::{load_membership, pick_random, remove_command, save_command, save_to_user_database}, models::{BotError, CommandAction, TwitchUser}};
 
 pub const ADMINS: &[&str] = &["KrapMatt", "ThatJK"];
@@ -24,6 +24,15 @@ pub async fn is_broadcaster(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mut
     
 }
 
+pub fn is_subscriber(msg: &tmi::Privmsg<'_>) -> bool {
+    println!("{:?}", msg.badges().into_iter().collect::<Vec<&Badge<'_>>>());
+    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "subscriber" || badge.as_badge_data().name() == "moderator" ) || ADMINS.contains(&&*msg.sender().name().to_string()) {
+        true
+    } else {
+        false
+    }
+}
+
 pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
     if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "moderator" || badge.as_badge_data().name() == "broadcaster") || ADMINS.contains(&&*msg.sender().name().to_string()) {
         return true;
@@ -34,7 +43,7 @@ pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex
     
 }
 pub async fn is_vip(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
-    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "moderator" || badge.as_badge_data().name() == "broadcaster" || badge.as_badge_data().name() == "vip") | ADMINS.contains(&&*msg.sender().name().to_string()) {
+    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "moderator" || badge.as_badge_data().name() == "broadcaster" || badge.as_badge_data().name() == "vip") || ADMINS.contains(&&*msg.sender().name().to_string()) {
         return true;
     } else {
         _ = client.lock().await.privmsg(msg.channel(), "You are not a VIP/Moderator. You can't use this command").send().await;
@@ -170,6 +179,7 @@ async fn is_banned_from_queue(msg: &tmi::Privmsg<'_>, conn: &SqliteClient, clien
     
 }
 
+
 impl BotState {
     //User can join into queue
     pub async fn handle_join(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, conn: &SqliteClient) -> Result<(), BotError> {
@@ -179,40 +189,39 @@ impl BotState {
         let channel = config.clone().queue_channel;
 
         if config.open {
-            if !is_banned_from_queue(msg, conn, &mut client).await? {
-                if let Some((_join, name)) = msg.text().split_once(" ") {
-                    if let Some(name) = is_valid_bungie_name(name) {
-                        let mut new_user = TwitchUser {
-                            twitch_name: msg.sender().name().to_string(),
-                            bungie_name: name.trim().to_string(),
-                        };
-                        if let Some(bungie_name) = user_exists_in_database(conn, new_user.twitch_name.clone()).await {
-                            new_user.bungie_name = bungie_name;
-                        }
+            if config.sub_only && !is_subscriber(&msg) {
+                send_message(&msg, &mut client, "Only subscribers can enter the queue.").await?;
+                return Ok(());
+            }
 
-                        process_queue_entry(msg, &mut client, config.len, conn, new_user, Some(channel)).await?;
-                    
-                    } else {
-                        send_invalid_name_reply(msg, &mut client).await?;
+            if !is_banned_from_queue(msg, conn, &mut client).await? {
+                let mut bungie_name = user_exists_in_database(conn, msg.sender().name().to_string()).await;
+                
+                if bungie_name.is_none() {
+                    if let Some((_join, name)) = msg.text().split_once(" ") {
+                        if let Some(bungie) = is_valid_bungie_name(name) {
+                            if is_bungiename(self.x_api_key.clone(), bungie, msg.sender().name().to_string(), conn).await {
+                                bungie_name = Some(name.to_string());
+                            }
+                        }
                     }
+                }
+
+                if let Some(name) = bungie_name {
+                    let new_user = TwitchUser {
+                        twitch_name: msg.sender().name().to_string(),
+                        bungie_name: name.trim().to_string(),
+                    };
+                    process_queue_entry(msg, &mut client, config.len, conn, new_user, Some(channel)).await?;
+                    
                 } else {
-                    if let Some(bungie_name) = user_exists_in_database(conn, msg.sender().name().to_string()).await {
-                        let new_user = TwitchUser {
-                            twitch_name: msg.sender().name().to_string(),
-                            bungie_name: bungie_name
-                        };
-                        process_queue_entry(msg, &mut client, config.len, conn, new_user, Some(channel)).await?;
-                    } else {
-                        send_invalid_name_reply(msg, &mut client).await?;
-                    }
-                    
+                    send_invalid_name_reply(msg, &mut client).await?;
                 }
             }
-            Ok(())
         } else {
             client.privmsg(msg.channel(), "Queue is closed").send().await?;
-            Ok(())
         }
+        Ok(())
     }
     
     pub async fn handle_next(&mut self, channel_id: String, conn: &SqliteClient) -> Result<String, BotError> {
