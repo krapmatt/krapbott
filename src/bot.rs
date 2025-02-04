@@ -1,8 +1,7 @@
 use crate::{ 
-    bot_commands::{announcement, ban_bots, fetch_lurkers, get_twitch_user_id, is_channel_live, send_message, shoutout}, commands::create_command_dispatcher, 
-    database::{get_command_response, initialize_currency_database}, models::{has_permission, AnnouncementState, BotConfig, BotError},
+    bot_commands::{announcement, ban_bots, get_twitch_user_id, is_channel_live, send_message, shoutout}, commands::create_command_dispatcher, 
+    database::get_command_response, models::{has_permission, AnnouncementState, BotConfig, BotError},
 };
-use async_sqlite::rusqlite::{params, OptionalExtension};
 use dotenvy::dotenv;
 use rand::{thread_rng, Rng};
 use regex::Regex;

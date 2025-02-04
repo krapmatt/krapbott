@@ -6,7 +6,6 @@ use crate::bot_commands::get_twitch_user_id;
 use crate::bot_commands::modify_command;
 use crate::bot_commands::process_queue_entry;
 use crate::bot_commands::unban_player_from_queue;
-use crate::database::initialize_currency_database;
 use crate::models::AnnouncementState;
 use crate::models::CommandAction;
 use crate::models::TemplateManager;
@@ -16,10 +15,7 @@ use crate::bot_commands::register_user;
 use std::collections::HashSet;
 use std::time::Duration;
 use std::{borrow::BorrowMut, collections::HashMap, sync::Arc};
-
 use crate::{bot::BotState, bot_commands::{bungiename, is_moderator, send_message}, models::{BotError, PermissionLevel}};
-use async_sqlite::rusqlite::params;
-use async_sqlite::Client as SqliteClient;
 use chrono::FixedOffset;
 use futures::future::BoxFuture;
 use serde::Deserialize;

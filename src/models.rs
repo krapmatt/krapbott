@@ -1,7 +1,5 @@
 use core::fmt;
-use std::{collections::HashMap, error::Error, fs::File, io::{Read, Write}, path::Path, sync::Arc, time::{Duration, Instant, UNIX_EPOCH}};
-
-use async_sqlite::{rusqlite::{self, params}, Client as SqliteClient};
+use std::{collections::HashMap, error::Error, fs::File, io::{Read, Write}, path::Path, sync::Arc, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use sqlx::{pool, SqlitePool};
 use tmi::{client::{read::RecvError, write::SendError, ReconnectError}, Client, MessageParseError};
@@ -79,16 +77,6 @@ impl fmt::Display for BotError {
 }
 
 impl Error for BotError {}
-impl From<async_sqlite::Error> for BotError {
-    fn from(err: async_sqlite::Error) -> BotError {
-        BotError { error_code: 99, string: Some(err.to_string()) }
-    }
-}
-impl From<rusqlite::Error> for BotError {
-    fn from(err: rusqlite::Error) -> BotError {
-        BotError { error_code: 100, string: Some(err.to_string()) }
-    }
-}
 impl From<RecvError> for BotError {
     fn from(err: RecvError) -> BotError {
         BotError { error_code: 101, string: Some(err.to_string()) }
