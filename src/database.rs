@@ -1,8 +1,5 @@
 use std::{str::FromStr, sync::Arc};
-
-use async_sqlite::{rusqlite::{params, Connection, Error}, Client, ClientBuilder};
 use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Pool, Sqlite, SqlitePool};
-
 use crate::{api::{get_membershipid, MemberShip}, models::{BotError, TwitchUser}};
 pub const QUEUE_TABLE: &str = "CREATE TABLE IF NOT EXISTS queue (
     position INTEGER NOT NULL,
@@ -86,39 +83,6 @@ pub async fn initialize_currency_database() -> Result<Arc<SqlitePool>, sqlx::Err
 
     Ok(Arc::new(pool))
 }
-
-/*pub fn initialize_database() -> Connection {
-    let conn = Connection::open("D:/program/krapbott/public/commands.db").unwrap();
-    conn.execute(USER_TABLE, []).unwrap();
-    conn.execute(QUEUE_TABLE, []).unwrap();
-    conn.execute(COMMAND_TABLE, []).unwrap();
-    conn.execute(ANNOUNCEMENT_TABLE, []).unwrap();
-    conn.execute(BAN_TABLE, []).unwrap();
-    conn.execute(COMMANDS_TEMPLATE, []).unwrap();
-
-    return conn
-}
-
-pub async fn initialize_database_async() -> Client {
-    let client = ClientBuilder::new()
-        .path("/D:/program/krapbott/public/commands.db")
-        .journal_mode(async_sqlite::JournalMode::Wal)
-        .open()
-        .await.unwrap();
-    client.conn(|conn| {
-        conn.execute(USER_TABLE, []).unwrap();
-        conn.execute(QUEUE_TABLE, []).unwrap();
-        conn.execute(COMMAND_TABLE, []).unwrap();
-        conn.execute(ANNOUNCEMENT_TABLE, []).unwrap();
-        conn.execute(BAN_TABLE, []).unwrap();
-        conn.execute(COMMANDS_TEMPLATE, []).unwrap();
-        //conn.execute(TEST_TABLE, []).unwrap();
-
-
-        Ok(())
-    }).await.expect("Failed to create database");
-    client
-}*/
 
 pub async fn is_bungiename(x_api_key: String, bungie_name: &str, twitch_name: &str, pool: &SqlitePool) -> bool {
     if let Ok(user_info) = get_membershipid(bungie_name, x_api_key).await {
