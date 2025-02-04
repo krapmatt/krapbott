@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 
 use async_sqlite::{rusqlite::{params, Connection, Error}, Client, ClientBuilder};
 use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Pool, Sqlite, SqlitePool};
@@ -57,17 +57,21 @@ pub const BAN_TABLE: &str = "CREATE TABLE IF NOT EXISTS banlist (
     reason TEXT
 )";
 
-pub const CURRENCY_TABLE: &str = "CREATE TABLE IF NOT EXISTS currency (
-    twitch_name TEXT NOT NULL,
-    points INTEGER NOT NULL DEFAULT 0
-)";
+pub const CURRENCY_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS currency (
+        twitch_name TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        points INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (twitch_name, channel)
+    );
+";
 
-pub async fn initialize_currency_database() -> Result<SqlitePool, sqlx::Error> {
-    let database_url = "sqlite:/D:/program/krapbott/public/currency.db";
+pub async fn initialize_currency_database() -> Result<Arc<SqlitePool>, sqlx::Error> {
+    let database_url = "sqlite:///D:/program/krapbott/public/commands.db";
     
     // Create the connection pool
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(8)
         .connect(database_url)
         .await?;
 
@@ -80,10 +84,10 @@ pub async fn initialize_currency_database() -> Result<SqlitePool, sqlx::Error> {
         sqlx::query(query).execute(&pool).await?;
     }
 
-    Ok(pool)
+    Ok(Arc::new(pool))
 }
 
-pub fn initialize_database() -> Connection {
+/*pub fn initialize_database() -> Connection {
     let conn = Connection::open("D:/program/krapbott/public/commands.db").unwrap();
     conn.execute(USER_TABLE, []).unwrap();
     conn.execute(QUEUE_TABLE, []).unwrap();
@@ -114,174 +118,119 @@ pub async fn initialize_database_async() -> Client {
         Ok(())
     }).await.expect("Failed to create database");
     client
-}
+}*/
 
-pub async fn is_bungiename(x_api_key: String, bungie_name: String, twitch_name: String, conn: &Client) -> bool {
-    if let Ok(user_info) = get_membershipid(bungie_name.clone(), x_api_key).await {
+pub async fn is_bungiename(x_api_key: String, bungie_name: &str, twitch_name: &str, pool: &SqlitePool) -> bool {
+    if let Ok(user_info) = get_membershipid(bungie_name, x_api_key).await {
         if user_info.type_m == -1 {
-            false
+            return false;
         } else {
-            conn.conn(move |conn| Ok(conn.execute(
-            "INSERT INTO user (twitch_name, bungie_name, membership_id, membership_type) VALUES (?1, ?2, ?3, ?4)
-                ON CONFLICT(twitch_name) DO UPDATE SET bungie_name = excluded.bungie_name",
-                params![twitch_name, bungie_name, user_info.id, user_info.type_m],        
-            )?)).await;
-            true
+            let result = sqlx::query!(
+                "INSERT INTO user (twitch_name, bungie_name, membership_id, membership_type) 
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(twitch_name) DO UPDATE SET bungie_name = excluded.bungie_name",
+                 twitch_name, bungie_name, user_info.id, user_info.type_m
+            ).execute(pool).await;
+            match result {
+                Ok(_) => return true,
+                Err(_) => return false,
+            }
         }
     } else {
-        false
+        return false;
     }
 }
 
-pub async fn save_to_user_database(conn: &Client, user: TwitchUser, x_api_key: String) -> Result<String, BotError> {
-    if let Ok(user_info) = get_membershipid(user.bungie_name.clone(), x_api_key).await {
-        if user_info.type_m == -1 {
-            Ok(format!("{} doesn't exist, check if your bungiename is correct", user.bungie_name))
-        } else {
-            let user_clone = user.clone();    
-            conn.conn(move |conn| Ok(conn.execute(
-            "INSERT INTO user (twitch_name, bungie_name, membership_id, membership_type) VALUES (?1, ?2, ?3, ?4)
-                ON CONFLICT(twitch_name) DO UPDATE SET bungie_name = excluded.bungie_name",
-                params![user_clone.twitch_name, user_clone.bungie_name, user_info.id, user_info.type_m],        
-            )?)).await?;
-            Ok(format!("{} has been registered to database as {}", user.twitch_name, user.bungie_name))
+pub async fn save_to_user_database(pool: &SqlitePool, user: TwitchUser, x_api_key: String) -> Result<String, BotError> {
+    match get_membershipid(&user.bungie_name, x_api_key).await {
+        Ok(user_info) if user_info.type_m == -1 => {
+            Ok(format!("{} doesn't exist, check if your Bungie name is correct", user.bungie_name))
         }
-    } else {
-        Ok(format!("Problem with API response, restart KrapBott"))
+        Ok(user_info) => {
+            sqlx::query!(
+                "INSERT INTO user (twitch_name, bungie_name, membership_id, membership_type)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(twitch_name) 
+                DO UPDATE SET bungie_name = excluded.bungie_name",
+                user.twitch_name, user.bungie_name, user_info.id, user_info.type_m
+            ).execute(pool).await?;
+            Ok(format!("{} has been registered to the database as {}", user.twitch_name, user.bungie_name))
+        }
+        Err(_) => Ok("Problem with API response, restart KrapBott".to_string()),
     }
 
 }
 
-pub async fn load_membership(conn: &Client, twitch_name: String) -> Option<MemberShip> {
-    let a = conn.conn(move |conn | {
-        let mut stmt = conn.prepare("SELECT membership_id, membership_type FROM user WHERE twitch_name = ?1").unwrap();
-        match stmt.query_row([&twitch_name], |row| {
-            Ok(MemberShip {
-                id: row.get(0)?,
-                type_m: row.get(1)?,
-            })
-        }) {
-            Ok(membership) => Ok(Some(membership)),
-            Err(Error::QueryReturnedNoRows) => Ok(None),
-            Err(_) => Ok(None), 
-        }
-    }).await.unwrap();
-    return a;
-
-    
+pub async fn load_membership(pool: &SqlitePool, twitch_name: String) -> Option<MemberShip> {
+    match sqlx::query!(
+        "SELECT membership_id, membership_type FROM user WHERE twitch_name = ?",
+        twitch_name
+    ).fetch_optional(pool).await {
+        Ok(Some(row)) => Some(MemberShip {
+            id: row.membership_id?,
+            type_m: row.membership_type?.try_into().unwrap(),
+        }),
+        _ => None,
+    }
 }
 
-pub fn load_from_queue(conn: &Connection, channel: &str) -> Vec<(usize, TwitchUser)> {
-    let mut stmt = conn.prepare("SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ?1").unwrap();
-    let mut queue_vec = vec![];
-    let queue_iter = stmt.query_map([channel], |row| {
-       Ok((row.get::<_, usize>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-    }).expect("There should be only valid names");
-    
-    for entry in queue_iter {
-        if let Ok(entry) = entry {
+pub async fn load_from_queue(pool: &SqlitePool, channel: &str) -> Vec<(usize, TwitchUser)> {
+    let rows = sqlx::query!(
+        "SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ?",
+        channel
+    ).fetch_all(pool).await.unwrap_or_else(|_| vec![]); 
+    rows.into_iter()
+        .map(|row| {
             let twitch_user = TwitchUser {
-                twitch_name: entry.1,
-                bungie_name: entry.2
+                twitch_name: row.twitch_name,
+                bungie_name: row.bungie_name,
             };
-            queue_vec.push((entry.0, twitch_user));
-        }
-    }
-
-    queue_vec
+            (row.position as usize, twitch_user)
+        }).collect()
 }
 
-pub async fn save_command(conn: &Client, mut command: String, reply: String, channel: Option<String>) {
-    if !command.starts_with("!") {
+pub async fn save_command(pool: &SqlitePool, mut command: String, reply: String, channel: Option<String>) {
+    if !command.starts_with('!') {
         command.insert(0, '!');
     }
-    conn.conn(move |conn| {conn.execute(
+
+    let _ = sqlx::query!(
         "INSERT INTO commands (command, reply, channel) 
-        VALUES (?1, ?2, ?3) 
-        ON CONFLICT(command)
-        DO UPDATE SET reply=excluded.reply", params![command, reply, channel]).unwrap();
-        Ok(())
-    }).await.unwrap();
-    
+        VALUES (?, ?, ?) 
+        ON CONFLICT(command) DO UPDATE SET reply = excluded.reply",
+        command, reply, channel
+    ).execute(pool).await;
 }
 
-pub async fn get_command_response(conn: &Client, command: String, channel: Option<String>) -> Result<Option<String>, BotError> {
-    let command_clone = command.clone();
+pub async fn get_command_response(pool: &SqlitePool, command: String, channel: Option<String>) -> Result<Option<String>, BotError> {
     if let Some(channel) = channel {
-        let result = conn.conn(move |conn| {
-            let mut stmt = conn.prepare("SELECT reply FROM commands WHERE command = ?1 AND channel = ?2")?;
-            match stmt.query_row(params![command.clone(), &channel], |row| row.get::<_, String>(0)) {
-                Ok(reply) => {
-                    Ok(Some(reply))
-                }
-                Err(Error::QueryReturnedNoRows) => {
-                    Ok(None)
-                }
-                Err(e) => {
-                    println!("Database error: {:?}", e);
-                    Err(e.into())
-                }
-            }
-        }).await?;
-
-        if result.is_some() {
-            return Ok(result);
+        if let Ok(Some(row)) = sqlx::query!(
+            "SELECT reply FROM commands WHERE command = ? AND channel = ?",
+            command, channel
+        ).fetch_optional(pool).await {
+            return Ok(Some(row.reply));
         }
-    } else {
-        println!("No specific channel provided, checking global command");
     }
+    // Fallback: Check global command (where channel IS NULL)
+    let global_result = sqlx::query!(
+        "SELECT reply FROM commands WHERE command = ? AND channel IS NULL",
+        command
+    ).fetch_optional(pool).await?;
 
-    
-    let global_command = conn.conn(move |conn| {
-            let mut stmt = conn.prepare("SELECT reply FROM commands WHERE command = ?1 AND channel IS NULL")?;
-            match stmt.query_row(params![&command_clone], |row| row.get::<_, String>(0)) {
-                Ok(reply) => {
-                    Ok(Some(reply))
-                }
-                Err(Error::QueryReturnedNoRows) => {
-                    Ok(None)
-                }
-                Err(e) => {
-                    println!("Database error: {:?}", e);
-                    Err(e.into())
-                }
-            }
-        }).await?;
-    Ok(global_command)
+    Ok(global_result.map(|row| row.reply))
 }
 
-pub async fn remove_command(conn: &Client, command: &str) -> bool {
+pub async fn remove_command(pool: &SqlitePool, command: &str) -> bool {
     let mut command = command.to_string();
-    command.insert(0, '!');
-    if conn.conn(move |conn| { conn.execute("DELETE FROM commands WHERE command = ?1", params![command])}).await.is_ok() {
-        true
-    } else {
-        false
+    if !command.starts_with('!') {
+        command.insert(0, '!');
     }
-   
+    sqlx::query!("DELETE FROM commands WHERE command = ?", command).execute(pool).await.is_ok() // Returns `true` if successful, `false` otherwise
 }
 
-//pick random wont work anymore
-pub async fn pick_random(conn: Client, teamsize: usize) -> Result<Vec<i64>, BotError> {
-    Ok(conn.conn_mut( move |conn| {
-        
-        let mut stmt = conn.prepare("SELECT position FROM queue ORDER BY RANDOM() LIMIT ?1")?;
-        let ids: Vec<i64> = stmt.query_map(params![teamsize], |row| row.get(0))?
-            .map(|id| id.unwrap()).collect();
-        
-        Ok(ids)
-    }).await?)
-}
-
-
-pub async fn user_exists_in_database(conn: &Client, twitch_name: String) -> Option<String> {
-    if let Ok(a) = conn.conn(move |conn| {
-        conn.query_row("SELECT bungie_name FROM user WHERE twitch_name = ?1", params![twitch_name], |row| {
-            Ok(row.get::<_, String>(0)?)
-        })
-    }).await {
-        Some(a)
-    } else {
-        None
-    }
+pub async fn user_exists_in_database(pool: &SqlitePool, twitch_name: String) -> Option<String> {
+    sqlx::query!(
+        "SELECT bungie_name FROM user WHERE twitch_name = ?",
+        twitch_name
+    ).fetch_optional(pool).await.ok().flatten().map(|row| row.bungie_name) // Extract `bungie_name` if found
 }

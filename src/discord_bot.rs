@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 
+use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
 use serenity::{all::{ButtonStyle, ChannelId, Context, CreateActionRow, CreateButton, CreateEmbed, CreateEmbedFooter, 
     CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, EditMessage, EventHandler, 
@@ -9,11 +10,10 @@ use serenity::{all::{ButtonStyle, ChannelId, Context, CreateActionRow, CreateBut
 };
 use tokio::{sync::Mutex, time::sleep};
 
-use crate::{commands::COMMAND_GROUPS, database::{initialize_database, load_from_queue}, models::BotConfig};
+use crate::{commands::COMMAND_GROUPS, database::{initialize_currency_database, load_from_queue}, models::BotConfig};
 
 struct Handler {
     queue_truck: Arc<Mutex<Option<Message>>>,
-    queue_vha: Arc<Mutex<Option<Message>>>,
     info_truck: Arc<Mutex<Option<Message>>>,
     info_samoan: Arc<Mutex<Option<Message>>>
 }
@@ -33,7 +33,7 @@ pub struct DiscordConfig {
 impl EventHandler for Handler {
     async fn message(&self, context: Context, msg: Message) {
         if msg.content == "!jk" {
-            let response = MessageBuilder::new().push("Hello JK").build();
+            let response = MessageBuilder::new().push("BLAME JK").build();
             if let Err(why) = msg.channel_id.say(&context.http, &response).await {
                 println!("Error sending message: {why:?}");
             }
@@ -45,7 +45,6 @@ impl EventHandler for Handler {
 
         let channel_ids = vec![
             ChannelId::new(1291081521935159418),
-            ChannelId::new(1304452829737521184),
             ChannelId::new(1306951678691643472),
             ChannelId::new(1320511012687843338),
         ];
@@ -61,7 +60,6 @@ impl EventHandler for Handler {
         display_packages(&ctx, 1320511012687843338).await;
         loop {
             discord_queue_embed(ChannelId::new(1291081521935159418), &self.queue_truck, "nyc62truck", &ctx).await;
-            discord_queue_embed(ChannelId::new(1304452829737521184), &self.queue_vha, "vhalidity", &ctx).await;
             display_info(&ctx, 1306951678691643472, 1061466442849075290, &self.info_truck).await;
             display_info(&ctx, 1320511012687843338, 539807398701826058, &self.info_samoan).await;
 
@@ -103,13 +101,12 @@ impl EventHandler for Handler {
 }
 
 pub async fn run_discord_bot() {
-    dotenv::dotenv().ok();
+    dotenv().ok();
     // Configure the client with your Discord bot token in the environment.
-    let token = dotenv::var("DISCORD_TOKEN").expect("Expected a token in the environment");
+    let token = dotenvy::var("DISCORD_TOKEN").expect("Expected a token in the environment");
     let intents = GatewayIntents::all();
     let handler = Handler {
         queue_truck: Arc::new(Mutex::new(None)),
-        queue_vha: Arc::new(Mutex::new(None)),
         info_truck: Arc::new(Mutex::new(None)),
         info_samoan: Arc::new(Mutex::new(None)),
     };
@@ -128,7 +125,6 @@ fn  match_ids<'a>(channel_id: GuildId) -> &'a str {
         (GuildId::new(1240716292793565284), "#krapmatt"),
         (GuildId::new(1061466442849075290), "#nyc62truck"),
         (GuildId::new(539807398701826058), "#samoan_317"),
-        (GuildId::new(633964888888311818), "#vhalidity"),
     ];
     mappings.into_iter().find(|(id, _)| *id == channel_id).map(|(_, name)| name).unwrap_or("error")
 }
@@ -172,8 +168,8 @@ async fn display_info(ctx: &Context, channel_id: u64, guild_id:u64, info_message
 }
 
 async fn discord_queue_embed(channel_id: ChannelId, queue_message: &Arc<Mutex<Option<Message>>>, channel: &str, ctx: &Context) {
-    let conn = initialize_database();
-    let mut queue = load_from_queue(&conn, &format!("#{}", channel));
+    let conn = initialize_currency_database().await.unwrap();
+    let mut queue = load_from_queue(&conn, &format!("#{}", channel)).await;
     queue.sort_by(|(a, _), (b, _)| a.cmp(b));
     // Create fancy embed message
     let embed_content = CreateEmbed::default()

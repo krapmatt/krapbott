@@ -188,7 +188,8 @@ struct BasicStats {
     mode=4 is Raid */
 
     //https://www.bungie.net/Platform/Destiny2/ {MembershipType} /Account/ {MembershipId} /Character/0/Stats/?groups=&modes=4 and ['Response']['raid']['allTime']['activitiesCleared']['basic']['displayValue']
-pub async fn get_membershipid(bungie_name: String, x_api_key: String) -> Result<MemberShip, BotError> {
+pub async fn get_membershipid(bungie_name: &str, x_api_key: String) -> Result<MemberShip, BotError> {
+    let bungie_name = bungie_name.to_string();
     let (display_name, display_name_code) = bungie_name.split_once("#").unwrap();
     
     let bungie_name = BungieName {

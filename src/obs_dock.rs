@@ -1,17 +1,18 @@
 
 use std::sync::Arc;
-
-use async_sqlite::rusqlite::{params, Transaction, Result};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::query;
-use tokio::sync::{mpsc::{self, Sender, UnboundedSender}, Mutex};
+use sqlx::SqlitePool;
+use tokio::sync::{mpsc::UnboundedSender, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use warp::{http::StatusCode, reject, reply::json, Filter};
+
+use crate::models::BotConfig;
 
 #[derive(Serialize, Clone)]
 struct QueueEntry {
-    position: i32,
+    position: i64,
     twitch_name: String,
     bungie_name: String,
 }
@@ -44,78 +45,72 @@ pub async fn connect_to_obs() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn get_queue_handler(channel_id: String) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn get_queue_handler(channel_id: String, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
     // Simulate fetching queue data¨
     let channel_id = format!("#{}", channel_id.to_ascii_lowercase());
-    let conn = initialize_database();
-    let mut stmt = conn.prepare("SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ? ORDER BY position ASC").unwrap();
+    let queue = sqlx::query_as!(
+        QueueEntry,
+        "SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
+        channel_id
+    )
+    .fetch_all(&*pool).await
+    .map_err(|_| warp::reject::reject())?;
     
+
+
+
     let mut config = BotConfig::load_config();
     let config = config.get_channel_config(&channel_id);
 
-    let rows = stmt.query_map(params![channel_id], |row| {
-            Ok(QueueEntry{
-                position: row.get(0)?,
-                twitch_name: row.get(1)?,
-                bungie_name: row.get(2)?,
-            })
-        }).unwrap();
-    let queue: Vec<QueueEntry> = rows.filter_map(Result::ok).collect();
     if queue.is_empty() {
         return Ok(warp::reply::json(&queue));
     }
     let grouped_queue: Vec<Vec<QueueEntry>> = queue.chunks(config.teamsize).map(|chunk| chunk.to_vec()).collect();
-
     Ok(warp::reply::json(&grouped_queue))
     
 }
-use warp::{http::StatusCode, reject, reply::json, Filter};
 
-use crate::{database::initialize_database, models::{BotConfig, BotError}};
 
 pub async fn remove_from_queue_handler(
     body: serde_json::Value,
+    pool: Arc<SqlitePool>
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let twitch_name = body["twitch_name"].as_str().ok_or_else(|| {
-        reject()
-    })?;
-    let channel_name = body["channel_id"].as_str().ok_or_else(|| {
-        reject()
-    })?;
-    let channel_id = format!("#{}", channel_name);
-    let conn = initialize_database();
-    let mut result = Ok(0);
-    if let Ok(_pos) = conn.query_row(
-        "SELECT position FROM queue WHERE twitch_name = ?1 AND channel_id = ?2",
-        params![twitch_name, channel_id],
-        |row| row.get::<_, i32>(0),
-    ) {
-        result = conn.execute(
-            "DELETE FROM queue WHERE twitch_name = ?1 AND channel_id = ?2",
-            params![twitch_name, channel_id],
-        );
-        let mut stmt = conn.prepare(
-            "SELECT twitch_name FROM queue WHERE channel_id = ?1 ORDER BY position ASC",
-        ).unwrap();
-        let mut rows = stmt.query(params![channel_id]).unwrap();
+    let twitch_name = body["twitch_name"].as_str().ok_or_else(|| reject())?;
+    let channel_name = body["channel_id"].as_str().ok_or_else(|| reject())?;
+    let channel_id = format!("#{}", channel_name.to_ascii_lowercase());
+
+    let position = sqlx::query!(
+        "SELECT position FROM queue WHERE twitch_name = ? AND channel_id = ?",
+        twitch_name,channel_id
+    ).fetch_optional(&*pool).await.map_err(|_| warp::reject())?;
+
+    if position.is_some() {
+        // Remove the user from queue
+        sqlx::query!(
+            "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
+            twitch_name, channel_id
+        ).execute(&*pool).await.map_err(|_| warp::reject())?;
+        
+        let queue_entries = sqlx::query!(
+            "SELECT twitch_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
+            channel_id
+        ).fetch_all(&*pool).await.map_err(|_| warp::reject())?;
+
         let mut new_position = 1;
-        while let Ok(Some(row)) = rows.next() {
-            let name: String = row.get(0).unwrap();
-            let _ = conn.execute(
-                "UPDATE queue SET position = ?1 WHERE twitch_name = ?2 AND channel_id = ?3",
-                params![new_position, name, channel_id],
-            ); 
+        for entry in queue_entries {
+            sqlx::query!(
+                "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
+                new_position, entry.twitch_name, channel_id
+            ).execute(&*pool).await.map_err(|_| warp::reject())?;
             new_position += 1;
         }
+        return Ok(warp::reply::with_status("Removed", StatusCode::OK));
     }
 
-    match result {
-        Ok(_) => Ok(warp::reply::with_status("Removed", StatusCode::OK)),
-        Err(_) => Ok(warp::reply::with_status(
-            "Failed to remove",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        )),
-    }
+    Ok(warp::reply::with_status(
+        "Failed to remove",
+        StatusCode::INTERNAL_SERVER_ERROR,
+    ))
 }
 
 #[derive(Deserialize, Debug)]
@@ -130,15 +125,17 @@ pub struct QueueUpdate {
     pub position: i64,
 }
 
-pub async fn update_queue_order(data: UpdateQueueOrderRequest) -> Result<impl warp::Reply, warp::Rejection> {
-    let mut conn = initialize_database();
-    let channel_id = format!("#{}", &data.channel_id);
-    let update_stmt = "UPDATE queue SET position = position + 10000 WHERE channel_id = ?1";
-    conn.execute(update_stmt, params![channel_id]).unwrap();
-
-    let mut stmt = conn.prepare("UPDATE queue SET position = ?1 WHERE twitch_name = ?2 AND channel_id = ?3").unwrap();
+pub async fn update_queue_order(data: UpdateQueueOrderRequest, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+    let channel_id = format!("#{}", &data.channel_id.to_lowercase());
+    sqlx::query!(
+        "UPDATE queue SET position = position + 10000 WHERE channel_id = ?",
+        channel_id
+    ).execute(&*pool).await.map_err(|_| warp::reject())?;
     for entry in &data.new_order {
-        stmt.execute(params![entry.position, &entry.twitch_name, channel_id]).unwrap();
+        sqlx::query!(
+            "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
+            entry.position, entry.twitch_name, channel_id
+        ).execute(&*pool).await.map_err(|_| warp::reject())?;
         println!("{}", entry.twitch_name);
         println!("Updated data {:?}", entry);
     }

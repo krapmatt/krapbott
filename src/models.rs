@@ -3,6 +3,7 @@ use std::{collections::HashMap, error::Error, fs::File, io::{Read, Write}, path:
 
 use async_sqlite::{rusqlite::{self, params}, Client as SqliteClient};
 use serde::{Deserialize, Serialize};
+use sqlx::{pool, SqlitePool};
 use tmi::{client::{read::RecvError, write::SendError, ReconnectError}, Client, MessageParseError};
 use tokio::sync::Mutex;
 
@@ -123,6 +124,11 @@ impl From<serde_json::Error> for BotError {
         BotError { error_code: 107, string: Some(err.to_string()) }
     }
 }
+impl From<sqlx::Error> for BotError {
+    fn from(err: sqlx::Error) -> BotError {
+        BotError { error_code: 108, string: Some(err.to_string()) }
+    }
+}
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub enum AnnouncementState {
@@ -231,47 +237,51 @@ impl BotConfig {
 }
 
 pub struct TemplateManager {
-    pub conn: Arc<SqliteClient>, 
+    pub pool: Arc<SqlitePool>, 
 }
 
 impl TemplateManager {
     pub async fn get_template(&self, package: String, command: String, channel_id: Option<String>) -> Option<String> {
-        let query = if let Some(_channel) = channel_id.as_ref() {
-            "SELECT template FROM commands_template WHERE package = ?1 AND command = ?2 AND channel_id = ?3"
+        let result = if let Some(channel) = channel_id {
+            let res = sqlx::query!(
+                "SELECT template FROM commands_template WHERE package = ? AND command = ? AND channel_id = ?",
+                package, command, channel
+            ).fetch_optional(&*self.pool).await;
+            res.ok().flatten().map(|row| row.template)
         } else {
-            "SELECT template FROM commands_template WHERE package = ?1 AND command = ?2"
+            let res = sqlx::query!(
+                "SELECT template FROM commands_template WHERE package = ? AND command = ? AND channel_id IS NULL",
+                package, command
+            ).fetch_optional(&*self.pool).await;
+            res.ok().flatten().map(|row| row.template)
         };
-
-        self.conn.conn(move |conn| {
-            conn.query_row(&*query, params![package, command, channel_id.unwrap_or_default()], |row| row.get(0))
-        }).await.ok()
+       return result;
     }
 
     pub async fn set_template(&self, package: String, command: String, template: String, channel_id: Option<String>) -> Result<(), BotError> {
-        let query = if channel_id.is_some() {
-            "INSERT INTO commands_template (package, command, template, channel_id) 
-            VALUES (?1, ?2, ?3, ?4) 
-            ON CONFLICT(channel_id, command) DO UPDATE SET template = excluded.template"
-        } else {
-            "INSERT INTO commands_template (package, command, template) 
-            VALUES (?1, ?2, ?3) 
-            ON CONFLICT(command) DO UPDATE SET template = excluded.template"
-        };
-        self.conn.conn(move |conn| {
-            conn.execute(&query, params![package, command, template, channel_id.unwrap_or_default()])
-        }).await?;
+        if let Some(channel) = channel_id {
+            sqlx::query!(
+                "INSERT INTO commands_template (package, command, template, channel_id) 
+                VALUES (?, ?, ?, ?) 
+                ON CONFLICT(channel_id, command) DO UPDATE SET template = excluded.template",
+                package, command, template, channel
+            ).execute(&*self.pool).await?;
+        }
         Ok(())
     }
 
     pub async fn remove_template(&self, command: String, channel_id: Option<String>) -> Result<(), BotError> {
-        let query = if channel_id.is_some() {
-            "DELETE FROM commands_template WHERE command = ?1 AND channel_id = ?2"
+        if let Some(channel) = channel_id {
+            sqlx::query!(
+                "DELETE FROM commands_template WHERE command = ? AND channel_id = ?",
+                command, channel
+            ).execute(&*self.pool).await?;
         } else {
-            "DELETE FROM commands_template WHERE command = ?1"
-        };
-        self.conn.conn(move |conn| {
-            conn.execute(&query, params![command, channel_id.unwrap_or_default()])
-        }).await?;
+            sqlx::query!(
+                "DELETE FROM commands_template WHERE command = ? AND channel_id IS NULL",
+                command
+            ).execute(&*self.pool).await?;
+        }
         Ok(())
     }
 }

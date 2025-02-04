@@ -1,6 +1,6 @@
 [package]
 name = "krapbott"
-version = "2.9.5"
+version = "3.0.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -10,7 +10,7 @@ tokio = { version = "1.42.0", features = ["full"] }
 tmi = "0.7.2"
 serde_json = "1.0.134"
 serde = {version = "1.0.216", features = ["derive"]}
-dotenv = "0.15"
+dotenvy = "0.15.7"
 reqwest = {version = "0.12.12", features = ["json"]}
 async-sqlite = "0.3.1"
 regex = "1.11.1"

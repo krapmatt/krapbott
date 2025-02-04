@@ -1,5 +1,4 @@
 
-use crate::bot;
 use crate::bot_commands;
 use crate::bot_commands::announcement;
 use crate::bot_commands::ban_player_from_queue;
@@ -7,6 +6,7 @@ use crate::bot_commands::get_twitch_user_id;
 use crate::bot_commands::modify_command;
 use crate::bot_commands::process_queue_entry;
 use crate::bot_commands::unban_player_from_queue;
+use crate::database::initialize_currency_database;
 use crate::models::AnnouncementState;
 use crate::models::CommandAction;
 use crate::models::TemplateManager;
@@ -22,14 +22,13 @@ use async_sqlite::rusqlite::params;
 use async_sqlite::Client as SqliteClient;
 use chrono::FixedOffset;
 use futures::future::BoxFuture;
-use rand::thread_rng;
-use rand::Rng;
 use serde::Deserialize;
+use sqlx::SqlitePool;
 use tmi::Privmsg;
 use tokio::sync::Mutex;
 
 
-type CommandHandler = Arc<dyn Fn(Privmsg<'static>, Arc<Mutex<tmi::Client>>, SqliteClient, Arc<Mutex<BotState>>) -> BoxFuture<'static, Result<(), BotError>> + Send + Sync>;
+type CommandHandler = Arc<dyn Fn(Privmsg<'static>, Arc<Mutex<tmi::Client>>, SqlitePool, Arc<Mutex<BotState>>) -> BoxFuture<'static, Result<(), BotError>> + Send + Sync>;
 
 #[derive(Deserialize)]
 pub struct CommandConfig {
@@ -205,8 +204,8 @@ fn generate_variables(msg: &Privmsg<'_>) -> HashMap<String, String> {
 pub fn set_template() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(move |msg: Privmsg<'_>, client: Arc<Mutex<tmi::Client>>, conn, _bot_state| {
-            let template_manager = TemplateManager {conn: Arc::new(conn)};
+        handler: Arc::new(move |msg: Privmsg<'_>, client: Arc<Mutex<tmi::Client>>, pool, _bot_state| {
+            let template_manager = TemplateManager {pool: pool.clone().into()};
             let fut = async move {
                 let args: Vec<&str> = msg.text().splitn(4, ' ').collect();
                 if args.len() < 4 {
@@ -236,8 +235,8 @@ pub fn set_template() -> Command {
 pub fn delete_template() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(move |msg: Privmsg<'_>, client: Arc<Mutex<tmi::Client>>, conn, _bot_state| {
-            let template_manager = TemplateManager {conn: Arc::new(conn)};
+        handler: Arc::new(move |msg: Privmsg<'_>, client: Arc<Mutex<tmi::Client>>, pool, _bot_state| {
+            let template_manager = TemplateManager {pool: pool.clone().into()};
             let fut = async move {
                 let args: Vec<&str> = msg.text().splitn(2, ' ').collect();
                 if args.len() < 2 {
@@ -267,10 +266,10 @@ pub fn delete_template() -> Command {
 fn join_cmd() -> Command { 
     Command {
         permission: PermissionLevel::Follower,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let mut bot_state = bot_state.lock().await;
-                bot_state.handle_join(&msg, client, &conn).await?;
+                bot_state.handle_join(&msg, client, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -283,8 +282,8 @@ fn join_cmd() -> Command {
 pub fn lurk() -> Command {
     Command {
         permission: PermissionLevel::User,
-        handler: Arc::new(move |msg: Privmsg<'_>, client: Arc<Mutex<tmi::Client>>, conn, _bot_state| {
-            let template_manager = TemplateManager {conn: Arc::new(conn)};
+        handler: Arc::new(move |msg: Privmsg<'_>, client: Arc<Mutex<tmi::Client>>, pool, _bot_state| {
+            let template_manager = TemplateManager {pool: pool.clone().into()};
             let fut = async move {
                 // Fetch template from the database
                 let template = template_manager
@@ -297,7 +296,7 @@ pub fn lurk() -> Command {
                 let reply = parse_template(&template, &variables);
 
                 // Send the reply
-                client.lock().await.privmsg(msg.channel(), &reply).send().await?;
+                {send_message(&msg, client.lock().await.borrow_mut(), &reply).await?}
                 Ok(())
             };
             Box::pin(fut)
@@ -310,8 +309,8 @@ pub fn lurk() -> Command {
 pub fn so() -> Command {
     Command {
         permission: PermissionLevel::Vip,
-        handler: Arc::new(move |msg: Privmsg<'_>, client: Arc<Mutex<tmi::Client>>, conn, bot_state| {
-            let template_manager = TemplateManager {conn: Arc::new(conn)};
+        handler: Arc::new(|msg: Privmsg<'_>, client: Arc<Mutex<tmi::Client>>, pool, bot_state| {
+            let template_manager = TemplateManager {pool: pool.clone().into()};
             let fut = async move {
                 let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
                 let reply =  if words.len() == 2 {
@@ -319,14 +318,18 @@ pub fn so() -> Command {
                     .get_template("Shoutout".to_string(), "!so".to_string(), Some(msg.channel().to_string())).await.unwrap_or("Let's give a big Shoutout to https://www.twitch.tv/%receiver% ! Make sure to check them out and give them a FOLLOW <3! They are amazing person!".to_string());
                     let variables = generate_variables(&msg);
                     let twitch_name = words[1].strip_prefix("@").unwrap_or(words[1]).to_string();
-                    let bot_state = bot_state.lock().await;
-                    bot_commands::shoutout(&bot_state.oauth_token_bot, bot_state.clone().bot_id, &get_twitch_user_id(&twitch_name).await?, msg.channel_id()).await;
-                    drop(bot_state);
+                    {
+                        let bot_state = bot_state.lock().await;
+                        bot_commands::shoutout(&bot_state.oauth_token_bot, bot_state.clone().bot_id, &get_twitch_user_id(&twitch_name).await?, msg.channel_id()).await;
+                        drop(bot_state);
+                    }
                     parse_template(&template, &variables)
                 } else {
                     "Arent you missing something?".to_string()
                 };
-                client.lock().await.privmsg(msg.channel(), &reply).send().await?;
+                {
+                    client.lock().await.privmsg(msg.channel(), &reply).send().await?;
+                }
                 Ok(())
             };
             Box::pin(fut)
@@ -339,9 +342,9 @@ pub fn so() -> Command {
 fn mod_unban() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg, client, conn, _bot_state| {
+        handler: Arc::new(|msg, client, pool, _bot_state| {
             let fut = async move {
-                unban_player_from_queue(&msg, client, &conn).await?;
+                unban_player_from_queue(&msg, client, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -353,9 +356,9 @@ fn mod_unban() -> Command {
 fn mod_ban() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg, client, conn, _bot_state| {
+        handler: Arc::new(|msg, client, pool, _bot_state| {
             let fut = async move {
-                ban_player_from_queue(&msg, client, &conn).await?;
+                ban_player_from_queue(&msg, client, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -367,9 +370,9 @@ fn mod_ban() -> Command {
 fn addglobalcommand() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg, client, conn, _bot_state| {
+        handler: Arc::new(|msg, client, pool, _bot_state| {
             let fut = async move {
-                modify_command(&msg, client, conn, CommandAction::AddGlobal, None).await?;
+                modify_command(&msg, client, &pool, CommandAction::AddGlobal, None).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -381,9 +384,9 @@ fn addglobalcommand() -> Command {
 fn removecommand() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg, client, conn, _bot_state| {
+        handler: Arc::new(|msg, client, pool, _bot_state| {
             let fut = async move {
-                    modify_command(&msg, client, conn, CommandAction::Remove, Some(msg.channel().to_string())).await?;
+                    modify_command(&msg, client, &pool, CommandAction::Remove, Some(msg.channel().to_string())).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -396,9 +399,9 @@ fn removecommand() -> Command {
 fn addcommand() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg, client, conn, _bot_state| {
+        handler: Arc::new(|msg, client, pool, _bot_state| {
             let fut = async move {
-                modify_command(&msg, client, conn, CommandAction::Add, Some(msg.channel().to_string())).await?;
+                modify_command(&msg, client, &pool, CommandAction::Add, Some(msg.channel().to_string())).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -411,13 +414,14 @@ fn addcommand() -> Command {
 fn mod_config() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg, client, _conn, bot_state| {
+        handler: Arc::new(|msg, client, _pool, bot_state| {
             let fut = async move {
                 if is_moderator(&msg, Arc::clone(&client)).await {
                     let mut bot_state = bot_state.lock().await;
                     let config = bot_state.config.get_channel_config(msg.channel());
                     let queue_reply = format!("Queue -> Open: {} || Length: {} || Fireteam size: {} || Combined: {} & Queue channel: {}", config.open, config.len, config.teamsize, config.combined, config.queue_channel);
                     let package_reply = format!("Packages: {}", config.packages.join(", ").to_string());
+                    drop(bot_state);
                     let reply = vec![queue_reply, package_reply];
                     for reply in reply {
                         client.lock().await.privmsg(msg.channel(), &reply).reply_to(msg.id()).send().await?;
@@ -435,21 +439,23 @@ fn mod_config() -> Command {
 fn connect() -> Command {
     Command {
         permission: PermissionLevel::Broadcaster,
-        handler: Arc::new(|msg, client, _conn, bot_state| {
+        handler: Arc::new(|msg, client, _pool, bot_state| {
             let fut = async move {
-                let mut client = client.lock().await;
                 if let Some((_, channel)) = msg.text().split_once(" ") {
                     
                     let mut channel = format!("#{}", channel.to_string().to_ascii_lowercase());
                     if channel.contains("@") {
                         channel.remove(1);
                     }
-                    bot_state.lock().await.config.get_channel_config(&channel);
-                    client.join(format!("#{}", channel)).await?;
-                    bot_state.lock().await.config.save_config();
-                    client.privmsg(msg.channel(), &format!("I have connected to channel {}", channel)).send().await?;
+                    {
+                        let mut bot_state = bot_state.lock().await;
+                        bot_state.config.get_channel_config(&channel);
+                        bot_state.config.save_config();
+                    }
+                    
+                    send_message(&msg, client.lock().await.borrow_mut(), &format!("I have connected to channel {}", channel)).await?;
                 } else {
-                    client.privmsg(msg.channel(), "You didn't write the channel to connect to").send().await?;
+                    send_message(&msg, client.lock().await.borrow_mut(), "You didn't write the channel to connect to").await?;
                 }
                 Ok(())
             };
@@ -463,18 +469,18 @@ fn connect() -> Command {
 fn bungie_name() -> Command {
     Command {
         permission: PermissionLevel::User,
-        handler: Arc::new(|msg, client, conn, _bot_state| {
+        handler: Arc::new(|msg, client, pool, _bot_state| {
             let fut = async move {
                 let mut client = client.lock().await;
                 if msg.text().trim_end().len() == 11 {
-                    bungiename(&msg, &mut client , &conn, msg.sender().name().to_string()).await?;
+                    bungiename(&msg, &mut client , &pool, msg.sender().name().to_string()).await?;
                 } else {
                     let (_, twitch_name) = msg.text().split_once(" ").expect("How did it panic, what happened? //Always is something here");
                     let mut twitch_name = twitch_name.to_string();
                     if twitch_name.starts_with("@") {
                         twitch_name.remove(0);
                     }
-                    bungiename(&msg, &mut client, &conn, twitch_name).await?;
+                    bungiename(&msg, &mut client, &pool, twitch_name).await?;
                 }
                 Ok(())
             };
@@ -488,11 +494,11 @@ fn bungie_name() -> Command {
 fn register() -> Command {
     Command {
         permission: PermissionLevel::User,
-        handler: Arc::new(|msg, client, conn, _bot_state| {
+        handler: Arc::new(|msg, client, pool, _bot_state| {
             let fut = async move {
                 let reply;
                     if let Some((_, bungie_name)) = msg.text().split_once(" ") {
-                        reply = register_user(&conn, &msg.sender().name(), bungie_name).await?;
+                        reply = register_user(&pool, &msg.sender().name(), bungie_name).await?;
                     } else {
                         reply = "Invalid command format! Use: !register bungiename#1234".to_string();
                     }
@@ -509,7 +515,7 @@ fn register() -> Command {
 fn mod_register() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg, client, conn, _bot_state| {
+        handler: Arc::new(|msg, client, pool, _bot_state| {
             let fut = async move {
                 let words: Vec<&str> = msg.text().split_whitespace().collect();
                 let reply;
@@ -519,7 +525,7 @@ fn mod_register() -> Command {
                     if twitch_name.starts_with("@") {
                         twitch_name.remove(0);
                     }
-                    reply = register_user(&conn, &twitch_name, bungie_name).await?;
+                    reply = register_user(&pool, &twitch_name, bungie_name).await?;
                 } else {
                     reply = "You are a mod. . . || If you forgot use: !mod_register twitchname bungoname".to_string();
                 }
@@ -536,9 +542,9 @@ fn mod_register() -> Command {
 fn total() -> Command  {
     Command {
         permission: PermissionLevel::User,
-        handler: Arc::new(|msg, client, conn, bot_state| {
+        handler: Arc::new(|msg, client, pool, bot_state| {
             let fut = async move {
-                bot_state.lock().await.total_raid_clears(&msg, client.lock().await.borrow_mut(), &conn).await?;
+                bot_state.lock().await.total_raid_clears(&msg, client.lock().await.borrow_mut(), &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -551,10 +557,10 @@ fn total() -> Command  {
 fn random() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let mut bot_state = bot_state.lock().await;
-                bot_state.random(&msg, client, &conn).await?;
+                bot_state.random(&msg, client, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -567,7 +573,7 @@ fn random() -> Command {
 fn toggle_combine() -> Command { 
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let mut bot_state = bot_state.lock().await;
                 bot_state.toggle_combined_queue(&msg, client).await?;
@@ -585,10 +591,8 @@ fn toggle_combine() -> Command {
 fn add_streaming_together() -> Command {
     Command {
         permission: PermissionLevel::Broadcaster,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
-                let mut bot_state = bot_state.lock().await;
-                
                 let vec_msg: Vec<&str> = msg.text().split_ascii_whitespace().collect();
 
                 
@@ -600,8 +604,9 @@ fn add_streaming_together() -> Command {
                 let main_channel = vec_msg[1].strip_prefix("@").unwrap_or(&vec_msg[1]).to_ascii_lowercase();
                 
                 let other_channels: HashSet<String> = vec_msg[2..].iter().map(|channel| format!("{}{}","#", channel.strip_prefix('@').unwrap_or(channel).to_ascii_lowercase())).collect();
-                
+                let mut bot_state = bot_state.lock().await;
                 bot_state.streaming_together.insert(format!("{}{}", "#", main_channel), other_channels.clone());
+                drop(bot_state);
                 let other_channel_vec: Vec<&String> = other_channels.iter().collect();
                 send_message(&msg, client.lock().await.borrow_mut(), &format!("Streaming together are now: {} and {:?}", main_channel, other_channel_vec)).await?;
 
@@ -617,10 +622,10 @@ fn add_streaming_together() -> Command {
 fn next() -> Command {
     Command {  
         permission: PermissionLevel::Broadcaster,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let mut bot_state = bot_state.lock().await;
-                let reply = bot_state.handle_next(msg.channel().to_string(), &conn).await?;
+                let reply = bot_state.handle_next(msg.channel().to_string(), &pool).await?;
                 send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
                 Ok(())
             };
@@ -634,10 +639,10 @@ fn next() -> Command {
 fn remove() -> Command {
     Command {  
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let mut bot_state = bot_state.lock().await;
-                bot_state.handle_remove(&msg, client, &conn).await?;
+                bot_state.handle_remove(&msg, client, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -650,10 +655,10 @@ fn remove() -> Command {
 fn pos() -> Command {
     Command {     
         permission: PermissionLevel::User,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let mut bot_state = bot_state.lock().await;
-                bot_state.handle_pos(&msg, client, &conn).await?;
+                bot_state.handle_pos(&msg, client, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -666,9 +671,9 @@ fn pos() -> Command {
 fn move_cmd() -> Command {
     Command {    
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
-                bot_state.lock().await.move_groups(&msg, client, &conn).await?;
+                bot_state.lock().await.move_groups(&msg, client, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -681,10 +686,10 @@ fn move_cmd() -> Command {
 fn leave() -> Command {
     Command {     
         permission: PermissionLevel::User,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let mut bot_state = bot_state.lock().await;
-                bot_state.handle_leave(&msg, client, &conn).await?;
+                bot_state.handle_leave(&msg, client, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -697,7 +702,7 @@ fn leave() -> Command {
 fn queue_size() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let words: Vec<&str> = msg.text().split_whitespace().collect();
                 let reply;
@@ -748,11 +753,12 @@ fn queue_size() -> Command {
 fn clear() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, _bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, _bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
-                let mut client = client.lock().await;
                 let channel = msg.channel().to_owned();
-                conn.conn(move |conn| Ok(conn.execute("DELETE FROM queue WHERE channel_id = ?", [channel])?)).await?;
+                // Clear the queue for the given channel
+                sqlx::query!("DELETE FROM queue WHERE channel_id = ?", channel).execute(&pool).await?;
+                let mut client = client.lock().await;
                 send_message(&msg, client.borrow_mut(), "Queue has been cleared").await?;
                 Ok(())
             };
@@ -768,7 +774,7 @@ fn clear() -> Command {
 fn queue_len() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let words: Vec<&str> = msg.text().split_whitespace().collect();
                 let reply;
@@ -814,10 +820,10 @@ fn queue_len() -> Command {
 fn queue_command() -> Command {
     Command {
         permission: PermissionLevel::User,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let mut bot_state = bot_state.lock().await;
-                bot_state.handle_queue(&msg, client, &conn).await?;
+                bot_state.handle_queue(&msg, client, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -834,9 +840,9 @@ fn queue_command() -> Command {
 fn prio_command() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
-                bot_state.lock().await.prio(&msg, client, &conn).await?;
+                bot_state.lock().await.prio(&msg, client, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -851,12 +857,28 @@ fn prio_command() -> Command {
 fn open_command() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _: SqliteClient, botstate: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
-                let mut bot_state = botstate.lock().await;
-                bot_state.config.get_channel_config(msg.channel()).open = true;
-                send_message(&msg, client.lock().await.borrow_mut(), "The queue is now open!").await?;
-                bot_state.config.save_config();
+                let mut bot_state = bot_state.lock().await.to_owned();
+                let config = &mut bot_state.config;
+                let channel_config = config.channels.get_mut(msg.channel());
+                let reply = if let Some(channel_config) = channel_config {
+                    channel_config.open = true;
+                    if channel_config.combined {
+                        if let Some(channels) = bot_state.streaming_together.get(msg.channel()) {
+                            for channel in channels {
+                                if let Some(related_config) = config.channels.get_mut(channel) {
+                                    related_config.open = true;
+                                }
+                            }
+                        }
+                    }
+                    config.save_config();
+                    "✅ The queue is open!"
+                } else {
+                    "Channel configuration not found."
+                };
+                send_message(&msg, client.lock().await.borrow_mut(), reply).await?;
                 Ok(())
             };
             Box::pin(fut) 
@@ -871,12 +893,28 @@ fn open_command() -> Command {
 fn close_command() -> Command {
     Command { 
         permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
-                let mut bot_state = bot_state.lock().await;
-                bot_state.config.get_channel_config(msg.channel()).open = false;
-                send_message(&msg, client.lock().await.borrow_mut(), "The queue is now closed!").await?;
-                bot_state.config.save_config();
+                let mut bot_state = bot_state.lock().await.to_owned();
+                let config = &mut bot_state.config;
+                let channel_config = config.channels.get_mut(msg.channel());
+                let reply = if let Some(channel_config) = channel_config {
+                    channel_config.open = false;
+                    if channel_config.combined {
+                        if let Some(channels) = bot_state.streaming_together.get(msg.channel()) {
+                            for channel in channels {
+                                if let Some(related_config) = config.channels.get_mut(channel) {
+                                    related_config.open = false;
+                                }
+                            }
+                        }
+                    }
+                    config.save_config();
+                    "❌ The queue is closed!"
+                } else {
+                    "Channel configuration not found."
+                };
+                send_message(&msg, client.lock().await.borrow_mut(), reply).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -889,26 +927,29 @@ fn close_command() -> Command {
 fn add_announcement() -> Command {
     Command { 
         permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, _bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, _bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
-                
                 let channel = msg.channel_id().to_string();
-                
                 let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
                 
                 let reply = if msg_vec.len() >= 4 {
+                    let state = msg_vec[1].to_lowercase();
                     let name = msg_vec[2].to_string();
-                    let state = msg_vec[1].to_string().to_lowercase();
-                    let announcment = msg_vec[3..].to_owned().join(" ");
-                    conn.conn(move |conn| conn.execute("INSERT INTO announcements (name, announcement, channel, state) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(name, channel) DO UPDATE SET announcement = excluded.announcement", 
-                        params![name, announcment, channel, state])
-                    ).await?;
-                    &format!("Announcement {} has been added!", msg_vec[2])
-                } else {
-                    "Use: !add_announcement <state: Active/NameofActivity> <name> <Message>"
-                };
-                send_message(&msg, client.lock().await.borrow_mut(), reply).await?;
+                    let announcement = msg_vec[3..].join(" ");
+                    // Insert or update announcement
+                    sqlx::query!(
+                        "INSERT INTO announcements (name, announcement, channel, state) 
+                         VALUES (?, ?, ?, ?) 
+                         ON CONFLICT(name, channel) 
+                         DO UPDATE SET announcement = excluded.announcement",
+                        name, announcement, channel, state
+                    ).execute(&pool).await?;
 
+                    format!("✅ Announcement '{}' has been added!", name)
+                } else {
+                    "❌ Usage: !add_announcement <state: Active/ActivityName> <name> <Message>".to_string()
+                };
+                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -921,20 +962,27 @@ fn add_announcement() -> Command {
 fn remove_announcement() -> Command {
     Command { 
         permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, _bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, _bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
                 let channel_id = msg.channel_id().to_string();
+
                 let reply = if msg_vec.len() <= 1 {
-                    "Use: !remove_announcemnt <name>"
+                    "❌ Usage: !remove_announcement <name>".to_string()
                 } else if msg_vec.len() == 2 {
                     let name = msg_vec[1].to_string();
-                    conn.conn(move |conn| conn.execute("DELETE FROM announcements WHERE name = ?1 AND channel = ?2", 
-                        params![name, channel_id])
-                    ).await?;
-                    "Announcement has been removed!"
+
+                    let result = sqlx::query!(
+                        "DELETE FROM announcements WHERE name = ? AND channel = ?",
+                        name, channel_id
+                    ).execute(&pool).await?;
+                    if result.rows_affected() > 0 {
+                        "✅ Announcement has been removed!".to_string()
+                    } else {
+                        "⚠️ No announcement found with that name.".to_string()
+                    }
                 } else {
-                    "How did you mess up?"
+                    "❌ Invalid usage. Try again: !remove_announcement <name>".to_string()
                 };
                 send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
                 Ok(())
@@ -949,20 +997,26 @@ fn remove_announcement() -> Command {
 fn play_announcement()-> Command {
     Command { 
         permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, conn: SqliteClient, bot_state: Arc<Mutex<BotState>>| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state: Arc<Mutex<BotState>>| {
             let fut = async move {
                 let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
+                if msg_vec.len() != 2 {
+                    return Ok(()); 
+                }
+                let channel_id = msg.channel_id().to_string();
+                let name = msg_vec[1].to_string();
+                // Fetch the announcement
+                let result = sqlx::query!(
+                    "SELECT announcement FROM announcements WHERE name = ? AND channel = ?",
+                    name, channel_id
+                ).fetch_optional(&pool).await?;
 
-                if msg_vec.len() == 2 {
-                    let channel_id = msg.channel_id().to_string();
-                    let name = msg_vec[1].to_string();
-                    let announ = conn.conn(move |conn| conn.query_row("SELECT announcement FROM announcements WHERE name = ?1 AND channel = ?2", 
-                        params![name, channel_id.clone()], |row| Ok(row.get::<_, String>(0)?))
-                    ).await?;
+                if let Some(row) = result {
+                    let announ = row.announcement;
                     let bot_state = bot_state.lock().await;
-                    announcement(msg.channel_id(), "1091219021", &bot_state.oauth_token_bot, bot_state.clone().bot_id, announ).await?;
-                } 
-                
+                    announcement(msg.channel_id(), "1091219021", &bot_state.oauth_token_bot, bot_state.bot_id.clone(), announ).await?;
+                }
+
                 Ok(())
             };
             Box::pin(fut)
@@ -976,7 +1030,7 @@ fn play_announcement()-> Command {
 fn list_of_packages() -> Command {
     Command {
         permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg, client, _conn, bot_state| {
+        handler: Arc::new(|msg, client, _pool, bot_state| {
             let fut = async move {
                 let mut bot_state = bot_state.lock().await; 
                 let config = bot_state.config.get_channel_config(msg.channel());
@@ -1006,7 +1060,7 @@ fn list_of_packages() -> Command {
 fn addplayertoqueue() -> Command {
     Command {
         permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg, client, conn, bot_state| {
+        handler: Arc::new(|msg, client, pool, bot_state| {
             let fut = async move {
                 let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
                 let twitch_name = words[1].strip_prefix("@").unwrap_or(&words[1]).to_string();
@@ -1016,7 +1070,7 @@ fn addplayertoqueue() -> Command {
                     bungie_name: words[2..].join(" ").to_string(),
                 };
                 let queue_len = bot_state.lock().await.config.get_channel_config(msg.channel()).len;
-                process_queue_entry(&msg, client.lock().await.borrow_mut(), queue_len, &conn, user, Some(msg.channel().to_string())).await?;
+                process_queue_entry(&msg, client.lock().await.borrow_mut(), queue_len, &pool, user, &msg.channel()).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -1029,7 +1083,7 @@ fn addplayertoqueue() -> Command {
 fn matt_time() -> Command {
     Command {
         permission: PermissionLevel::User, 
-        handler: Arc::new(|msg, client, _conn, _bot_state| {
+        handler: Arc::new(|msg, client, _pool, _bot_state| {
             let fut = async move {
                 let time = chrono::Utc::now().with_timezone(&FixedOffset::east_opt(3600).unwrap());
                 send_message(&msg, client.lock().await.borrow_mut(), &format!("Matt time: {}", time.time().format("%-I:%M %p"))).await?;
@@ -1045,7 +1099,7 @@ fn matt_time() -> Command {
 fn samosa_time() -> Command {
     Command {
         permission: PermissionLevel::User, 
-        handler: Arc::new(|msg, client, _conn, _bot_state| {
+        handler: Arc::new(|msg, client, _pool, _bot_state| {
             let fut = async move {
                 let time = chrono::Utc::now().with_timezone(&FixedOffset::west_opt(3600 * 5).unwrap());
                 send_message(&msg, client.lock().await.borrow_mut(), &format!("Samoan time: {}", time.time().format("%-I:%M %p"))).await?;
@@ -1061,7 +1115,7 @@ fn samosa_time() -> Command {
 fn cindi_time() -> Command {
     Command {
         permission: PermissionLevel::User, 
-        handler: Arc::new(|msg, client, _conn, _bot_state| {
+        handler: Arc::new(|msg, client, _pool, _bot_state| {
             let fut = async move {
                 let time = chrono::Utc::now();
                 send_message(&msg, client.lock().await.borrow_mut(), &format!("Cindi time: {}", time.time().format("%-I:%M %p"))).await?;
@@ -1077,7 +1131,7 @@ fn cindi_time() -> Command {
 fn addpackage() -> Command {
     Command {
         permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg, client, _conn, bot_state| {
+        handler: Arc::new(|msg, client, _pool, bot_state| {
             let fut = async move {
                 bot_state.lock().await.add_package(&msg, client).await?;
                 Ok(())
@@ -1092,7 +1146,7 @@ fn addpackage() -> Command {
 fn announcement_freq() -> Command {
     Command {
         permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg, client, _conn, bot_state| {
+        handler: Arc::new(|msg, client, _pool, bot_state| {
             let fut = async move {
                 let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
                 if msg_vec.len() == 2 {
@@ -1119,7 +1173,7 @@ fn announcement_freq() -> Command {
 fn announcement_state() -> Command {
     Command {
         permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg, client, _conn, bot_state| {
+        handler: Arc::new(|msg, client, _pool, bot_state| {
             let fut = async move {
                 let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
                 if msg_vec.len() == 2 {
@@ -1150,7 +1204,7 @@ fn announcement_state() -> Command {
 fn mod_reset() -> Command {
     Command {
         permission: PermissionLevel::Moderator, 
-        handler: Arc::new(|msg, client, _conn, bot_state| {
+        handler: Arc::new(|msg, client, _pool, bot_state| {
             let fut = async move {
                 let mut bot_state = bot_state.lock().await;
                 bot_state.streaming_together.clear();
@@ -1182,7 +1236,7 @@ fn find_command(command_name: &str) -> Option<(String, &Command)> {
 fn help_command() -> Command {
     Command {
         permission: PermissionLevel::User, // Allow all users to use this command
-        handler: Arc::new(|msg, client, _conn, _bot_state| {
+        handler: Arc::new(|msg, client, _pool, _bot_state| {
             Box::pin(async move {
                 let words: Vec<&str> = msg.text().split_whitespace().collect();
 
@@ -1223,25 +1277,27 @@ fn help_command() -> Command {
 fn add_manually_to_database() -> Command {
     Command {
         permission: PermissionLevel::Moderator, // Allow all users to use this command
-        handler: Arc::new(|msg, client, conn, _bot_state| {
+        handler: Arc::new(|msg, client, pool, _bot_state| {
             let msg_text = msg.text().to_string();
             Box::pin(async move {
                 let words: Vec<&str> = msg_text.split_whitespace().collect();
                 let reply = if words.len() == 3 {
                     let twitch_name = words[1].strip_prefix("@").unwrap_or(words[1]).to_string();
                     let bungie_name = words[2].to_string();
-                    let twitch_name_clone = twitch_name.clone();
-                    let bungie_name_clone = bungie_name.clone();
-
-                    conn.conn(move |conn| {
-                        conn.execute("INSERT INTO user (twitch_name, bungie_name) VALUES (?1, ?2)
-                            ON CONFLICT(twitch_name) DO UPDATE SET bungie_name = excluded.bungie_name", params![twitch_name, bungie_name])
-                    }).await?;
-                    format!("{} has been added as {}", twitch_name_clone, bungie_name_clone)
+                    let result = sqlx::query!(
+                        "INSERT INTO user (twitch_name, bungie_name) 
+                         VALUES (?, ?) 
+                         ON CONFLICT(twitch_name) DO UPDATE SET bungie_name = excluded.bungie_name",
+                        twitch_name, bungie_name
+                    ).execute(&pool).await;
+                    match result {
+                        Ok(_) => format!("{} has been added as {}", twitch_name, bungie_name),
+                        Err(_) => "Failed to add user to database.".to_string(),
+                    }
                 } else {
-                    "Something wrong".to_string()
+                    "Usage: !add_to_database @twitch_name bungie_name#0000".to_string()
                 };
-                client.lock().await.privmsg(msg.channel(), &reply).send().await?;
+                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
                 Ok(())
             })
         }),
