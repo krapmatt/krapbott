@@ -24,4 +24,4 @@ warp = { version = "0.3.7", features = ["tls"] }
 rand = "0.8.5"
 serde_millis = "0.1.1"
 sqlx = { version = "0.8.3", features = [ "sqlite", "runtime-tokio" ] }
-
+unicode-normalization = "0.1"

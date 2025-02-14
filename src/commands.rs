@@ -315,7 +315,7 @@ pub fn so() -> Command {
                     let variables = generate_variables(&msg);
                     let twitch_name = words[1].strip_prefix("@").unwrap_or(words[1]).to_string();
                     {
-                        let bot_state = bot_state.lock().await;
+                        let bot_state = bot_state.lock().await; 
                         bot_commands::shoutout(&bot_state.oauth_token_bot, bot_state.clone().bot_id, &get_twitch_user_id(&twitch_name).await?, msg.channel_id()).await;
                         drop(bot_state);
                     }
@@ -449,7 +449,7 @@ fn connect() -> Command {
                         bot_state.config.save_config();
                     }
                     
-                    send_message(&msg, client.lock().await.borrow_mut(), &format!("I have connected to channel {}", channel)).await?;
+                    send_message(&msg, client.lock().await.borrow_mut(), &format!("I will connect to channel {} in 60 seconds", channel)).await?;
                 } else {
                     send_message(&msg, client.lock().await.borrow_mut(), "You didn't write the channel to connect to").await?;
                 }

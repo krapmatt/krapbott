@@ -57,7 +57,6 @@ async fn main() -> Result<(), BotError> {
             .run(([0, 0, 0, 0], 8080))
             .await;
     });
-
     // OBS Bot Task
     let pool_clone = Arc::clone(&pool);
     tokio::spawn(async move {

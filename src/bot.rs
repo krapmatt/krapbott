@@ -7,9 +7,10 @@ use rand::{thread_rng, Rng};
 use regex::Regex;
 use sqlx::SqlitePool;
 use tmi::{Client, Tag};
+use unicode_normalization::UnicodeNormalization;
 
 use std::{borrow::BorrowMut, collections::{HashMap, HashSet}, env::var, sync::Arc, time::{self, Duration, Instant, SystemTime}};
-use tokio::{sync::{mpsc::{self, Receiver, UnboundedReceiver}, Mutex}, time::interval};
+use tokio::{sync::{mpsc::{self, Receiver, UnboundedReceiver}, Mutex, RwLock}, time::interval};
 
 
 #[derive(Clone)]
@@ -58,12 +59,12 @@ impl BotState {
     }
 }
 
-pub async fn bot_task(channel: String, state: Arc<Mutex<BotState>>, pool: Arc<SqlitePool>) -> Result<(), BotError> {
+pub async fn bot_task(channel: String, state: Arc<RwLock<BotState>>, pool: Arc<SqlitePool>) -> Result<(), BotError> {
     let mut retry_attempts = 0;
     let channel_clone = channel.clone();
     loop {
         let client = {
-            let mut bot_state = state.lock().await;
+            let mut bot_state = state.write().await;
             Arc::new(Mutex::new(bot_state.client_channel(channel_clone.clone()).await))
         };
         let mut channel_id_map: HashMap<String, String> = HashMap::new();
@@ -104,7 +105,7 @@ pub async fn bot_task(channel: String, state: Arc<Mutex<BotState>>, pool: Arc<Sq
     } 
 }
 
-async fn run_bot_loop(state: Arc<Mutex<BotState>>, client: Arc<Mutex<Client>>, pool: &SqlitePool, channel_id_map: HashMap<String, String>) -> Result<(), BotError> {
+async fn run_bot_loop(state: Arc<RwLock<BotState>>, client: Arc<Mutex<Client>>, pool: &SqlitePool, channel_id_map: HashMap<String, String>) -> Result<(), BotError> {
     loop {
         let irc_msg = client.lock().await.recv().await?;
         if let Some(source_room_id) = irc_msg.tags().find(|(key, _)| *key == "source-room-id").map(|(_, value)| value) {
@@ -122,7 +123,8 @@ async fn run_bot_loop(state: Arc<Mutex<BotState>>, client: Arc<Mutex<Client>>, p
             tmi::Message::Privmsg(msg) => {
                 let first_time = irc_msg.tag(Tag::FirstMsg).map(|x| x.to_string());
                 if is_bannable_link(msg.text()) && first_time == Some("1".to_string()) {
-                    ban_bots(&msg, &state.lock().await.oauth_token_bot, state.lock().await.bot_id.clone()).await;
+                    let state = state.read().await;
+                    ban_bots(&msg, &state.oauth_token_bot, state.bot_id.clone()).await;
                     client.lock().await.privmsg(msg.channel(), "We don't want cheap viewers, only expensive ones <3").send().await?;
                 }
                 handle_privmsg(msg.clone(), Arc::clone(&state), pool.clone(), Arc::clone(&client)).await?;
@@ -139,7 +141,7 @@ async fn run_bot_loop(state: Arc<Mutex<BotState>>, client: Arc<Mutex<Client>>, p
     }
 }
 
-pub async fn manage_channels(state: Arc<Mutex<BotState>>, pool: Arc<SqlitePool>) {
+pub async fn manage_channels(state: Arc<RwLock<BotState>>, pool: Arc<SqlitePool>) {
     let mut tasks: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
     loop {
         // Periodically check for new channels in the configuration
@@ -194,8 +196,7 @@ pub async fn manage_channels(state: Arc<Mutex<BotState>>, pool: Arc<SqlitePool>)
 }
 
 pub async fn run_chat_bot(pool: Arc<SqlitePool>) -> Result<(), BotError> {    
-    let bot_state = Arc::new(Mutex::new(BotState::new()));
-    manage_channels(Arc::clone(&bot_state), pool).await;
+    manage_channels(Arc::new(RwLock::new(BotState::new())), pool).await;
         
     Ok(())
 }
@@ -217,8 +218,8 @@ pub async fn handle_obs_message(channel_id: String, command: String, pool: Arc<S
     Ok(())
 }
 
-async fn handle_privmsg(msg: tmi::Privmsg<'_>, bot_state: Arc<Mutex<BotState>>, pool: SqlitePool, client: Arc<Mutex<Client>>) -> Result<(), BotError> {
-    let mut locked_state = bot_state.lock().await;
+async fn handle_privmsg(msg: tmi::Privmsg<'_>, bot_state: Arc<RwLock<BotState>>, pool: SqlitePool, client: Arc<Mutex<Client>>) -> Result<(), BotError> {
+    let mut locked_state = bot_state.write().await;
     
     locked_state.config = BotConfig::load_config();
     if msg.text().starts_with("!pos") && (msg.sender().login().to_ascii_lowercase() == "thatjk" || msg.channel() == "#samoan_317") {
@@ -248,29 +249,34 @@ async fn handle_privmsg(msg: tmi::Privmsg<'_>, bot_state: Arc<Mutex<BotState>>, 
 async fn handle_usernotice(notice: tmi::UserNotice<'_>) -> Result<(), BotError> {
     todo!()
 }
-                
+               //Cheap vi̯ewers on streamboo .com ( remove the space ) @FCNoLZJk 
 lazy_static::lazy_static! {
     static ref CHEAP_VIEWERS_RE: Regex = Regex::new(r"cheap\s*viewers\s*on").unwrap();
     static ref BEST_VIEWERS_RE: Regex = Regex::new(r"best\s*viewers\s*on").unwrap();
     static ref PROMO_RE: Regex = Regex::new(r"hello\s*sorry\s*for\s*bothering\s*you\s*i\s*want\s*to\s*offer\s*promotion\s*of\s*your\s*channel\s*viewers\s*followers\s*views\s*chat\s*bots\s*etc\s*the\s*price\s*is\s*lower\s*than\s*any\s*competitor\s*the\s*quality\s*is\s*guaranteed\s*to\s*be\s*the\s*best\s*flexible\s*and\s*convenient\s*order\s*management\s*panel\s*chat\s*panel\s*everything\s*is\s*in\s*your\s*hands\s*a\s*huge\s*number\s*of\s*custom\s*settings").unwrap();
 }
 
-//Find first message
-fn is_bannable_link(text: &str) -> bool {
-    // Remove non-alphanumeric characters and convert to lowercase
-    let cleaned_text: String = text.chars()
-        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+// Normalize text by removing diacritics
+fn normalize_text(text: &str) -> String {
+    text.nfd() // Convert to Normalization Form D (decomposed)
+        .filter(|c| c.is_alphabetic() || c.is_whitespace()) // Remove non-alphabetic characters
         .collect::<String>()
-        .to_ascii_lowercase();
+        .to_ascii_lowercase()
+}
 
-    // Check the conditions using precompiled regexes
-    (CHEAP_VIEWERS_RE.is_match(&cleaned_text) || BEST_VIEWERS_RE.is_match(&cleaned_text) && text.contains(".")) ||
+fn is_bannable_link(text: &str) -> bool {
+    let cleaned_text = normalize_text(text);
+
+    let contains_dot = text.contains('.');
+
+    // Use correct parenthesis to ensure correct logic
+    (CHEAP_VIEWERS_RE.is_match(&cleaned_text) || (BEST_VIEWERS_RE.is_match(&cleaned_text) && contains_dot)) ||
         PROMO_RE.is_match(&cleaned_text)
 }
 
 
 
-async fn start_annnouncement_scheduler(bot_state: Arc<Mutex<BotState>>, channel_id: String, channel_name: String, pool: &SqlitePool) -> Result<(), BotError> { 
+async fn start_annnouncement_scheduler(bot_state: Arc<RwLock<BotState>>, channel_id: String, channel_name: String, pool: &SqlitePool) -> Result<(), BotError> { 
     let mut sleep_duration = Duration::from_secs(60);
     let channel = format!("#{}", channel_name);
 
@@ -278,7 +284,7 @@ async fn start_annnouncement_scheduler(bot_state: Arc<Mutex<BotState>>, channel_
         let id_clone = channel_id.clone();
 
         let is_live = {
-            let bot_state = bot_state.lock().await;
+            let bot_state = bot_state.read().await;
             is_channel_live(&channel_name, &bot_state.oauth_token_bot, &bot_state.bot_id).await
         };
 
@@ -318,7 +324,7 @@ async fn start_annnouncement_scheduler(bot_state: Arc<Mutex<BotState>>, channel_
                             };
     
                             if let Some(message) = message {
-                                let bot_state = bot_state.lock().await;
+                                let bot_state = bot_state.read().await;
                                 announcement(
                                     &channel_id, "1091219021", 
                                     &bot_state.oauth_token_bot, 
@@ -328,7 +334,7 @@ async fn start_annnouncement_scheduler(bot_state: Arc<Mutex<BotState>>, channel_
                             }
     
                             {
-                                let mut bot_state_config = bot_state.lock().await;
+                                let mut bot_state_config = bot_state.write().await;
                                 let config = bot_state_config.config.get_channel_config(&channel);
                                 config.announcement_config.last_sent = Some(Instant::now());
                                 sleep_duration = interval;

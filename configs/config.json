@@ -1,5 +1,34 @@
 {
   "channels": {
+    "#krapmatt": {
+      "open": true,
+      "len": 20,
+      "teamsize": 2,
+      "combined": false,
+      "queue_channel": "#krapmatt",
+      "packages": [
+        "Moderation",
+        "Queue",
+        "Shoutout",
+        "Lurk",
+        "Random Queue",
+        "Bungie API",
+        "Database for queue",
+        "Time",
+        "Announcement",
+        "Queue"
+      ],
+      "runs": 0,
+      "announcement_config": {
+        "state": "Active",
+        "interval": {
+          "secs": 1200,
+          "nanos": 0
+        },
+        "last_sent": null
+      },
+      "sub_only": false
+    },
     "#samoan_317": {
       "open": false,
       "len": 20,
@@ -12,7 +41,8 @@
         "Bungie API",
         "Announcement",
         "Time",
-        "Queue"
+        "Queue",
+        "Random Queue"
       ],
       "runs": 0,
       "announcement_config": {
@@ -23,31 +53,7 @@
           "secs": 600,
           "nanos": 0
         },
-        "last_sent": null
-      },
-      "sub_only": false
-    },
-    "#xcindi_": {
-      "open": false,
-      "len": 20,
-      "teamsize": 2,
-      "combined": false,
-      "queue_channel": "#xcindi_",
-      "packages": [
-        "Moderation",
-        "Database for queue",
-        "Announcement",
-        "Time",
-        "Queue"
-      ],
-      "runs": 0,
-      "announcement_config": {
-        "state": "Paused",
-        "interval": {
-          "secs": 600,
-          "nanos": 0
-        },
-        "last_sent": null
+        "last_sent": 1739515589458
       },
       "sub_only": false
     },
@@ -73,7 +79,7 @@
     },
     "#nyc62truck": {
       "open": false,
-      "len": 5,
+      "len": 10,
       "teamsize": 1,
       "combined": false,
       "queue_channel": "#nyc62truck",
@@ -84,7 +90,7 @@
         "Database for queue",
         "Bungie API"
       ],
-      "runs": 63,
+      "runs": 6,
       "announcement_config": {
         "state": "Paused",
         "interval": {
@@ -95,32 +101,27 @@
       },
       "sub_only": false
     },
-    "#krapmatt": {
+    "#xcindi_": {
       "open": true,
       "len": 20,
       "teamsize": 2,
       "combined": false,
-      "queue_channel": "#krapmatt",
+      "queue_channel": "#xcindi_",
       "packages": [
         "Moderation",
-        "Queue",
-        "Shoutout",
-        "Lurk",
-        "Random Queue",
-        "Bungie API",
         "Database for queue",
-        "Time",
         "Announcement",
+        "Time",
         "Queue"
       ],
-      "runs": 10,
+      "runs": 0,
       "announcement_config": {
-        "state": "Active",
+        "state": "Paused",
         "interval": {
-          "secs": 1200,
+          "secs": 600,
           "nanos": 0
         },
-        "last_sent": 1738617128538
+        "last_sent": null
       },
       "sub_only": false
     }

@@ -507,7 +507,7 @@ impl BotState {
             format!("User {} not found in the queue. FailFish", twitch_name)
         };
 
-        tx.commit().await?; // ✅ Commit transaction
+        tx.commit().await?;
 
         let mut client = client.lock().await;
         send_message(msg, &mut client, &reply).await?;
@@ -776,21 +776,28 @@ impl BotState {
             return Ok(());
         }
     
-        // 🔹 Shift other users down to make space
+        // 🔹 Step 3: Temporarily move the user to a high out-of-the-way position
+        let temp_position = max_pos + 1000;  // Safe position far from conflicts
+        sqlx::query!(
+            "UPDATE queue SET position = ? WHERE channel_id = ? AND twitch_name = ?",
+            temp_position, channel, twitch_name
+        ).execute(&mut *tx).await?;
+
+        // 🔹 Step 4: Shift all affected users down
         let position = position + 1;
         sqlx::query!(
             "UPDATE queue SET position = position - 1 WHERE channel_id = ? AND position BETWEEN ? AND ?",
             channel, position, new_position
         ).execute(&mut *tx).await?;
-    
-        // 🔹 Move the user to the new position
+
+        // 🔹 Step 5: Move the user to the correct new position
         sqlx::query!(
             "UPDATE queue SET position = ? WHERE channel_id = ? AND twitch_name = ?",
             new_position, channel, twitch_name
         ).execute(&mut *tx).await?;
-    
+
         tx.commit().await?;
-    
+
         send_message(msg, client.lock().await.borrow_mut(), &format!("User {} has been moved to the next group.", twitch_name)).await?;
         Ok(())
     }
