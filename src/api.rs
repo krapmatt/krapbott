@@ -1,6 +1,6 @@
-use std::{collections::HashMap, env::var};
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, json, Value};
+use std::{collections::HashMap, env::var};
 
 use crate::models::BotError;
 
@@ -9,7 +9,7 @@ struct BungieName {
     #[serde(rename = "displayName")]
     name: String,
     #[serde(rename = "displayNameCode")]
-    code: String
+    code: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -180,18 +180,21 @@ struct BasicStats {
     displayValue: String,
 }
 /*then use GetProfile
-    get their characters
-    then use GetActivityHistory
-    to get the activities
-    https://data.destinysets.com/api
-    use this
-    mode=4 is Raid */
+get their characters
+then use GetActivityHistory
+to get the activities
+https://data.destinysets.com/api
+use this
+mode=4 is Raid */
 
-    //https://www.bungie.net/Platform/Destiny2/ {MembershipType} /Account/ {MembershipId} /Character/0/Stats/?groups=&modes=4 and ['Response']['raid']['allTime']['activitiesCleared']['basic']['displayValue']
-pub async fn get_membershipid(bungie_name: &str, x_api_key: String) -> Result<MemberShip, BotError> {
+//https://www.bungie.net/Platform/Destiny2/ {MembershipType} /Account/ {MembershipId} /Character/0/Stats/?groups=&modes=4 and ['Response']['raid']['allTime']['activitiesCleared']['basic']['displayValue']
+pub async fn get_membershipid(
+    bungie_name: &str,
+    x_api_key: String,
+) -> Result<MemberShip, BotError> {
     let bungie_name = bungie_name.to_string();
     let (display_name, display_name_code) = bungie_name.split_once("#").unwrap();
-    
+
     let bungie_name = BungieName {
         name: display_name.to_string(),
         code: display_name_code.to_string(),
@@ -205,28 +208,35 @@ pub async fn get_membershipid(bungie_name: &str, x_api_key: String) -> Result<Me
 
     if res.status().is_success() {
         let body = res.text().await.unwrap();
-        let body:MembershipIdResponse = from_str(&body).unwrap();
-        
+        let body: MembershipIdResponse = from_str(&body).unwrap();
+
         let mut users: Vec<MemberShip> = vec![];
         for user in body.Response {
             println!("membershipId: {}, membershipType: {}", user.id, user.type_m);
             users.push(user);
         }
         if users.len() == 0 {
-            Ok(MemberShip{id: String::new(), type_m: -1})
+            Ok(MemberShip {
+                id: String::new(),
+                type_m: -1,
+            })
         } else {
             Ok(users[0].clone())
         }
-        
     } else {
         println!("Request failed with status: {}", res.status());
-        Err(BotError{error_code: 106, string: Some("dojebal jsi to".to_string())})
+        Err(BotError {
+            error_code: 106,
+            string: Some("dojebal jsi to".to_string()),
+        })
     }
 }
 
-
-
-pub async fn get_users_clears(membership_id: String, membership_type: i32, x_api_key: String) -> Result<f64, BotError> {
+pub async fn get_users_clears(
+    membership_id: String,
+    membership_type: i32,
+    x_api_key: String,
+) -> Result<f64, BotError> {
     let res = reqwest::Client::new()
     .get(format!("https://www.bungie.net/Platform/Destiny2/{}/Account/{}/Character/0/Stats/?groups=&modes=4", membership_type, membership_id))
     .header("X-API-Key", x_api_key)
@@ -243,11 +253,21 @@ pub async fn get_users_clears(membership_id: String, membership_type: i32, x_api
             }
         }
     }
-    Err(BotError{error_code: 112, string: Some("Failed to get activities cleared".to_string())})
+    Err(BotError {
+        error_code: 112,
+        string: Some("Failed to get activities cleared".to_string()),
+    })
 }
 
-pub async fn get_character_ids(membership_id: String, membership_type: i32, x_api_key: String) -> Result<Vec<String>, BotError> {
-    let url = format!("https://www.bungie.net/Platform/Destiny2/{}/Profile/{}/?components=200", membership_type, membership_id);
+pub async fn get_character_ids(
+    membership_id: String,
+    membership_type: i32,
+    x_api_key: String,
+) -> Result<Vec<String>, BotError> {
+    let url = format!(
+        "https://www.bungie.net/Platform/Destiny2/{}/Profile/{}/?components=200",
+        membership_type, membership_id
+    );
     let res = reqwest::Client::new()
         .get(&url)
         .header("X-API-Key", x_api_key)
@@ -256,17 +276,17 @@ pub async fn get_character_ids(membership_id: String, membership_type: i32, x_ap
 
     if res.status().is_success() {
         let body = res.text().await.unwrap();
-        
+
         let api_response: CharacterIdResponse = serde_json::from_str(&body).unwrap();
-        let mut character_id_string:Vec<String> = vec![];
+        let mut character_id_string: Vec<String> = vec![];
         for (character_id, _character_data) in api_response.response.characters.data.iter() {
             println!("Character ID: {}", character_id);
             character_id_string.push(character_id.to_string());
-        
         }
         println!("{:?}", character_id_string);
     }
-    Err(BotError{error_code: 111, string: Some("Failed to get character IDs".to_string())})
+    Err(BotError {
+        error_code: 111,
+        string: Some("Failed to get character IDs".to_string()),
+    })
 }
-
-

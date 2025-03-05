@@ -1,8 +1,19 @@
 use core::fmt;
-use std::{collections::HashMap, error::Error, fs::File, io::{Read, Write}, path::Path, sync::Arc, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use sqlx::{pool, SqlitePool};
-use tmi::{client::{read::RecvError, write::SendError, ReconnectError}, Client, MessageParseError};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fs::File,
+    io::{Read, Write},
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tmi::{
+    client::{read::RecvError, write::SendError, ReconnectError},
+    Client, MessageParseError,
+};
 use tokio::sync::Mutex;
 
 use crate::bot_commands::{is_broadcaster, is_follower, is_moderator, is_vip};
@@ -15,20 +26,21 @@ pub struct TwitchUser {
 
 impl Default for TwitchUser {
     fn default() -> Self {
-        TwitchUser { twitch_name: String::new(), bungie_name: String::new() }
+        TwitchUser {
+            twitch_name: String::new(),
+            bungie_name: String::new(),
+        }
     }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SharedState {
-    pub run_count: usize
+    pub run_count: usize,
 }
 
 impl SharedState {
     pub fn new() -> Self {
-        Self {
-            run_count: 0
-        }
+        Self { run_count: 0 }
     }
 
     pub fn add_stats(&mut self, run_count: usize) {
@@ -48,10 +60,14 @@ pub enum PermissionLevel {
     Follower,
     Vip,
     Moderator,
-    Broadcaster
+    Broadcaster,
 }
 
-pub async fn has_permission(msg: &tmi::Privmsg<'_>, client:Arc<Mutex<Client>>, level: PermissionLevel) -> bool {
+pub async fn has_permission(
+    msg: &tmi::Privmsg<'_>,
+    client: Arc<Mutex<Client>>,
+    level: PermissionLevel,
+) -> bool {
     match level {
         PermissionLevel::User => true,
         PermissionLevel::Follower => is_follower(msg, Arc::clone(&client)).await,
@@ -64,7 +80,7 @@ pub async fn has_permission(msg: &tmi::Privmsg<'_>, client:Arc<Mutex<Client>>, l
 #[derive(Debug)]
 pub struct BotError {
     pub error_code: usize,
-    pub string: Option<String>
+    pub string: Option<String>,
 }
 
 impl fmt::Display for BotError {
@@ -79,42 +95,66 @@ impl fmt::Display for BotError {
 impl Error for BotError {}
 impl From<RecvError> for BotError {
     fn from(err: RecvError) -> BotError {
-        BotError { error_code: 101, string: Some(err.to_string()) }
+        BotError {
+            error_code: 101,
+            string: Some(err.to_string()),
+        }
     }
 }
 impl From<SendError> for BotError {
     fn from(err: SendError) -> BotError {
-        BotError { error_code: 102, string: Some(err.to_string()) }
+        BotError {
+            error_code: 102,
+            string: Some(err.to_string()),
+        }
     }
 }
 impl From<MessageParseError> for BotError {
     fn from(err: MessageParseError) -> BotError {
-        BotError { error_code: 103, string: Some(err.to_string()) }
+        BotError {
+            error_code: 103,
+            string: Some(err.to_string()),
+        }
     }
 }
 impl From<ReconnectError> for BotError {
     fn from(err: ReconnectError) -> BotError {
-        BotError { error_code: 104, string: Some(err.to_string()) }
+        BotError {
+            error_code: 104,
+            string: Some(err.to_string()),
+        }
     }
 }
 impl From<reqwest::Error> for BotError {
     fn from(err: reqwest::Error) -> BotError {
-        BotError { error_code: 105, string: Some(err.to_string()) }
+        BotError {
+            error_code: 105,
+            string: Some(err.to_string()),
+        }
     }
 }
 impl From<serenity::Error> for BotError {
     fn from(err: serenity::Error) -> BotError {
-        BotError { error_code: 106, string: Some(err.to_string()) }
+        BotError {
+            error_code: 106,
+            string: Some(err.to_string()),
+        }
     }
 }
 impl From<serde_json::Error> for BotError {
     fn from(err: serde_json::Error) -> BotError {
-        BotError { error_code: 107, string: Some(err.to_string()) }
+        BotError {
+            error_code: 107,
+            string: Some(err.to_string()),
+        }
     }
 }
 impl From<sqlx::Error> for BotError {
     fn from(err: sqlx::Error) -> BotError {
-        BotError { error_code: 108, string: Some(err.to_string()) }
+        BotError {
+            error_code: 108,
+            string: Some(err.to_string()),
+        }
     }
 }
 
@@ -136,12 +176,11 @@ impl AnnouncementConfig {
     fn new() -> AnnouncementConfig {
         AnnouncementConfig {
             state: AnnouncementState::Paused,
-            interval: Duration::from_secs(5*60),
-            last_sent: None
+            interval: Duration::from_secs(5 * 60),
+            last_sent: None,
         }
     }
 }
-
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct ChannelConfig {
@@ -153,7 +192,7 @@ pub struct ChannelConfig {
     pub packages: Vec<String>,
     pub runs: usize,
     pub announcement_config: AnnouncementConfig,
-    pub sub_only: bool, 
+    pub sub_only: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -175,7 +214,8 @@ impl BotConfig {
         if Path::new(config_path).exists() {
             let mut file = File::open(config_path).expect("Failed to open config file.");
             let mut content = String::new();
-            file.read_to_string(&mut content).expect("Failed to read config file.");
+            file.read_to_string(&mut content)
+                .expect("Failed to read config file.");
             serde_json::from_str(&content).expect("Failed to parse config file.")
         } else {
             let new_config = BotConfig::new();
@@ -189,10 +229,15 @@ impl BotConfig {
         let config_path = "D:/program/krapbott/configs/config.json";
         let content = serde_json::to_string_pretty(self).expect("Failed to serialize config.");
         let mut file = File::create(config_path).expect("Failed to create config file.");
-        file.write_all(content.as_bytes()).expect("Failed to write config file.");
+        file.write_all(content.as_bytes())
+            .expect("Failed to write config file.");
     }
 
-    pub fn get_channel_config(&mut self, channel_name: &str) -> &mut ChannelConfig {
+    pub fn get_channel_config(&self, channel_name: &str) -> Option<&ChannelConfig> {
+        self.channels.get(channel_name)
+    }
+
+    pub fn get_channel_config_mut(&mut self, channel_name: &str) -> &mut ChannelConfig {
         self.channels
             .entry(channel_name.to_string())
             .or_insert_with(|| ChannelConfig {
@@ -206,7 +251,6 @@ impl BotConfig {
                 announcement_config: AnnouncementConfig::new(),
                 sub_only: false,
             })
-
     }
 
     pub fn print_all_configs(&self) {
@@ -225,11 +269,16 @@ impl BotConfig {
 }
 
 pub struct TemplateManager {
-    pub pool: Arc<SqlitePool>, 
+    pub pool: Arc<SqlitePool>,
 }
 
 impl TemplateManager {
-    pub async fn get_template(&self, package: String, command: String, channel_id: Option<String>) -> Option<String> {
+    pub async fn get_template(
+        &self,
+        package: String,
+        command: String,
+        channel_id: Option<String>,
+    ) -> Option<String> {
         let result = if let Some(channel) = channel_id {
             let res = sqlx::query!(
                 "SELECT template FROM commands_template WHERE package = ? AND command = ? AND channel_id = ?",
@@ -243,32 +292,52 @@ impl TemplateManager {
             ).fetch_optional(&*self.pool).await;
             res.ok().flatten().map(|row| row.template)
         };
-       return result;
+        return result;
     }
 
-    pub async fn set_template(&self, package: String, command: String, template: String, channel_id: Option<String>) -> Result<(), BotError> {
+    pub async fn set_template(
+        &self,
+        package: String,
+        command: String,
+        template: String,
+        channel_id: Option<String>,
+    ) -> Result<(), BotError> {
         if let Some(channel) = channel_id {
             sqlx::query!(
                 "INSERT INTO commands_template (package, command, template, channel_id) 
                 VALUES (?, ?, ?, ?) 
                 ON CONFLICT(channel_id, command) DO UPDATE SET template = excluded.template",
-                package, command, template, channel
-            ).execute(&*self.pool).await?;
+                package,
+                command,
+                template,
+                channel
+            )
+            .execute(&*self.pool)
+            .await?;
         }
         Ok(())
     }
 
-    pub async fn remove_template(&self, command: String, channel_id: Option<String>) -> Result<(), BotError> {
+    pub async fn remove_template(
+        &self,
+        command: String,
+        channel_id: Option<String>,
+    ) -> Result<(), BotError> {
         if let Some(channel) = channel_id {
             sqlx::query!(
                 "DELETE FROM commands_template WHERE command = ? AND channel_id = ?",
-                command, channel
-            ).execute(&*self.pool).await?;
+                command,
+                channel
+            )
+            .execute(&*self.pool)
+            .await?;
         } else {
             sqlx::query!(
                 "DELETE FROM commands_template WHERE command = ? AND channel_id IS NULL",
                 command
-            ).execute(&*self.pool).await?;
+            )
+            .execute(&*self.pool)
+            .await?;
         }
         Ok(())
     }

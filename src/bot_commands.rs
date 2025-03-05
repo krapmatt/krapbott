@@ -9,13 +9,13 @@ use tmi::{Badge, Client};
 use crate::database::{is_bungiename, user_exists_in_database};
 use crate::{api::{get_membershipid, get_users_clears, MemberShip}, bot::BotState, database::{load_membership, remove_command, save_command, save_to_user_database}, models::{BotError, CommandAction, TwitchUser}};
 
-pub const ADMINS: &[&str] = &["KrapMatt", "ThatJK"];
+pub const ADMINS: &[&str] = &["KrapMatt", "ThatJK", "Samoan_317"];
 
 pub async fn is_broadcaster(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
     if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "broadcaster") || ADMINS.contains(&&*msg.sender().name().to_string()) {
         return true;
     } else {
-        _ = client.lock().await.privmsg(msg.channel(), "You are not a moderator/broadcaster. You can't use this command").send().await;
+        _ = client.lock().await.privmsg(msg.channel(), "You are not a broadcaster. You can't use this command").send().await;
         return false;
     }
     
@@ -49,34 +49,29 @@ pub async fn is_vip(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::
     
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct ChatterResponse {
     data: Vec<Chatter>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct Chatter {
     user_name: String,
 }
 
-pub async fn fetch_lurkers(broadcaster_id: &str, token: &str) -> Vec<String> {
+pub async fn fetch_lurkers(broadcaster_id: &str, token: &str, client_id: &str) -> Vec<String> {
     let url = format!(
-        "https://api.twitch.tv/helix/chat/chatters?broadcaster_id={}&moderator_id={}",
-        broadcaster_id, broadcaster_id
+        "https://api.twitch.tv/helix/chat/chatters?broadcaster_id={}&moderator_id=1091219021",
+        broadcaster_id
     );
 
     let res = reqwest::Client::new()
         .get(&url)
         .header("Authorization", format!("Bearer {}", token))
-        .header("Client-Id", "your_client_id")
+        .header("Client-Id", client_id)
         .send()
-        .await
-        .unwrap()
-        .json::<ChatterResponse>()
-        .await
-        .unwrap();
-
-    res.data.into_iter().map(|c| c.user_name).collect()
+        .await.unwrap().json::<ChatterResponse>().await;
+    res.unwrap().data.into_iter().map(|c| c.user_name).collect()
 }
 
 //Pro twitch na ban botů
@@ -110,16 +105,13 @@ pub async fn ban_bots(msg: &tmi::Privmsg<'_>, oauth_token: &str, client_id: Stri
     println!("{:?}", res.text().await);
 }
 
-pub async fn shoutout(oauth_token: &str, client_id: String, to_broadcaster_id: &str, broadcaster: &str) {
+pub async fn shoutout(oauth_token: &str, client_id: String, to_broadcaster_id: &str, broadcaster: &str) -> Result<(), BotError> {
     let url = format!("https://api.twitch.tv/helix/chat/shoutouts?from_broadcaster_id={}&to_broadcaster_id={}&moderator_id=1091219021", broadcaster, to_broadcaster_id);
-    let res = reqwest::Client::new()
+    reqwest::Client::new()
     .post(url)
     .bearer_auth(oauth_token)
-    .header("Client-Id", client_id)
-    .send()
-    .await.expect("Bad reqwest");
-    println!("{:?}", res.text().await);
-
+    .header("Client-Id", client_id).send().await?;
+    Ok(())
 }
 
 pub async fn is_channel_live(channel_id: &str, token: &str, client_id: &str) -> Result<bool, reqwest::Error> {
@@ -213,57 +205,88 @@ async fn is_banned_from_queue(msg: &tmi::Privmsg<'_>, pool: &SqlitePool, client:
             Err(e.into())
         }
     }
-    
-    
 }
-
 
 impl BotState {
     //User can join into queue
-    pub async fn handle_join(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn handle_join(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
         let mut client = client.lock().await;
 
-        let config = self.config.get_channel_config(&msg.channel());
+        let config = match self.config.get_channel_config(msg.channel()) {
+            Some(config) => config,
+            None => return Ok(()),
+        };
         let channel = config.clone().queue_channel;
 
-        if config.open {
-            if config.sub_only && !is_subscriber(&msg) {
-                send_message(&msg, &mut client, "Only subscribers can enter the queue.").await?;
-                return Ok(());
-            }
+        if !config.open {
+            client.privmsg(msg.channel(), "Queue is closed").send().await?;
+            return Ok(());
+        }
 
-            if !is_banned_from_queue(msg, pool, &mut client).await? {
-                let mut bungie_name = user_exists_in_database(pool, msg.sender().name().to_string()).await;
-                
-                if bungie_name.is_none() {
-                    if let Some((_join, name)) = msg.text().split_once(" ") {
-                        if let Some(bungie) = is_valid_bungie_name(name) {
-                            if is_bungiename(self.x_api_key.clone(), &bungie, &msg.sender().name(), pool).await {
-                                bungie_name = Some(name.to_string());
-                            }
-                        }
-                    }
-                }
+        if config.sub_only && !is_subscriber(msg) {
+            send_message(msg, &mut client, "Only subscribers can enter the queue.").await?;
+            return Ok(());
+        }
 
-                if let Some(name) = bungie_name {
-                    let new_user = TwitchUser {
-                        twitch_name: msg.sender().name().to_string(),
-                        bungie_name: name.trim().to_string(),
-                    };
-                    process_queue_entry(msg, &mut client, config.len, pool, new_user, &channel).await?;
+        if is_banned_from_queue(msg, pool, &mut client).await? {
+            return Ok(());
+        }
+        let twitch_name = msg.sender().name().to_string();
+        // Fetch stored Bungie name from the database
+        let mut stored_bungie_name = user_exists_in_database(pool, msg.sender().name().to_string()).await;
+
+        // Check if user provided a Bungie name manually
+        let mut provided_bungie_name = msg.text().split_once(" ").map(|(_, name)| name.trim().to_string());
+        if provided_bungie_name == Some(" ".to_string()) {
+            provided_bungie_name = None
+        }
+        let bungie_name_to_use = if let Some(provided) = &provided_bungie_name {
+            if let Some(stored) = &stored_bungie_name {
+                if stored == provided {
+                    Some(stored.clone()) // Matches database, use stored one
+                } else if is_valid_bungie_name(provided).is_some() && is_bungiename(self.x_api_key.clone(), provided, &msg.sender().name(), pool).await {
+                    // New valid Bungie name, update database
+                    save_to_user_database(pool, TwitchUser {twitch_name: twitch_name.clone(), bungie_name: provided.clone()}, self.x_api_key.clone()).await?;
                     
+                    Some(provided.clone())
                 } else {
-                    send_invalid_name_reply(msg, &mut client).await?;
+                    // Invalid Bungie name provided, fall back to stored one
+                    Some(stored.clone())
+                }
+            } else {
+                // No stored Bungie name, validate the provided one
+                if is_valid_bungie_name(provided).is_some() && is_bungiename(self.x_api_key.clone(), provided, &msg.sender().name(), pool).await {
+                    // Save new Bungie name to database
+                    save_to_user_database(pool, TwitchUser {twitch_name: twitch_name.clone(), bungie_name: provided.clone()}, self.x_api_key.clone()).await?;
+
+
+                    Some(provided.clone())
+                } else {
+                    // Provided Bungie name is invalid
+                    None
                 }
             }
         } else {
-            client.privmsg(msg.channel(), "Queue is closed").send().await?;
+            stored_bungie_name
+        };
+
+        // If Bungie name is valid, add user to the queue
+        if let Some(name) = bungie_name_to_use {
+            let new_user = TwitchUser {
+                twitch_name: msg.sender().name().to_string(),
+                bungie_name: name,
+            };
+            process_queue_entry(msg, &mut client, config.len, pool, new_user, &channel).await?;
+        } else {
+            send_invalid_name_reply(msg, &mut client).await?;
         }
+    
+       
         Ok(())
     }
     
     pub async fn handle_next(&mut self, channel_id: String, pool: &SqlitePool) -> Result<String, BotError> {
-        let config = self.config.get_channel_config(&channel_id);
+        let config = self.config.get_channel_config_mut(&channel_id);
         let channel = config.queue_channel.clone();
         let teamsize: i32 = config.teamsize.try_into().unwrap();
     
@@ -279,12 +302,8 @@ impl BotState {
                 position ASC 
              LIMIT ?",
             channel, teamsize
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-    
+        ).fetch_all(&mut *tx).await?;
         let mut result = Vec::new();
-    
         for entry in &queue_entries {
             if entry.priority_runs_left > Some(0) {
                 // Reduce priority runs
@@ -301,12 +320,9 @@ impl BotState {
                     "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
                     entry.twitch_name,
                     channel
-                )
-                .execute(&mut *tx)
-                .await?;
+                ).execute(&mut *tx).await?;
             }
         }
-    
         // Fetch remaining queue
         let remaining_queue = sqlx::query!(
             "SELECT twitch_name, bungie_name FROM queue WHERE channel_id = ? ORDER BY position ASC LIMIT ?",
@@ -323,9 +339,7 @@ impl BotState {
         let mut rows = sqlx::query!(
             "SELECT rowid FROM queue WHERE channel_id = ? ORDER BY position ASC",
             channel_id
-        )
-        .fetch_all(&mut *tx)
-        .await?;
+        ).fetch_all(&mut *tx).await?;
 
         // Update positions
         for (index, row) in rows.iter().enumerate() {
@@ -334,9 +348,7 @@ impl BotState {
                 "UPDATE queue SET position = ? WHERE rowid = ?",
                 index, // New position
                 row.rowid
-            )
-            .execute(&mut *tx)
-            .await?;
+            ).execute(&mut *tx).await?;
         }
     
         tx.commit().await?; // Commit transaction
@@ -351,7 +363,7 @@ impl BotState {
         })
     }
 
-    pub async fn prio(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn prio(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
         let text = msg.text().to_owned();
         let words: Vec<&str> = text.split_ascii_whitespace().collect();
     
@@ -366,7 +378,11 @@ impl BotState {
             twitch_name.remove(0);
         }
     
-        let config = self.config.get_channel_config(msg.channel());
+        let config = if let Some(config) = self.config.get_channel_config(msg.channel()) {
+            config
+        } else {
+            return Ok(())
+        };
         let channel = config.queue_channel.clone();
         let teamsize = config.teamsize;
     
@@ -458,7 +474,7 @@ impl BotState {
     }
 
     //Moderator can remove player from queue
-    pub async fn handle_remove(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn handle_remove(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
         let parts: Vec<&str> = msg.text().split_whitespace().collect();
         if parts.len() != 2 {
             return Ok(()); // No valid username provided
@@ -469,7 +485,11 @@ impl BotState {
             twitch_name.remove(0);
         }
 
-        let config = self.config.get_channel_config(&msg.channel());
+        let config = if let Some(config) = self.config.get_channel_config(&msg.channel()) {
+            config
+        } else {
+            return Ok(());
+        };
         let channel = config.queue_channel.clone();
 
         let mut tx = pool.begin().await?; // Start transaction
@@ -516,14 +536,18 @@ impl BotState {
     }   
 
     //Show the user where he is in queue
-    pub async fn handle_pos(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn handle_pos(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
         let sender_name = msg.sender().name().to_string();
-        let config = self.config.get_channel_config(msg.channel());
+        let config = if let Some(config) = self.config.get_channel_config(msg.channel()) {
+            config
+        } else {
+            return Ok(());
+        };
         let teamsize = config.teamsize as i64;
         let channel = config.queue_channel.clone();
 
         // 🔹 Fetch position using a ranked query
-        let result = sqlx::query_scalar!(
+        let result: Option<i64> = sqlx::query_scalar!(
             r#"
             WITH RankedQueue AS (
                 SELECT twitch_name, ROW_NUMBER() OVER (ORDER BY position) AS position
@@ -552,9 +576,13 @@ impl BotState {
     }
 
     //User leaves queue
-    pub async fn handle_leave(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn handle_leave(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
         let name = msg.sender().name().to_string();
-        let config = self.config.get_channel_config(msg.channel());
+        let config = if let Some(config) = self.config.get_channel_config(msg.channel()) {
+            config
+        } else {
+            return Ok(());
+        };
         let teamsize: i64 = config.teamsize.try_into().unwrap();
         let channel = config.queue_channel.clone();
 
@@ -595,8 +623,12 @@ impl BotState {
     //Shows whole queue
     //UNWRAPS ON VEC????
     //TODO! COMBINED/SINGLE
-    pub async fn handle_queue(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
-        let config = self.config.get_channel_config(msg.channel());
+    pub async fn handle_queue(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+        let config = if let Some(config) = self.config.get_channel_config(msg.channel()) {
+            config
+        } else {
+            return Ok(())
+        };
         let channel = config.queue_channel.clone();
         let teamsize = config.teamsize as usize;
     
@@ -648,9 +680,9 @@ impl BotState {
     }
 
     //random fireteam
-    pub async fn random(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError>{
+    pub async fn random(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError>{
         let channel = msg.channel().to_string();
-        let teamsize = self.config.get_channel_config(&channel).teamsize;
+        let teamsize = self.config.get_channel_config(&channel).unwrap().teamsize;
         let teamsize_i32: i32 = teamsize.try_into().unwrap();
         // 🔹 Fetch all users from queue
         let queue_entries = sqlx::query!(
@@ -680,7 +712,7 @@ impl BotState {
         Ok(())
     }
     //Get total clears of raid of a player
-    pub async fn total_raid_clears(&mut self, msg: &tmi::Privmsg<'_>, client: &mut Client, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn total_raid_clears(&self, msg: &tmi::Privmsg<'_>, client: &mut Client, pool: &SqlitePool) -> Result<(), BotError> {
         let mut membership = MemberShip { id: String::new(), type_m: -1 };
         let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
         
@@ -718,7 +750,7 @@ impl BotState {
     }
 
     pub async fn add_package(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> Result<(), BotError> {
-        let config = self.config.get_channel_config(msg.channel());
+        let config = self.config.get_channel_config_mut(msg.channel());
         let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
 
         if words.len() <= 1 {
@@ -735,7 +767,7 @@ impl BotState {
         Ok(())
     }
 
-    pub async fn move_groups(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn move_groups(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
         let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
         if words.len() < 2 {
             send_message(msg, client.lock().await.borrow_mut(), "Usage: !move <twitch_name>").await?;
@@ -744,7 +776,11 @@ impl BotState {
     
         let mut twitch_name = words[1].strip_prefix("@").unwrap_or(words[1]).to_string();
     
-        let config = self.config.get_channel_config(msg.channel());
+        let config = if let Some(config) = self.config.get_channel_config(msg.channel()) {
+            config
+        } else {
+            return Ok(());
+        };
         let teamsize = config.teamsize as i64;
         let channel = &config.queue_channel;
     
@@ -766,9 +802,9 @@ impl BotState {
     
         // 🔹 Find the last position in the queue
         let max_pos = sqlx::query_scalar!(
-            "SELECT MAX(position) FROM queue WHERE channel_id = ?",
+            "SELECT COALESCE(MAX(position), 0) FROM queue WHERE channel_id = ?",
             channel
-        ).fetch_one(&mut *tx).await?.unwrap_or(0);
+        ).fetch_one(&mut *tx).await?;
     
         let new_position = position + teamsize;
         if new_position > max_pos {
@@ -807,11 +843,11 @@ impl BotState {
         let mut config = self.clone().config;
         
         if let Some(shared_chats) = self.streaming_together.get(msg.channel()) {
-            let source_config = self.config.get_channel_config(msg.channel());
+            let source_config = self.config.get_channel_config_mut(msg.channel());
             let mut all_channels = shared_chats.clone();
             all_channels.insert(msg.channel().to_string());
             for channel in all_channels {
-                let channel_config = config.get_channel_config(&channel);
+                let channel_config = config.get_channel_config_mut(&channel);
                 channel_config.combined = !channel_config.combined;
                 channel_config.open = !channel_config.open;
                 channel_config.len = source_config.len;
@@ -837,14 +873,14 @@ impl BotState {
 }
 
 async fn send_invalid_name_reply(msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError>{
-    let reply = format!("❌ Use !join bungiename#0000, {}!", msg.sender().name());
+    let reply = format!("❌ 1) Use !join bungiename#0000, {} 2) Make sure you have cross save on: https://www.bungie.net/7/en/CrossSave", msg.sender().name());
     send_message(msg, client, &reply).await?;
     Ok(())
 }
 
 pub async fn process_queue_entry(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, pool: &SqlitePool, user: TwitchUser, channel_id: &str) -> Result<(), BotError> {
    
-    let reply = if user_exists_in_queue(&pool, &user.clone().twitch_name, channel_id).await? {
+    let reply = if twitchuser_exists_in_queue(&pool, &user.clone().twitch_name, channel_id).await? {
         update_queue(&pool, &user).await?;
         format!("{} updated their Bungie name to {}", msg.sender().name(), user.clone().bungie_name)
     } else {
@@ -854,10 +890,19 @@ pub async fn process_queue_entry(msg: &tmi::Privmsg<'_>, client: &mut Client, qu
     Ok(())
 }
 
-async fn user_exists_in_queue(pool: &SqlitePool, twitch_name: &str, channel_id: &str) -> Result<bool, BotError> {
+async fn twitchuser_exists_in_queue(pool: &SqlitePool, twitch_name: &str, channel_id: &str) -> Result<bool, BotError> {
     let exists = sqlx::query_scalar!(
         "SELECT EXISTS(SELECT 1 FROM queue WHERE twitch_name = ? AND channel_id = ?)",
         twitch_name,
+        channel_id
+    ).fetch_one(pool).await.unwrap_or(0);
+    Ok(exists == 1)
+}
+
+async fn bungie_name_exists_in_queue(pool: &SqlitePool, bungie_name: &str, channel_id: &str) -> Result<bool, BotError> {
+    let exists = sqlx::query_scalar!(
+        "SELECT EXISTS(SELECT 1 FROM queue WHERE bungie_name = ? AND channel_id = ?)",
+        bungie_name,
         channel_id
     ).fetch_one(pool).await.unwrap_or(0);
     Ok(exists == 1)
@@ -870,7 +915,7 @@ async fn update_queue(pool: &SqlitePool, user: &TwitchUser) -> Result<(), BotErr
     ).execute(pool).await?;
     Ok(())
 }
-//TODO! redo the queue so that combined/solo settings
+
 async fn add_to_queue<'a>(msg: &tmi::Privmsg<'_>, queue_len: usize, pool: &SqlitePool, user: &TwitchUser, channel_id: &str) -> Result<String, BotError> {
     let count: i64 = sqlx::query_scalar!(
         "SELECT COUNT(*) FROM queue WHERE channel_id = ?",
@@ -880,18 +925,26 @@ async fn add_to_queue<'a>(msg: &tmi::Privmsg<'_>, queue_len: usize, pool: &Sqlit
     if count >= queue_len as i64 {
         return Ok("❌ You can't enter queue, it is full".to_string());
     }
-
+    if bungie_name_exists_in_queue(pool, &user.bungie_name, channel_id).await? {
+        return Ok(format!("❌ {}, wishes for some jail time ⛓", msg.sender().name()))
+    }
     let next_position: i64 = sqlx::query_scalar!(
         "SELECT COALESCE(MAX(position), 0) + 1 FROM queue WHERE channel_id = ?",
         channel_id
     ).fetch_one(pool).await.unwrap_or(1);
 
-    sqlx::query!(
+    let result = sqlx::query!(
         "INSERT INTO queue (position, twitch_name, bungie_name, channel_id) VALUES (?, ?, ?, ?)",
         next_position, user.twitch_name, user.bungie_name, channel_id
-    ).execute(pool).await?;
-
-    Ok(format!("✅ {} entered the queue at position #{}", msg.sender().name(), next_position))
+    ).execute(pool).await;
+    match result {
+        Ok(_) => Ok(format!("✅ {} entered the queue at position #{}", msg.sender().name(), next_position)),
+        Err(sqlx::Error::Database(err)) if err.is_unique_violation() => {
+            Ok(format!("❌ {} is already in queue", user.bungie_name))
+        }
+        Err(e) => Err(e.into())
+    }
+    
 }
 
 pub async fn register_user(pool: &SqlitePool, twitch_name: &str, bungie_name: &str) -> Result<String, BotError> {

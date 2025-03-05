@@ -6,10 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1.42.0", features = ["full"] }
-tmi = "0.7.2"
-serde_json = "1.0.134"
-serde = {version = "1.0.216", features = ["derive"]}
+tokio = { version = "1.43.0", features = ["full"] }
+tmi = "0.7.3"
+serde_json = "1.0.140"
+serde = {version = "1.0.218", features = ["derive"]}
 dotenvy = "0.15.7"
 reqwest = {version = "0.12.12", features = ["json"]}
 regex = "1.11.1"
@@ -19,9 +19,9 @@ serenity = { version = "0.12.4", features = ["client", "gateway"] }
 futures = "0.3.31"
 image = "0.25.5"
 chrono = "0.4.39"
-tokio-tungstenite = "0.26"
+tokio-tungstenite = "0.26.2"
 warp = { version = "0.3.7", features = ["tls"] }
-rand = "0.8.5"
+rand = "0.9.0"
 serde_millis = "0.1.1"
 sqlx = { version = "0.8.3", features = [ "sqlite", "runtime-tokio" ] }
 unicode-normalization = "0.1"
