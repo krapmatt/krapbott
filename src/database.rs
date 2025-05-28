@@ -3,10 +3,9 @@ use crate::{
     models::{BotError, TwitchUser},
 };
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    Pool, Sqlite, SqlitePool,
+    sqlite::SqlitePoolOptions, SqlitePool,
 };
-use std::{str::FromStr, sync::Arc};
+use std::sync::Arc;
 pub const QUEUE_TABLE: &str = "CREATE TABLE IF NOT EXISTS queue (
     position INTEGER NOT NULL,
     twitch_name TEXT NOT NULL,
@@ -27,7 +26,7 @@ pub const COMMANDS_TEMPLATE: &str = "CREATE TABLE IF NOT EXISTS commands_templat
     UNIQUE (channel_id, command)
 )";
 
-pub const TEST_TABLE: &str = "DROP TABLE queue";
+pub const TEST_TABLE: &str = "DROP TABLE giveaway";
 
 pub const USER_TABLE: &str = "CREATE TABLE IF NOT EXISTS user (
     id INTEGER PRIMARY KEY,
@@ -36,6 +35,15 @@ pub const USER_TABLE: &str = "CREATE TABLE IF NOT EXISTS user (
     membership_id TEXT,
     membership_type INTEGER,
     UNIQUE (twitch_name)
+)";
+
+pub const USERS_TABLE: &str = "CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,       -- Unique user ID (Twitch ID)
+    twitch_name TEXT UNIQUE,   -- Twitch username
+    access_token TEXT,         -- OAuth access token
+    refresh_token TEXT,        -- OAuth refresh token
+    expires_at TIMESTAMP,
+    profile_pp TEXT 
 )";
 
 pub const COMMAND_TABLE: &str = "CREATE TABLE IF NOT EXISTS commands (
@@ -55,8 +63,8 @@ pub const ANNOUNCEMENT_TABLE: &str = "CREATE TABLE IF NOT EXISTS announcements (
 )";
 
 pub const BAN_TABLE: &str = "CREATE TABLE IF NOT EXISTS banlist (
-    id INTEGER PRIMARY KEY,
-    twitch_name TEXT NOT NULL,
+    membership_id TEXT primary KEY,
+    banned_until TEXT, --Null = permanent Ban
     reason TEXT
 )";
 
@@ -69,30 +77,39 @@ pub const CURRENCY_TABLE: &str = "
     );
 ";
 
+pub const GIVEAWAY_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS giveaway (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id TEXT NOT NULL,
+        twitch_name TEXT NOT NULL,
+        tickets INTEGER NOT NULL,
+        UNIQUE(twitch_name, channel_id)
+    )
+";
+
 pub async fn initialize_currency_database() -> Result<Arc<SqlitePool>, sqlx::Error> {
-    let database_url = "sqlite:///D:/program/krapbott/public/commands.db";
+    let database_url = "sqlite://public/commands.db";
 
     // Create the connection pool
     let pool = SqlitePoolOptions::new()
-        .max_connections(8)
+        .max_connections(10)
         .connect(database_url)
         .await?;
 
     // Initialize tables
-    let queries = [
-        //TEST_TABLE,
-        //QUEUE_TABLE,
+    /*let queries = [
+        QUEUE_TABLE, GIVEAWAY_TABLE, CURRENCY_TABLE, BAN_TABLE, ANNOUNCEMENT_TABLE, COMMAND_TABLE, USERS_TABLE, USER_TABLE, COMMAND_TABLE
     ];
 
     for query in queries {
         sqlx::query(query).execute(&pool).await?;
-    }
+    }*/
 
     Ok(Arc::new(pool))
 }
 
 pub async fn is_bungiename(x_api_key: String, bungie_name: &str, twitch_name: &str, pool: &SqlitePool) -> bool {
-    if let Ok(user_info) = get_membershipid(bungie_name, x_api_key).await {
+    if let Ok(user_info) = get_membershipid(bungie_name, &x_api_key).await {
         if user_info.type_m == -1 {
             return false;
         } else {
@@ -115,12 +132,8 @@ pub async fn is_bungiename(x_api_key: String, bungie_name: &str, twitch_name: &s
     }
 }
 
-pub async fn save_to_user_database(
-    pool: &SqlitePool,
-    user: TwitchUser,
-    x_api_key: String,
-) -> Result<String, BotError> {
-    match get_membershipid(&user.bungie_name, x_api_key).await {
+pub async fn save_to_user_database(pool: &SqlitePool, user: TwitchUser, x_api_key: String) -> Result<String, BotError> {
+    match get_membershipid(&user.bungie_name, &x_api_key).await {
         Ok(user_info) if user_info.type_m == -1 => Ok(format!(
             "{} doesn't exist, check if your Bungie name is correct",
             user.bungie_name
@@ -130,7 +143,10 @@ pub async fn save_to_user_database(
                 "INSERT INTO user (twitch_name, bungie_name, membership_id, membership_type)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(twitch_name) 
-                DO UPDATE SET bungie_name = excluded.bungie_name",
+                DO UPDATE SET 
+                    bungie_name = excluded.bungie_name,
+                    membership_id = excluded.membership_id,
+                    membership_type = excluded.membership_type",
                 user.twitch_name,
                 user.bungie_name,
                 user_info.id,

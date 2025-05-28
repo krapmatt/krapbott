@@ -7,21 +7,22 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1.43.0", features = ["full"] }
-tmi = "0.7.3"
+tmi = "0.9.0"
 serde_json = "1.0.140"
 serde = {version = "1.0.218", features = ["derive"]}
 dotenvy = "0.15.7"
 reqwest = {version = "0.12.12", features = ["json"]}
 regex = "1.11.1"
-twitch_api = {version = "0.7.0-rc.7", features = ["all", "reqwest"]}
+
 lazy_static = "1.5.0"
 serenity = { version = "0.12.4", features = ["client", "gateway"] }
 futures = "0.3.31"
-image = "0.25.5"
 chrono = "0.4.39"
+chrono-tz = "0.10.3"
 tokio-tungstenite = "0.26.2"
 warp = { version = "0.3.7", features = ["tls"] }
 rand = "0.9.0"
 serde_millis = "0.1.1"
 sqlx = { version = "0.8.3", features = [ "sqlite", "runtime-tokio" ] }
-unicode-normalization = "0.1"
+unicode-normalization = "0.1.24"
+unicode-general-category = "1.0.0"

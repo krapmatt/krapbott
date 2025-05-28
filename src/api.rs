@@ -1,6 +1,7 @@
+use reqwest::{header::{HeaderMap, HeaderValue}, Client};
 use serde::{Deserialize, Serialize};
-use serde_json::{from_str, json, Value};
-use std::{collections::HashMap, env::var};
+use serde_json::{from_str, Value};
+use std::{collections::HashMap, fs::{self, File}, io::Write};
 
 use crate::models::BotError;
 
@@ -179,29 +180,24 @@ struct BasicStats {
     value: f64,
     displayValue: String,
 }
-/*then use GetProfile
-get their characters
-then use GetActivityHistory
-to get the activities
-https://data.destinysets.com/api
-use this
-mode=4 is Raid */
 
 //https://www.bungie.net/Platform/Destiny2/ {MembershipType} /Account/ {MembershipId} /Character/0/Stats/?groups=&modes=4 and ['Response']['raid']['allTime']['activitiesCleared']['basic']['displayValue']
-pub async fn get_membershipid(
-    bungie_name: &str,
-    x_api_key: String,
-) -> Result<MemberShip, BotError> {
+pub async fn get_membershipid(bungie_name: &str, x_api_key: &str) -> Result<MemberShip, BotError> {
     let bungie_name = bungie_name.to_string();
     let (display_name, display_name_code) = bungie_name.split_once("#").unwrap();
-
+    
     let bungie_name = BungieName {
         name: display_name.to_string(),
         code: display_name_code.to_string(),
     };
+
+    let mut headers = HeaderMap::new();
+    headers.insert("X-API-Key", HeaderValue::from_str(x_api_key).unwrap());
+    headers.insert("User-Agent", HeaderValue::from_str("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36").unwrap());
+
     let res = reqwest::Client::new()
         .post("https://www.bungie.net/Platform/Destiny2/SearchDestinyPlayerByBungieName/All/")
-        .header("X-API-Key", x_api_key)
+        .headers(headers)
         .json(&bungie_name)
         .send()
         .await?;
@@ -225,10 +221,7 @@ pub async fn get_membershipid(
         }
     } else {
         println!("Request failed with status: {}", res.status());
-        Err(BotError {
-            error_code: 106,
-            string: Some("dojebal jsi to".to_string()),
-        })
+        Err(BotError::Custom("Poopoo".to_string()))
     }
 }
 
@@ -237,9 +230,12 @@ pub async fn get_users_clears(
     membership_type: i32,
     x_api_key: String,
 ) -> Result<f64, BotError> {
+    let mut headers = HeaderMap::new();
+    headers.insert("X-API-Key", HeaderValue::from_str(&x_api_key).unwrap());
+    headers.insert("User-Agent", HeaderValue::from_str("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36").unwrap());
     let res = reqwest::Client::new()
     .get(format!("https://www.bungie.net/Platform/Destiny2/{}/Account/{}/Character/0/Stats/?groups=&modes=4", membership_type, membership_id))
-    .header("X-API-Key", x_api_key)
+    .headers(headers)
     .send()
     .await?;
     if res.status().is_success() {
@@ -253,24 +249,19 @@ pub async fn get_users_clears(
             }
         }
     }
-    Err(BotError {
-        error_code: 112,
-        string: Some("Failed to get activities cleared".to_string()),
-    })
+    Err(BotError::Custom("Failed to get activities cleared".to_string()))
 }
 
-pub async fn get_character_ids(
-    membership_id: String,
-    membership_type: i32,
-    x_api_key: String,
-) -> Result<Vec<String>, BotError> {
+pub async fn get_character_ids(membership_id: String, membership_type: i32, x_api_key: String) -> Result<Vec<String>, BotError> {
     let url = format!(
         "https://www.bungie.net/Platform/Destiny2/{}/Profile/{}/?components=200",
         membership_type, membership_id
     );
+    let mut headers = HeaderMap::new();
+    headers.insert("X-API-Key", HeaderValue::from_str(&x_api_key).unwrap());
+    headers.insert("User-Agent", HeaderValue::from_str("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36").unwrap());
     let res = reqwest::Client::new()
-        .get(&url)
-        .header("X-API-Key", x_api_key)
+        .get(&url).headers(headers)
         .send()
         .await?;
 
@@ -285,8 +276,185 @@ pub async fn get_character_ids(
         }
         println!("{:?}", character_id_string);
     }
-    Err(BotError {
-        error_code: 111,
-        string: Some("Failed to get character IDs".to_string()),
-    })
+    Err(BotError::Custom("Failed to get character IDs".to_string()))
+}
+// https://www.bungie.net/Platform/Destiny2/3/Profile/4611686018493345248/?components=204
+// https://www.bungie.net/Platform/GroupV2/User/254/23506163/0/1/
+// https://www.bungie.net/Platform/Destiny2/3/Profile/4611686018493345248/?components=Profiles,Characters,CharacterProgressions,CharacterActivities,CharacterEquipment,ItemInstances,CharacterInventories,ProfileInventories,ProfileProgression,ItemObjectives,PresentationNodes,Records,Collectibles,ItemSockets,ItemPlugObjectives,StringVariables
+// https://www.bungie.net/Platform/Destiny2/Milestones/
+pub async fn get_master_challenges(membership_type: i32, membership_id: String, x_api_key: &str, activity: String) -> Result<Vec<String>, BotError> {
+    let url = format!("https://www.bungie.net/Platform/Destiny2/{}/Profile/{}/?components=Records", membership_type, membership_id);
+    // IR YUT - 3256765903
+    // crota - 3256765902
+    // abyss - 3256765901
+    // bridge - 3256765900
+    //Conquest by virtue - 295018272
+
+    let mut headers = HeaderMap::new();
+    headers.insert("X-API-Key", HeaderValue::from_str(x_api_key).unwrap());
+    headers.insert("User-Agent", HeaderValue::from_str("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36").unwrap());
+
+    let response = reqwest::Client::new().get(url).headers(headers.clone()).send().await?;
+    let res: Value = response.json().await?;
+    
+    let mut hash = String::new();
+    let activity = &activity.to_lowercase();
+    if activity == "vog" {
+        hash = get_record_name("Maestro Glasser", headers.clone()).await?;
+    } else if activity == "vow" {
+        hash = get_record_name("Pyramid Conqueror", headers.clone()).await?;
+    } else if activity == "ron" {
+        hash = get_record_name("Final Nightmare", headers.clone()).await?;
+    } else if activity == "se" {
+        hash = get_record_name("Ignited Light", headers.clone()).await?;
+    } else if activity == "kf" {
+        hash = get_record_name("King of Kings", headers.clone()).await?;
+    } else if activity == "ce" {
+        hash = "295018272".to_string()
+    }
+
+    let mut result: Vec<String> = vec![];
+    let mut triumph: Value = Value::Null;
+    if activity == "ce" {
+            if let Some(records) = res["Response"]["characterRecords"]["data"].as_object().and_then(|map| map.values().next()).and_then(|char_data| char_data.get("records")) {
+                if let Some(trium) = records.get(&hash) {
+                    triumph = trium.clone()
+                }
+            }
+    } else {
+        if let Some(records) = res["Response"]["profileRecords"]["data"]["records"].as_object() {
+            if let Some(trium) = records.get(&hash) {
+                triumph = trium.clone()
+            }
+        }
+    }
+    if let Some(objectives) = triumph["objectives"].as_array() {
+        for objective in objectives {
+            if let (Some(objective_hash), Some(progress)) = (
+                objective["objectiveHash"].as_u64(),
+                objective["progress"].as_u64(),
+            ) {
+                let name = get_name_by_hash(objective_hash, headers.clone()).await?;
+                result.push(format!("{}: {}", name.strip_suffix(" completed").unwrap_or(&name), progress));
+            }
+        }
+    }
+    Ok(result)
+}
+
+async fn fetch_objective_manifest(headers: HeaderMap) -> Result<String, BotError> {
+    // Step 1: Get the Manifest
+    let manifest_url = "https://www.bungie.net/Platform/Destiny2/Manifest/";
+    let client = reqwest::Client::new();
+
+    let response = client.get(manifest_url).headers(headers.clone()).send().await?;
+    let manifest: Value = response.json().await?;
+
+    let activity_def_url = format!(
+        "https://www.bungie.net{}",
+        manifest["Response"]["jsonWorldComponentContentPaths"]["en"]["DestinyObjectiveDefinition"]
+            .as_str()
+            .unwrap()
+    );
+
+    // Step 2: Fetch DestinyActivityDefinition
+    let response = client.get(&activity_def_url).headers(headers).send().await?;
+    let content = response.text().await?;
+
+    let mut file = File::create("objective_manifest_cache.json").unwrap();
+    file.write_all(content.as_bytes());
+
+    
+    Ok(content)
+}
+
+fn load_objective_manifest() -> Result<String, BotError> {
+    match fs::read_to_string("objective_manifest_cache.json") {
+        Ok(content) => Ok(content),
+        Err(_) => Err(BotError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Manifest not found",
+        ))),
+    }
+}
+
+async fn get_name_by_hash(hash_number: u64, headers: HeaderMap) -> Result<String, BotError> {
+    // Try loading the cached manifest
+    let json_data = match load_objective_manifest() {
+        Ok(data) => data,
+        Err(_) => fetch_objective_manifest(headers).await?,
+    };
+
+    let record_json: HashMap<String, Value> = serde_json::from_str(&json_data)?;
+
+    for record in record_json.values() {
+        if let Some(hash) = record["hash"].as_u64() {
+            if hash == hash_number {
+                return Ok(record["progressDescription"]
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "Unknown".to_string()));
+            }
+        }
+    }
+
+    Ok("None".to_string())
+}
+
+
+
+
+async fn fetch_record_manifest(headers: HeaderMap) -> Result<String, BotError> {
+    let client = Client::new();
+    
+    let manifest_res = client
+        .get("https://www.bungie.net/Platform/Destiny2/Manifest/").headers(headers.clone())
+        .send()
+        .await?;
+    let manifest_json: Value = manifest_res.json().await?;
+    let manifest_path = manifest_json["Response"]["jsonWorldComponentContentPaths"]["en"]["DestinyRecordDefinition"]
+        .as_str()
+        .unwrap();
+
+    let manifest_url = format!("https://www.bungie.net{}", manifest_path);
+
+    // Download DestinyRecordDefinition JSON
+    let record_res = client.get(&manifest_url).headers(headers).send().await?;
+    let content = record_res.text().await?;
+
+    let mut file = File::create("record_manifest_cache.json").unwrap();
+    file.write_all(content.as_bytes());
+
+    
+    Ok(content)
+}
+
+fn load_record_manifest() -> Result<String, BotError> {
+    match fs::read_to_string("record_manifest_cache.json") {
+        Ok(content) => Ok(content),
+        Err(_) => Err(BotError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Manifest not found",
+        ))),
+    }
+}
+
+/*"displayProperties": Object {"description": String("Acquire Major Boons or Corrupted Boons in the Nether activity."), "hasIcon": Bool(true), "icon": String("/common/destiny2_content/icons/bd92acccf9eafddf15512b496e15ec94.png"), "iconSequences": Array [Object {"frames": Array [String("/common/destiny2_content/icons/bd92acccf9eafddf15512b496e15ec94.png")]}, Object {"frames": Array [String("/common/destiny2_content/icons/814207426a3ba44b8a3f1eb2606a544a.png")]}], "name": String("Major Boon Collector")}, "expirationInfo": Object {"description": String(""), "hasExpiration": Bool(false)}, "forTitleGilding": Bool(false), "hash": Number(1541333176), "index": Number(4501), "intervalInfo": Object {"intervalObjectives": Array [Object {"intervalObjectiveHash": Number(3821016597), "intervalScoreValue": Number(10)}, Object {"intervalObjectiveHash": Number(3821016596), "intervalScoreValue": Number(8)}, Object {"intervalObjectiveHash": Number(3821016599), "intervalScoreValue": Number(6)}, Object {"intervalObjectiveHash": Number(3821016598), "intervalScoreValue": Number(4)}, Object {"intervalObjectiveHash": Number(3821016593), "intervalScoreValue": Number(2)}], "intervalRewards": Array [Object {"intervalRewardItems": Array []}, Object {"intervalRewardItems": Array []}, Object {"intervalRewardItems": Array []}, Object {"intervalRewardItems": Array []}, Object {"intervalRewardItems": Array []}], "isIntervalVersionedFromNormalRecord": Bool(false), "originalObjectiveArrayInsertionIndex": Number(0)}, "objectiveHashes": Array [], "parentNodeHashes": Array [Number(1093550159)], "presentationNodeType": Number(3), "recordTypeName": String("Triumphs"), "recordValueStyle": Number(0), "redacted": Bool(false), "requirements": Object {"entitlementUnavailableMessage": String("")}, "rewardItems": Array [], "scope": Number(0), "shouldShowLargeIcons": Bool(false), "stateInfo": Object {"claimedUnlockHash": Number(0), "completeUnlockHash": Number(0), "completedCounterUnlockValueHash": Number(0), "featuredPriority": Number(2147483647), "obscuredDescription": String(""), "obscuredName": String("")}, "titleInfo": Object {"hasTitle": Bool(false)}, "traitHashes": Array [], "traitIds": Array []}, */
+pub async fn get_record_name(record_name: &str, headers: HeaderMap) -> Result<String, BotError> {
+    //Get manifest definations
+    let json_data = match load_record_manifest() {
+        Ok(data) => data,
+        Err(_) => fetch_record_manifest(headers).await?,
+    };
+    //Make string into hashmap
+    let record_json: HashMap<String, Value> = serde_json::from_str(&json_data)?;
+    //Get Hash for name
+    for (hash, record) in record_json {
+        if let Some(name) = record["displayProperties"]["name"].as_str() {
+            if name.eq_ignore_ascii_case(record_name) {
+                return Ok(hash.clone()); // Return the hash if found
+            }
+        }
+    }
+    Ok("Unknown Record".to_string())
 }

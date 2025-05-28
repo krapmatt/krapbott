@@ -1,15 +1,16 @@
 use futures::{SinkExt, StreamExt};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::{mpsc::UnboundedSender, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use warp::{http::StatusCode, reject, reply::json, Filter};
+use warp::{http::StatusCode, reject::Rejection, reply::{json, Reply}, Filter};
 
 use crate::models::BotConfig;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 struct QueueEntry {
     position: i64,
     twitch_name: String,
@@ -46,85 +47,76 @@ pub async fn connect_to_obs() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn get_queue_handler(
-    channel_id: String,
-    pool: Arc<SqlitePool>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    // Simulate fetching queue data¨
-    let channel_id = format!("#{}", channel_id.to_ascii_lowercase());
-    let queue = sqlx::query_as!(
-        QueueEntry,
-        "SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
-        channel_id
-    )
-    .fetch_all(&*pool).await
-    .map_err(|_| warp::reject::reject())?;
+pub async fn get_queue_handler(cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Some(cookies) = cookies {
+        if let Some(session_id) = cookies.split(';')
+            .find(|c| c.trim().starts_with("session="))
+            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
+            let channel_id = format!("#{}", session_id.to_ascii_lowercase());
+            let mut config = BotConfig::load_config();
+            let config = config.get_channel_config_mut(&channel_id);
+            let queue_channel = &config.queue_channel;
 
-    let mut config = BotConfig::load_config();
-    let config = config.get_channel_config_mut(&channel_id);
+            let queue = sqlx::query_as!(
+                QueueEntry,
+                "SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
+                queue_channel
+            ).fetch_all(&*pool).await.map_err(|_| warp::reject::reject())?;
 
-    if queue.is_empty() {
-        return Ok(warp::reply::json(&queue));
+            if queue.is_empty() {
+                return Ok(warp::reply::json(&queue));
+            }
+            let grouped_queue: Vec<Vec<QueueEntry>> = queue
+                .chunks(config.teamsize)
+                .map(|chunk| chunk.to_vec())
+                .collect();
+            return Ok(warp::reply::json(&grouped_queue));
+        }
     }
-    let grouped_queue: Vec<Vec<QueueEntry>> = queue
-        .chunks(config.teamsize)
-        .map(|chunk| chunk.to_vec())
-        .collect();
-    Ok(warp::reply::json(&grouped_queue))
+    Ok(warp::reply::json(&serde_json::json!({ "error": "Not logged in" })))
 }
 
-pub async fn remove_from_queue_handler(
-    body: serde_json::Value,
-    pool: Arc<SqlitePool>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let twitch_name = body["twitch_name"].as_str().ok_or_else(|| reject())?;
-    let channel_name = body["channel_id"].as_str().ok_or_else(|| reject())?;
-    let channel_id = format!("#{}", channel_name.to_ascii_lowercase());
+pub async fn remove_from_queue_handler(cookies: Option<String>, body: serde_json::Value, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+    let twitch_name = body["twitch_name"].as_str().ok_or_else(|| warp::reject())?;
 
-    let position = sqlx::query!(
-        "SELECT position FROM queue WHERE twitch_name = ? AND channel_id = ?",
-        twitch_name,
-        channel_id
-    )
-    .fetch_optional(&*pool)
-    .await
-    .map_err(|_| warp::reject())?;
-
-    if position.is_some() {
-        // Remove the user from queue
-        sqlx::query!(
-            "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
-            twitch_name,
-            channel_id
-        )
-        .execute(&*pool)
-        .await
-        .map_err(|_| warp::reject())?;
-
-        let queue_entries = sqlx::query!(
-            "SELECT twitch_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
-            channel_id
-        )
-        .fetch_all(&*pool)
-        .await
-        .map_err(|_| warp::reject())?;
-
-        let mut new_position = 1;
-        for entry in queue_entries {
-            sqlx::query!(
-                "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
-                new_position,
-                entry.twitch_name,
-                channel_id
-            )
-            .execute(&*pool)
-            .await
-            .map_err(|_| warp::reject())?;
-            new_position += 1;
+    if let Some(cookies) = cookies {
+        if let Some(session_id) = cookies.split(';')
+            .find(|c| c.trim().starts_with("session="))
+            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
+            let channel_id = format!("#{}", session_id.to_ascii_lowercase());
+            let mut queue_channel = String::new();
+            if let Some(config)  = BotConfig::load_config().get_channel_config(&channel_id) {
+                queue_channel = config.queue_channel.clone()
+            }
+            let position = sqlx::query!(
+                "SELECT position FROM queue WHERE twitch_name = ? AND channel_id = ?",
+                twitch_name, queue_channel
+            ).fetch_optional(&*pool).await.map_err(|_| warp::reject())?;
+        
+            if position.is_some() {
+                // Remove the user from queue
+                sqlx::query!(
+                    "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
+                    twitch_name, queue_channel
+                ).execute(&*pool).await.map_err(|_| warp::reject())?;
+        
+                let queue_entries = sqlx::query!(
+                    "SELECT twitch_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
+                    queue_channel
+                ).fetch_all(&*pool).await.map_err(|_| warp::reject())?;
+        
+                let mut new_position = 1;
+                for entry in queue_entries {
+                    sqlx::query!(
+                        "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
+                        new_position, entry.twitch_name, queue_channel
+                    ).execute(&*pool).await.map_err(|_| warp::reject())?;
+                    new_position += 1;
+                }
+                return Ok(warp::reply::with_status("Removed", StatusCode::OK));
+            }
         }
-        return Ok(warp::reply::with_status("Removed", StatusCode::OK));
     }
-
     Ok(warp::reply::with_status(
         "Failed to remove",
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -133,7 +125,6 @@ pub async fn remove_from_queue_handler(
 
 #[derive(Deserialize, Debug)]
 pub struct UpdateQueueOrderRequest {
-    pub channel_id: String,
     pub new_order: Vec<QueueUpdate>,
 }
 
@@ -143,55 +134,57 @@ pub struct QueueUpdate {
     pub position: i64,
 }
 
-pub async fn update_queue_order(
-    data: UpdateQueueOrderRequest,
-    pool: Arc<SqlitePool>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let channel_id = format!("#{}", &data.channel_id.to_lowercase());
-    sqlx::query!(
-        "UPDATE queue SET position = position + 10000 WHERE channel_id = ?",
-        channel_id
-    )
-    .execute(&*pool)
-    .await
-    .map_err(|_| warp::reject())?;
-    for entry in &data.new_order {
-        sqlx::query!(
-            "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
-            entry.position,
-            entry.twitch_name,
-            channel_id
-        )
-        .execute(&*pool)
-        .await
-        .map_err(|_| warp::reject())?;
-        println!("{}", entry.twitch_name);
-        println!("Updated data {:?}", entry);
+pub async fn update_queue_order(cookies: Option<String>, data: UpdateQueueOrderRequest, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Some(cookies) = cookies {
+        if let Some(session_id) = cookies.split(';')
+            .find(|c| c.trim().starts_with("session="))
+            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
+            let channel_id = format!("#{}", session_id.to_ascii_lowercase());
+            let mut queue_channel = String::new();
+            if let Some(config)  = BotConfig::load_config().get_channel_config(&channel_id) {
+                queue_channel = config.queue_channel.clone()
+            }
+            sqlx::query!(
+                "UPDATE queue SET position = position + 10000 WHERE channel_id = ?",
+                queue_channel
+            ).execute(&*pool).await.map_err(|_| warp::reject())?;
+            for entry in &data.new_order {
+                sqlx::query!(
+                    "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
+                    entry.position, entry.twitch_name, queue_channel
+                ).execute(&*pool).await.map_err(|_| warp::reject())?;
+            }
+        
+            return Ok(warp::reply::json(&"Queue order updated"));
+        }
     }
-
-    Ok(warp::reply::json(&"Queue order updated"))
+    return Err(warp::reject())
 }
 
-pub async fn next_queue_handler(
-    channel_id: String,
-    sender: Arc<UnboundedSender<(String, String)>>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    if let Err(err) = sender.send((channel_id.clone(), "next".to_string())) {
-        eprintln!("Failed to send message: {:?}", err);
-        return Ok(warp::reply::with_status(
-            "Failed to send message",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ));
-    }
-
-    Ok(warp::reply::with_status(
-        "Next group message sent",
-        StatusCode::OK,
-    ))
+pub async fn next_queue_handler(cookies: Option<String>, sender: Arc<UnboundedSender<(String, String)>>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Some(cookies) = cookies {
+        if let Some(session_id) = cookies.split(';')
+            .find(|c| c.trim().starts_with("session="))
+            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
+            if let Err(err) = sender.send((session_id.to_string(), "next".to_string())) {
+                eprintln!("Failed to send message: {:?}", err);
+                return Ok(warp::reply::with_status(
+                    "Failed to send message",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                ));
+            }
+            return Ok(warp::reply::with_status(
+                "Next group message sent",
+                StatusCode::OK,
+            ));
+        }
+    };
+    return Ok(warp::reply::with_status(
+        "Failed to send message",
+        StatusCode::INTERNAL_SERVER_ERROR,
+    ));
 }
-pub async fn keep_channel_alive(
-    sender: Arc<Mutex<UnboundedSender<(String, String)>>>,
-) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn keep_channel_alive(sender: Arc<Mutex<UnboundedSender<(String, String)>>>) -> Result<impl warp::Reply, warp::Rejection> {
     if let Err(err) = sender
         .lock()
         .await
@@ -210,56 +203,73 @@ pub async fn keep_channel_alive(
     ))
 }
 
-pub async fn get_run_counter_handler(
-    channel_id: String,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let mut config = BotConfig::load_config();
-    let channel_id = format!("#{}", channel_id);
-    if config.channels.contains_key(&channel_id) {
-        let channel_config = config.get_channel_config_mut(&channel_id);
-        let runs = channel_config.runs;
-        return Ok(json(&json!({"run_counter": runs})));
-    } else {
-        Err(reject())
+pub async fn get_run_counter_handler(cookies: Option<String>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Some(cookies) = cookies {
+        if let Some(session_id) = cookies.split(';')
+            .find(|c| c.trim().starts_with("session="))
+            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
+            let channel_id = format!("#{}", session_id.to_ascii_lowercase());
+            let config = BotConfig::load_config();
+            if let Some(channel_config) = config.get_channel_config(&channel_id) {
+                if let Some(config) = config.get_channel_config(&channel_config.queue_channel) {
+                    let runs = config.runs;
+                    return Ok(json(&json!({"run_counter": runs})));
+                }
+            }
+        }
     }
+    Err(warp::reject())
+    
 }
-
-pub async fn get_queue_state_handler(
-    channel_id: String,
-) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn get_queue_state_handler(channel_id: String) -> Result<impl warp::Reply, warp::Rejection> {
     let mut config = BotConfig::load_config();
     let channel_id = format!("#{}", channel_id);
     let config = config.get_channel_config_mut(&channel_id);
     let is_open = config.open;
-    println!("{}", is_open);
     Ok(warp::reply::json(
         &serde_json::json!({ "is_open": is_open }),
     ))
 }
-pub async fn toggle_queue_handler(
-    toggle_action: String,
-    channel_id: String,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let mut config = BotConfig::load_config();
-    let channel_id = format!("#{}", channel_id);
-    let channel_config = config.get_channel_config_mut(&channel_id);
-    match toggle_action.as_str() {
-        "open" => {
-            channel_config.open = true;
+pub async fn toggle_queue_handler(toggle_action: String, cookies: Option<String>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Some(cookies) = cookies {
+        if let Some(session_id) = cookies.split(';')
+            .find(|c| c.trim().starts_with("session="))
+            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
+            let mut channel_name = format!("#{}", session_id.to_ascii_lowercase());
+            let mut config = BotConfig::load_config();
+            if let Some(name) = config.get_channel_config(&channel_name) {
+                channel_name = name.queue_channel.clone();
+            }
+            let updated_channels = config.channels.iter_mut().filter_map(|(channel_id, channel_config)| {
+                // Check if the channel matches the `queue_channel`
+                if channel_config.queue_channel == channel_name {
+                    match toggle_action.as_str() {
+                        "open" => {
+                            channel_config.open = true;
+                            Some((channel_id.clone(), "open"))
+                        }
+                        "close" => {
+                            channel_config.open = false;
+                            Some((channel_id.clone(), "closed"))
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }).collect::<Vec<_>>();
             config.save_config();
-            Ok(warp::reply::json(
-                &serde_json::json!({ "success": true, "state": "open" }),
-            ))
+            
+            return Ok(warp::reply::json(
+                &serde_json::json!({
+                    "success": true,
+                    "state": toggle_action,
+                    "updated_channels": updated_channels,
+                }),
+            ));
         }
-        "close" => {
-            channel_config.open = false;
-            config.save_config();
-            Ok(warp::reply::json(
-                &serde_json::json!({ "success": true, "state": "closed" }),
-            ))
-        }
-        _ => Err(warp::reject()),
     }
+    Err(warp::reject())
 }
 
 pub async fn sabotage_truck_queue() -> Result<impl warp::Reply, warp::Rejection> {
@@ -268,4 +278,194 @@ pub async fn sabotage_truck_queue() -> Result<impl warp::Reply, warp::Rejection>
         !config.get_channel_config_mut("#nyc62truck").open;
     config.save_config();
     Ok(warp::reply::with_status("Sabotaged", StatusCode::OK))
+}
+
+const TWITCH_CLIENT_ID: &str = "mtcgb9falyzs4n3j7x3rqr51ho9gxr";
+const TWITCH_CLIENT_SECRET: &str = "jqky6ivqcn83kx6u1nlkx29hsgirjw";
+const TWITCH_REDIRECT_URI: &str = "https://krapmatt.bounceme.net/auth/callback";
+
+#[derive(Debug, Deserialize)]
+pub struct AuthCallbackQuery {
+    code: String
+}
+
+
+#[derive(Debug, Deserialize)]
+struct TwitchTokenResponse {
+    access_token: String,
+    expires_in: i64,
+    refresh_token: String,
+    token_type: String,
+}
+
+#[derive(Serialize)]
+struct TokenRequest<'a> {
+    client_id: &'a str,
+    client_secret: &'a str,
+    code: &'a str,
+    grant_type: &'a str,
+    redirect_uri: &'a str,
+}
+
+/// Exchanges the code for an access token and fetches Twitch user info
+pub async fn twitch_callback(query: AuthCallbackQuery, pool: Arc<SqlitePool>) -> Result<impl Reply, Rejection> {
+    let client = Client::new();
+
+    let token_request = TokenRequest {
+        client_id: &TWITCH_CLIENT_ID,
+        client_secret: &TWITCH_CLIENT_SECRET,
+        code: &query.code,
+        grant_type: "authorization_code",
+        redirect_uri: &TWITCH_REDIRECT_URI,
+    };
+
+    let token_response = client
+        .post("https://id.twitch.tv/oauth2/token")
+        .form(&token_request)
+        .send()
+        .await.map_err(|e| {
+            eprintln!("Token request failed: {:?}", e);
+            warp::reject::not_found()
+        })?;
+    
+        let token_data: TwitchTokenResponse = token_response.json().await.map_err(|e| {
+            eprintln!("Token request failed: {:?}", e);
+            warp::reject::not_found()
+        })?;
+        let twitch_user = get_user_info(&token_data.access_token).await.map_err(|e| {
+            eprintln!("Token request failed: {:?}", e);
+            warp::reject::not_found()
+        })?;
+
+        if let Err(e) = save_user_tokens(&twitch_user, &token_data, pool).await {
+            eprintln!("Failed to save tokens: {:?}", e);
+        }
+
+        let session_cookie = format!(
+            "session={}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=604800",
+            twitch_user.login
+        );
+        let response = warp::reply::with_header(warp::reply::html("Login successful. Redirecting..."), "Set-Cookie", session_cookie);
+        let res = warp::reply::with_header(response, "Location", "/queue_dock.html");
+
+        Ok(warp::reply::with_status(res, warp::http::StatusCode::FOUND))
+}
+
+#[derive(Debug, Deserialize)]
+struct TwitchUser {
+    id: String,
+    login: String,
+    display_name: String,
+    profile_image_url: String
+}
+
+async fn get_user_info(access_token: &str) -> Result<TwitchUser, reqwest::Error> {
+    let client = reqwest::Client::new();
+    let response = client.get("https://api.twitch.tv/helix/users")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Client-Id", TWITCH_CLIENT_ID).send().await?;
+
+    let json: serde_json::Value = response.json().await?;
+    let user = json["data"][0].clone();
+
+    Ok(TwitchUser {
+        id: user["id"].as_str().unwrap().to_string(),
+        login: user["login"].as_str().unwrap().to_string(),
+        display_name: user["display_name"].as_str().unwrap().to_string(),
+        profile_image_url: user["profile_image_url"].as_str().unwrap().to_string()
+    })
+}
+
+async fn save_user_tokens(user: &TwitchUser, tokens: &TwitchTokenResponse, pool: Arc<SqlitePool>) -> Result<(), sqlx::Error> {
+    let expires_at = chrono::Utc::now().timestamp() + tokens.expires_in;
+
+    sqlx::query!(
+        "INSERT INTO users (id, twitch_name, access_token, refresh_token, expires_at, profile_pp) 
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (id) DO UPDATE 
+         SET access_token = $3, refresh_token = $4, expires_at = $5, profile_pp = $6",
+        user.id, user.login, tokens.access_token, tokens.refresh_token, expires_at, user.profile_image_url
+    ).execute(&*pool).await?;
+    
+    Ok(())
+}
+
+pub async fn check_session(cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl Reply, Rejection> {
+    if let Some(cookies) = cookies {
+        // Extract session ID (Twitch user ID)
+        if let Some(session_id) = cookies
+            .split(';')
+            .find(|c| c.trim().starts_with("session="))
+            .map(|c| c.trim().strip_prefix("session=").unwrap_or(""))
+        {
+            // Check if session exists in database
+            let user = sqlx::query!(
+                "SELECT id, profile_pp FROM users WHERE twitch_name = ?1", 
+                session_id
+            )
+            .fetch_optional(&*pool)
+            .await
+            .map_err(|e| {
+                eprintln!("DB Error: {:?}", e);
+                warp::reject::not_found()
+            })?;
+
+            if let Some(user) = user {
+                return Ok(warp::reply::json(&serde_json::json!({
+                    "logged_in": true,
+                    "username": session_id,
+                    "profile_pp": user.profile_pp
+                })));
+            }
+        }
+    }
+    // No valid session found
+    Ok(warp::reply::json(&serde_json::json!({ "logged_in": false })))
+}
+
+pub async fn check_authorization(cookie: Option<String>) -> Result<String, Rejection> {
+    if let Some(session) = cookie {
+        // Check if the session cookie contains an authorized user
+        let name = format!("#{}", session);
+        let config = BotConfig::load_config();
+        if config.channels.contains_key(&name) {
+            return Ok(name);
+        }
+        Err(warp::reject::custom(NotAuthorizedError))
+    } else {
+        Err(warp::reject::custom(NotAuthorizedError))
+    }
+}
+
+pub fn with_authorization() -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
+    warp::header::optional("cookie")
+        .and(warp::any())
+        .and_then(check_authorization)
+}
+
+// Error handling for unauthorized access
+#[derive(Debug)]
+struct NotAuthorizedError;
+
+impl warp::reject::Reject for NotAuthorizedError {}
+
+pub async fn get_public_queue(streamer: String, pool: Arc<SqlitePool>) -> Result<impl Reply, warp::Rejection> {
+    let channel_id = format!("#{}", streamer.to_ascii_lowercase());
+    let mut config = BotConfig::load_config();
+    let config = config.get_channel_config_mut(&channel_id);
+    let queue_channel = &config.queue_channel;
+    let queue = sqlx::query_as!(
+        QueueEntry,
+        "SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
+        queue_channel
+    ).fetch_all(&*pool).await.map_err(|_| warp::reject::reject())?;
+
+    if queue.is_empty() {
+        return Ok(warp::reply::json(&queue));
+    }
+    let grouped_queue: Vec<Vec<QueueEntry>> = queue
+        .chunks(config.teamsize)
+        .map(|chunk| chunk.to_vec())
+        .collect();
+    Ok(warp::reply::json(&grouped_queue))
 }

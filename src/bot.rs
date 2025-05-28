@@ -1,17 +1,18 @@
 use crate::{
     bot_commands::{
-        announcement, ban_bots, fetch_lurkers, get_twitch_user_id, is_channel_live, send_message,
-        shoutout,
+        announcement, send_message,
     },
+    twitch_api::{ban_bots, fetch_lurkers, get_twitch_user_id, is_channel_live,},
     commands::create_command_dispatcher,
     database::get_command_response,
     models::{has_permission, AnnouncementState, BotConfig, BotError},
 };
 use dotenvy::dotenv;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use regex::Regex;
 use sqlx::SqlitePool;
 use tmi::{Client, Tag};
+use unicode_general_category::{get_general_category, GeneralCategory};
 use unicode_normalization::UnicodeNormalization;
 
 use std::{
@@ -19,11 +20,10 @@ use std::{
     collections::{HashMap, HashSet},
     env::var,
     sync::Arc,
-    time::{self, Duration, Instant, SystemTime},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     sync::{
-        mpsc::{self, Receiver, UnboundedReceiver},
         Mutex, RwLock,
     },
     time::interval,
@@ -93,8 +93,7 @@ impl BotState {
         let mut client = tmi::Client::builder()
             .credentials(credentials)
             .connect()
-            .await
-            .unwrap();
+            .await.expect(&format!("failed to connect to {}", channel));
         client.join(channel).await.unwrap();
         client
     }
@@ -168,12 +167,7 @@ pub async fn bot_task(
     }
 }
 
-async fn run_bot_loop(
-    state: Arc<RwLock<BotState>>,
-    client: Arc<Mutex<Client>>,
-    pool: &SqlitePool,
-    channel_id_map: HashMap<String, String>,
-) -> Result<(), BotError> {
+async fn run_bot_loop(state: Arc<RwLock<BotState>>, client: Arc<Mutex<Client>>, pool: &SqlitePool, channel_id_map: HashMap<String, String>) -> Result<(), BotError> {
     loop {
         let irc_msg = client.lock().await.recv().await?;
         if let Some(source_room_id) = irc_msg
@@ -188,8 +182,7 @@ async fn run_bot_loop(
             if let Some(room_id) = irc_msg
                 .tags()
                 .find(|(key, _)| *key == "room-id")
-                .map(|(_, value)| value)
-            {
+                .map(|(_, value)| value) {
                 if room_id != source_room_id {
                     continue;
                 }
@@ -327,7 +320,7 @@ async fn handle_privmsg(
     if msg.text().starts_with("!pos")
         && (msg.sender().login().to_ascii_lowercase() == "thatjk" || msg.channel() == "#samoan_317")
     {
-        let number = thread_rng().gen_range(1..1000);
+        let number = rng().random_range(1..1000);
         send_message(
             &msg,
             client.lock().await.borrow_mut(),
@@ -340,39 +333,36 @@ async fn handle_privmsg(
         .await?;
     }
     let command_dispatcher = create_command_dispatcher(&locked_state.config, msg.channel());
-
+    let prefix = locked_state.config.get_channel_config(msg.channel()).unwrap().prefix.clone();
     drop(locked_state);
     if msg.text().starts_with("!") {
-        let command = msg
-            .text()
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .to_string()
-            .to_lowercase();
-        if let Some(cmd) = command_dispatcher.get(&command) {
-            let msg = msg.clone();
-            if has_permission(&msg, Arc::clone(&client), cmd.permission).await {
-                (cmd.handler)(
-                    msg.into_owned().clone(),
-                    Arc::clone(&client),
-                    pool,
-                    Arc::clone(&bot_state),
-                )
-                .await?;
-            }
-        } else {
-            if let Ok(Some(reply)) = get_command_response(
-                &pool,
-                msg.text().to_string().to_ascii_lowercase(),
-                Some(msg.channel().to_string()),
-            )
-            .await
-            {
-                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
-            }
+        if let Ok(Some(reply)) = get_command_response(
+            &pool,
+            msg.text().to_string().to_ascii_lowercase(),
+            Some(msg.channel().to_string()),
+        )
+        .await
+        {
+            send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
         }
     }
+    if msg.text().starts_with(&prefix) {
+        let without_prefix = msg.text().strip_prefix(&prefix).unwrap();
+        let mut parts = without_prefix.split_whitespace();
+
+        if let Some(command) = parts.next() {
+            let command = command.to_lowercase();
+            if let Some(cmd) = command_dispatcher.get(&command) {
+                let msg = msg.clone();
+                if has_permission(&msg, Arc::clone(&client), cmd.permission).await {
+                    (cmd.handler)(msg.into_owned().clone(), Arc::clone(&client), pool, Arc::clone(&bot_state)).await?;
+                }
+            }
+            return Ok(());
+        }
+    }
+
+    
     Ok(())
 }
 
@@ -380,18 +370,21 @@ async fn handle_privmsg(
 async fn handle_usernotice(notice: tmi::UserNotice<'_>) -> Result<(), BotError> {
     todo!()
 }
+//Bͦest vie̟wers on streamboo .com ( remove the space ) @UinaxOQR
 //Cheap vi̯ewers on streamboo .com ( remove the space ) @FCNoLZJk
 lazy_static::lazy_static! {
-    static ref CHEAP_VIEWERS_RE: Regex = Regex::new(r"cheap\s*viewers\s*on").unwrap();
-    static ref BEST_VIEWERS_RE: Regex = Regex::new(r"best\s*viewers\s*on").unwrap();
+    static ref CHEAP_VIEWERS_RE: Regex = Regex::new(r"cheap\s*viewers\s*on\s*\w*\.?\w*").unwrap();
+    static ref BEST_VIEWERS_RE: Regex = Regex::new(r"best\s*viewers\s*on\s*\w*\.?\w*").unwrap();
     static ref PROMO_RE: Regex = Regex::new(r"hello\s*sorry\s*for\s*bothering\s*you\s*i\s*want\s*to\s*offer\s*promotion\s*of\s*your\s*channel\s*viewers\s*followers\s*views\s*chat\s*bots\s*etc\s*the\s*price\s*is\s*lower\s*than\s*any\s*competitor\s*the\s*quality\s*is\s*guaranteed\s*to\s*be\s*the\s*best\s*flexible\s*and\s*convenient\s*order\s*management\s*panel\s*chat\s*panel\s*everything\s*is\s*in\s*your\s*hands\s*a\s*huge\s*number\s*of\s*custom\s*settings").unwrap();
     static ref DISCORD_RE: Regex = Regex::new(r"let\s*hang\s*out\s*together\s*on\s*discord\s*username\s").unwrap();
 }
 
 // Normalize text by removing diacritics
 fn normalize_text(text: &str) -> String {
-    text.nfd() // Convert to Normalization Form D (decomposed)
-        .filter(|c| c.is_alphabetic() || c.is_whitespace()) // Remove non-alphabetic characters
+    text.nfd() // decompose characters
+        .filter(|c| {
+            !matches!(get_general_category(*c), GeneralCategory::NonspacingMark)
+        }) // remove combining marks
         .collect::<String>()
         .to_ascii_lowercase()
 }
@@ -408,12 +401,7 @@ fn is_bannable_link(text: &str) -> bool {
         || DISCORD_RE.is_match(&cleaned_text)
 }
 
-async fn start_annnouncement_scheduler(
-    bot_state: Arc<RwLock<BotState>>,
-    channel_id: String,
-    channel_name: String,
-    pool: &SqlitePool,
-) -> Result<(), BotError> {
+async fn start_annnouncement_scheduler(bot_state: Arc<RwLock<BotState>>, channel_id: String, channel_name: String, pool: &SqlitePool) -> Result<(), BotError> {
     let mut sleep_duration = Duration::from_secs(60);
     let channel = format!("#{}", channel_name);
 
@@ -428,66 +416,47 @@ async fn start_annnouncement_scheduler(
         if let Ok(is_live) = is_live {
             if is_live {
                 let (state, last_sent, interval) = {
-                    let mut bot_config = BotConfig::load_config();
-                    let config = bot_config.get_channel_config_mut(&channel);
+                    let bot_state = bot_state.read().await;
+                    let config = bot_state.config.get_channel_config(&channel).unwrap();
                     (
                         config.announcement_config.state.clone(),
                         config.announcement_config.last_sent,
                         config.announcement_config.interval,
                     )
                 };
-                match state {
-                    AnnouncementState::Paused => {}
-                    AnnouncementState::Active | AnnouncementState::Custom(_) => {
-                        if last_sent.map_or(true, |last| last.elapsed() > interval) {
-                            let message: Option<String> = match state {
-                                AnnouncementState::Active => {
-                                    sqlx::query_scalar!(
-                                        "SELECT announcement FROM announcements 
-                                        WHERE state = 'active' AND channel = ? 
-                                        ORDER BY RANDOM() LIMIT 1",
-                                        id_clone
-                                    )
-                                    .fetch_optional(pool)
-                                    .await?
-                                }
-                                AnnouncementState::Custom(activity) => {
-                                    sqlx::query_scalar!(
-                                        "SELECT announcement FROM announcements 
-                                        WHERE (state = 'active' OR state = ?) AND channel = ? 
-                                        ORDER BY RANDOM() LIMIT 1",
-                                        activity,
-                                        id_clone
-                                    )
-                                    .fetch_optional(pool)
-                                    .await?
-                                }
-                                AnnouncementState::Paused => {
-                                    continue;
-                                }
-                            };
-
-                            if let Some(message) = message {
-                                let bot_state = bot_state.read().await;
-                                announcement(
-                                    &channel_id,
-                                    "1091219021",
-                                    &bot_state.oauth_token_bot,
-                                    bot_state.bot_id.clone(),
-                                    message,
-                                )
-                                .await?;
-                            }
-
-                            {
-                                let mut bot_state_config = bot_state.write().await;
-                                let config =
-                                    bot_state_config.config.get_channel_config_mut(&channel);
-                                config.announcement_config.last_sent = Some(Instant::now());
-                                sleep_duration = interval;
-                                bot_state_config.config.save_config();
-                            }
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_millis();
+                if now - last_sent > interval.as_millis() {
+                    let message: Option<String> = match state {
+                        AnnouncementState::Active => {
+                            sqlx::query_scalar!(
+                                "SELECT announcement FROM announcements 
+                                WHERE state = 'active' AND channel = ? 
+                                ORDER BY RANDOM() LIMIT 1",
+                                id_clone
+                            ).fetch_optional(pool).await?
                         }
+                        AnnouncementState::Custom(activity) => {
+                            sqlx::query_scalar!(
+                                "SELECT announcement FROM announcements 
+                                WHERE (state = 'active' OR state = ?) AND channel = ? 
+                                ORDER BY RANDOM() LIMIT 1",
+                                activity, id_clone
+                            ).fetch_optional(pool).await?
+                        }
+                        AnnouncementState::Paused => None,
+                    };
+
+                    if let Some(message) = message {
+                        let bot_state = bot_state.read().await;
+                        announcement(&channel_id, "1091219021", &bot_state.oauth_token_bot, bot_state.bot_id.clone(), message).await?;
+                    }
+
+                    {
+                        let mut bot_state_config = bot_state.write().await;
+                        let config = bot_state_config.config.get_channel_config_mut(&channel);
+                        config.announcement_config.last_sent = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_millis();
+                        sleep_duration = interval;
+                        bot_state_config.config.save_config();
                     }
                 }
             }
@@ -522,7 +491,7 @@ pub async fn grant_points_task(
             for viewer in viewers.iter() {
                 sqlx::query!(
                     "INSERT INTO currency (twitch_name, points, channel) VALUES (?, ?, ?) 
-                    ON CONFLICT(twitch_name, channel) DO UPDATE SET points = points + 10",
+                    ON CONFLICT(twitch_name, channel) DO UPDATE SET points = points + 5",
                     viewer,
                     10,
                     broadcaster_id

@@ -1,22 +1,15 @@
 use core::fmt;
 use serde::{Deserialize, Serialize};
-use sqlx::{pool, SqlitePool};
+use sqlx::SqlitePool;
 use std::{
-    collections::HashMap,
-    error::Error,
-    fs::File,
-    io::{Read, Write},
-    path::Path,
-    sync::Arc,
-    time::{Duration, Instant},
+    collections::HashMap, fs::File, io::{Read, Write}, path::Path, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 use tmi::{
-    client::{read::RecvError, write::SendError, ReconnectError},
-    Client, MessageParseError,
+    client::{read::RecvError, write::SendError, ReconnectError}, Badge, Client, MessageParseError
 };
 use tokio::sync::Mutex;
 
-use crate::bot_commands::{is_broadcaster, is_follower, is_moderator, is_vip};
+use crate::{giveaway::Giveaway, twitch_api::is_follower};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TwitchUser {
@@ -62,12 +55,46 @@ pub enum PermissionLevel {
     Moderator,
     Broadcaster,
 }
+pub const ADMINS: &[&str] = &["KrapMatt", "ThatJK", "Samoan_317"];
+pub async fn is_broadcaster(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
+    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "broadcaster") || ADMINS.contains(&&*msg.sender().name().to_string()) {
+        return true;
+    } else {
+        _ = client.lock().await.privmsg(msg.channel(), "You are not a broadcaster. You can't use this command").send().await;
+        return false;
+    }
+    
+}
 
-pub async fn has_permission(
-    msg: &tmi::Privmsg<'_>,
-    client: Arc<Mutex<Client>>,
-    level: PermissionLevel,
-) -> bool {
+pub fn is_subscriber(msg: &tmi::Privmsg<'_>) -> bool {
+    println!("{:?}", msg.badges().into_iter().collect::<Vec<&Badge<'_>>>());
+    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "subscriber" || badge.as_badge_data().name() == "moderator" ) || ADMINS.contains(&&*msg.sender().name().to_string()) {
+        true
+    } else {
+        false
+    }
+}
+
+pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
+    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "moderator" || badge.as_badge_data().name() == "broadcaster") || ADMINS.contains(&&*msg.sender().name().to_string()) {
+        return true;
+    } else {
+        _ = client.lock().await.privmsg(msg.channel(), "You are not a moderator/broadcaster. You can't use this command").send().await;
+        return false;
+    }
+    
+}
+pub async fn is_vip(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
+    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "moderator" || badge.as_badge_data().name() == "broadcaster" || badge.as_badge_data().name() == "vip") || ADMINS.contains(&&*msg.sender().name().to_string()) {
+        return true;
+    } else {
+        _ = client.lock().await.privmsg(msg.channel(), "You are not a VIP/Moderator. You can't use this command").send().await;
+        return false;
+    }
+    
+}
+
+pub async fn has_permission(msg: &tmi::Privmsg<'_>, client: Arc<Mutex<Client>>, level: PermissionLevel) -> bool {
     match level {
         PermissionLevel::User => true,
         PermissionLevel::Follower => is_follower(msg, Arc::clone(&client)).await,
@@ -78,83 +105,69 @@ pub async fn has_permission(
 }
 
 #[derive(Debug)]
-pub struct BotError {
-    pub error_code: usize,
-    pub string: Option<String>,
-}
+pub enum BotError {
+    RequestError(reqwest::Error),
+    JsonError(serde_json::Error),
+    IoError(std::io::Error),
+    SendError(SendError),
+    RecvError(RecvError),
+    MessageParseError(MessageParseError),
+    ReconnectError(ReconnectError),
+    SerenityError(serenity::Error),
+    SqlxError(sqlx::Error),
+    Custom(String)
 
+}
 impl fmt::Display for BotError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.string {
-            Some(s) => write!(f, "Error code {}: {}", self.error_code, s),
-            None => write!(f, "Error code {}", self.error_code),
-        }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
     }
 }
 
-impl Error for BotError {}
 impl From<RecvError> for BotError {
-    fn from(err: RecvError) -> BotError {
-        BotError {
-            error_code: 101,
-            string: Some(err.to_string()),
-        }
+    fn from(err: RecvError) -> Self {
+        BotError::RecvError(err)
     }
 }
 impl From<SendError> for BotError {
-    fn from(err: SendError) -> BotError {
-        BotError {
-            error_code: 102,
-            string: Some(err.to_string()),
-        }
+    fn from(err: SendError) -> Self {
+        BotError::SendError(err)
     }
 }
 impl From<MessageParseError> for BotError {
-    fn from(err: MessageParseError) -> BotError {
-        BotError {
-            error_code: 103,
-            string: Some(err.to_string()),
-        }
+    fn from(err: MessageParseError) -> Self {
+        BotError::MessageParseError(err)
     }
 }
 impl From<ReconnectError> for BotError {
-    fn from(err: ReconnectError) -> BotError {
-        BotError {
-            error_code: 104,
-            string: Some(err.to_string()),
-        }
-    }
-}
-impl From<reqwest::Error> for BotError {
-    fn from(err: reqwest::Error) -> BotError {
-        BotError {
-            error_code: 105,
-            string: Some(err.to_string()),
-        }
+    fn from(err: ReconnectError) -> Self {
+        BotError::ReconnectError(err)
     }
 }
 impl From<serenity::Error> for BotError {
     fn from(err: serenity::Error) -> BotError {
-        BotError {
-            error_code: 106,
-            string: Some(err.to_string()),
-        }
+        BotError::SerenityError(err)
     }
 }
 impl From<serde_json::Error> for BotError {
-    fn from(err: serde_json::Error) -> BotError {
-        BotError {
-            error_code: 107,
-            string: Some(err.to_string()),
-        }
+    fn from(err: serde_json::Error) -> Self {
+        BotError::JsonError(err)
+    }
+}
+
+impl From<std::io::Error> for BotError {
+    fn from(err: std::io::Error) -> Self {
+        BotError::IoError(err)
     }
 }
 impl From<sqlx::Error> for BotError {
     fn from(err: sqlx::Error) -> BotError {
-        BotError {
-            error_code: 108,
-            string: Some(err.to_string()),
-        }
+        BotError::SqlxError(err)
+    }
+}
+impl From<reqwest::Error> for BotError {
+    fn from(err: reqwest::Error) -> Self {
+        BotError::RequestError(err)
     }
 }
 
@@ -168,8 +181,7 @@ pub enum AnnouncementState {
 pub struct AnnouncementConfig {
     pub state: AnnouncementState,
     pub interval: Duration,
-    #[serde(with = "serde_millis")]
-    pub last_sent: Option<Instant>,
+    pub last_sent: u128,
 }
 
 impl AnnouncementConfig {
@@ -177,7 +189,7 @@ impl AnnouncementConfig {
         AnnouncementConfig {
             state: AnnouncementState::Paused,
             interval: Duration::from_secs(5 * 60),
-            last_sent: None,
+            last_sent: SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwords").as_millis(),
         }
     }
 }
@@ -193,6 +205,9 @@ pub struct ChannelConfig {
     pub runs: usize,
     pub announcement_config: AnnouncementConfig,
     pub sub_only: bool,
+    pub prefix: String,
+    pub random_queue: bool,
+    pub giveaway: Giveaway
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -209,7 +224,7 @@ impl BotConfig {
 
     /// Load or create a unified config file for all channels
     pub fn load_config() -> Self {
-        let config_path = "D:/program/krapbott/configs/config.json";
+        let config_path = "configs/config.json";
 
         if Path::new(config_path).exists() {
             let mut file = File::open(config_path).expect("Failed to open config file.");
@@ -226,7 +241,7 @@ impl BotConfig {
 
     /// Save the unified config file
     pub fn save_config(&self) {
-        let config_path = "D:/program/krapbott/configs/config.json";
+        let config_path = "configs/config.json";
         let content = serde_json::to_string_pretty(self).expect("Failed to serialize config.");
         let mut file = File::create(config_path).expect("Failed to create config file.");
         file.write_all(content.as_bytes())
@@ -250,6 +265,9 @@ impl BotConfig {
                 runs: 0,
                 announcement_config: AnnouncementConfig::new(),
                 sub_only: false,
+                prefix: "!".to_string(),
+                random_queue: false,
+                giveaway: Giveaway::new()
             })
     }
 
@@ -318,11 +336,7 @@ impl TemplateManager {
         Ok(())
     }
 
-    pub async fn remove_template(
-        &self,
-        command: String,
-        channel_id: Option<String>,
-    ) -> Result<(), BotError> {
+    pub async fn remove_template(&self, command: String, channel_id: Option<String>) -> Result<(), BotError> {
         if let Some(channel) = channel_id {
             sqlx::query!(
                 "DELETE FROM commands_template WHERE command = ? AND channel_id = ?",
@@ -341,4 +355,9 @@ impl TemplateManager {
         }
         Ok(())
     }
+}
+
+pub enum Package {
+    Add,
+    Remove
 }

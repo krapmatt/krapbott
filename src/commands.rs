@@ -1,11 +1,23 @@
+use crate::api::get_master_challenges;
+use crate::api::get_membershipid;
 use crate::bot_commands;
 use crate::bot_commands::announcement;
-use crate::bot_commands::ban_player_from_queue;
-use crate::bot_commands::get_twitch_user_id;
+use crate::twitch_api;
+use crate::twitch_api::get_twitch_user_id;
+use crate::bot_commands::is_valid_bungie_name;
+use crate::bot_commands::mod_action_user_from_queue;
 use crate::bot_commands::modify_command;
 use crate::bot_commands::process_queue_entry;
 use crate::bot_commands::register_user;
+use crate::bot_commands::reply_to_message;
 use crate::bot_commands::unban_player_from_queue;
+use crate::database::load_membership;
+use crate::giveaway::change_duration_giveaway;
+use crate::giveaway::change_max_tickets_giveaway;
+use crate::giveaway::change_price_ticket;
+use crate::giveaway::handle_giveaway;
+use crate::giveaway::join_giveaway;
+use crate::giveaway::pull_giveaway;
 use crate::models::AnnouncementState;
 use crate::models::CommandAction;
 use crate::models::TemplateManager;
@@ -13,10 +25,11 @@ use crate::models::TwitchUser;
 use crate::BotConfig;
 use crate::{
     bot::BotState,
-    bot_commands::{bungiename, is_moderator, send_message},
+    bot_commands::{bungiename, send_message},
     models::{BotError, PermissionLevel},
 };
-use chrono::FixedOffset;
+use chrono_tz::CET;
+use chrono_tz::US::Pacific;
 use futures::future::BoxFuture;
 use serde::Deserialize;
 use sqlx::SqlitePool;
@@ -67,127 +80,140 @@ lazy_static::lazy_static! {
         &*MODERATION,
         &*ANNOUNCEMENT,
         &*POINTS,
-        &*QUEUE_LIST
+        &*QUEUE_LIST,
+        &*GIVEAWAY
     ];
 }
 
 lazy_static::lazy_static! {
     pub static ref ANNOUNCEMENT: CommandGroup = CommandGroup { name: "Announcement".to_string(),
         command: vec![
-            ("!add_announcement".to_string(), add_announcement()),
-            ("!remove_announcement".to_string(), remove_announcement()),
-            ("!play_announcement".to_string(), play_announcement()),
-            ("!announcement_interval".to_string(), announcement_freq()),
-            ("!announcement_state".to_string(), announcement_state()),
+            ("add_announcement".to_string(), add_announcement()),
+            ("remove_announcement".to_string(), remove_announcement()),
+            ("play_announcement".to_string(), play_announcement()),
+            ("announcement_interval".to_string(), announcement_freq()),
+            ("announcement_state".to_string(), announcement_state()),
 
         ].into_iter().collect()
     };
     pub static ref TIME: CommandGroup = CommandGroup { name: "Time".to_string(),
         command: vec![
-            ("!mattbed".to_string(), matt_time()),
-            ("!samoanbed".to_string(), samosa_time()),
-            ("!cindibed".to_string(), cindi_time()),
+            ("mattbed".to_string(), matt_time()),
+            ("samoanbed".to_string(), samosa_time()),
+            ("cindibed".to_string(), cindi_time()),
 
         ].into_iter().collect()
     };
     pub static ref QUEUE_LIST: CommandGroup = CommandGroup { name: "List of queue".to_string(),
         command: vec![
-            ("!queue".to_string(), queue_command()),
-            ("!list".to_string(), queue_command()),
+            ("queue".to_string(), queue_command()),
+            ("list".to_string(), queue_command()),
         ].into_iter().collect()
     };
     pub static ref QUEUE_COMMANDS: CommandGroup = CommandGroup { name: "Queue".to_string(),
         command: vec![
-            ("!clear".to_string(), clear()),
-            ("!queue_len".to_string(), queue_len()),
-            ("!queue_size".to_string(), queue_size()),
-            ("!join".to_string(), join_cmd()),
-            ("!next".to_string(), next()),
-            ("!remove".to_string(), remove()),
-            ("!pos".to_string(), pos()),
-            ("!leave".to_string(), leave()),
-            ("!move".to_string(), move_cmd()),
-            ("!prio".to_string(), prio_command()),
-            ("!bribe".to_string(), prio_command()),
-            ("!open".to_string(), open_command()),
-            ("!open_queue".to_string(), open_command()),
-            ("!close".to_string(), close_command()),
-            ("!close_queue".to_string(), close_command()),
-            ("!add".to_string(), addplayertoqueue()),
-            ("!toggle_combined".to_string(), toggle_combine()),
-            ("!toggle_sub".to_string(), sub_only())
+            ("clear".to_string(), clear()),
+            ("queue_len".to_string(), queue_len()),
+            ("queue_size".to_string(), queue_size()),
+            ("join".to_string(), join_cmd()),
+            ("next".to_string(), next()),
+            ("remove".to_string(), remove()),
+            ("pos".to_string(), pos()),
+            ("leave".to_string(), leave()),
+            ("move".to_string(), move_cmd()),
+            ("prio".to_string(), prio_command()),
+            ("bribe".to_string(), prio_command()),
+            ("open".to_string(), open_command()),
+            ("open_queue".to_string(), open_command()),
+            ("close".to_string(), close_command()),
+            ("close_queue".to_string(), close_command()),
+            ("add".to_string(), addplayertoqueue()),
+            ("toggle_combined".to_string(), toggle_combine()),
+            ("toggle_sub".to_string(), sub_only())
         ].into_iter().collect()
     };
     pub static ref SHOUTOUT: CommandGroup = CommandGroup { name: "Shoutout".to_string(),
         command: vec![
-            ("!so".to_string(), so())
+            ("so".to_string(), so())
         ].into_iter().collect()
     };
     pub static ref POINTS: CommandGroup = CommandGroup { name: "Points".to_string(),
         command: vec![
-            ("!dirt".to_string(), get_points()),
-            ("!add_dirt".to_string(), add_points()),
-            ("!remove_dirt".to_string(), remove_points()),
+            ("dirt".to_string(), get_points()),
+            ("add_dirt".to_string(), add_points()),
+            ("remove_dirt".to_string(), remove_points()),
 
         ].into_iter().collect()
     };
     pub static ref LURK: CommandGroup = CommandGroup { name: "Lurk".to_string(),
         command: vec![
-            ("!lurk".to_string(), lurk())
+            ("lurk".to_string(), lurk())
         ].into_iter().collect()
     };
 
     pub static ref RANDOM_QUEUE: CommandGroup = CommandGroup { name: "Random Queue".to_string(),
         command: vec![
-            ("!random".to_string(), random()),
+            ("random".to_string(), random()),
         ].into_iter().collect()
     };
 
     pub static ref BUNGIE_API: CommandGroup = CommandGroup { name: "Bungie API".to_string(),
         command: vec![
-            ("!total".to_string(), total()),
+            ("total".to_string(), total()),
+            ("cr".to_string(), master_chal())
         ].into_iter().collect()
     };
 
     pub static ref DATABASE_FOR_QUEUE: CommandGroup = CommandGroup { name: "Database for queue".to_string(),
         command: vec![
-            ("!register".to_string(), register()),
-            ("!mod_register".to_string(), mod_register()),
-            ("!bungiename".to_string(), bungie_name()),
-            ("!add_to_database".to_string(), add_manually_to_database()),
+            ("register".to_string(), register()),
+            ("mod_register".to_string(), mod_register()),
+            ("bungiename".to_string(), bungie_name()),
+            ("add_to_database".to_string(), add_manually_to_database()),
         ].into_iter().collect()
+    };
+
+    pub static ref GIVEAWAY: CommandGroup = CommandGroup { name: "Giveaway".to_string(),
+        command: vec![
+            ("start_giveaway".to_string(), handle_giveaway()),
+            ("pull".to_string(), pull_giveaway()),
+            ("ticket".to_string(), join_giveaway()),
+            ("giveaway_duration".to_string(), change_duration_giveaway()),
+            ("giveaway_tickets".to_string(), change_max_tickets_giveaway()),
+            ("giveaway_price".to_string(), change_price_ticket())
+        ].into_iter().collect()
+
     };
 
     pub static ref MODERATION: CommandGroup = CommandGroup { name: "Moderation".to_string(),
         command: vec![
-            ("!connect".to_string(), connect()),
-            ("!mod_config".to_string(), mod_config()),
-            ("!addcommand".to_string(), addcommand()),
-            ("!removecommand".to_string(), removecommand()),
-            ("!addglobalcommand".to_string(), addglobalcommand()),
-            ("!mod_ban".to_string(), mod_ban()),
-            ("!mod_unban".to_string(), mod_unban()),
-            ("!add_package".to_string(), addpackage()),
-            ("!packages".to_string(), list_of_packages()),
-            ("!set_template".to_string(), set_template()),
-            ("!remove_template".to_string(), delete_template()),
-            ("!streaming_together".to_string(), add_streaming_together()),
-            ("!mod_reset".to_string(), mod_reset()),
-            ("!help".to_string(), help_command())
+            ("connect".to_string(), connect()),
+            ("mod_config".to_string(), mod_config()),
+            ("addcommand".to_string(), addcommand()),
+            ("removecommand".to_string(), removecommand()),
+            ("addglobalcommand".to_string(), addglobalcommand()),
+            ("mod_ban".to_string(), mod_ban()),
+            ("mod_timeout".to_string(), mod_timeout()),
+            ("mod_unban".to_string(), mod_unban()),
+            ("add_package".to_string(), addpackage()),
+            ("remove_package".to_string(), removepackage()),
+            ("packages".to_string(), list_of_packages()),
+            ("set_template".to_string(), set_template()),
+            ("remove_template".to_string(), delete_template()),
+            ("streaming_together".to_string(), add_streaming_together()),
+            ("mod_reset".to_string(), mod_reset()),
+            ("help".to_string(), help_command()),
         ].into_iter().collect()
     };
 }
 
-pub fn create_command_dispatcher(
-    config: &BotConfig,
-    channel_name: &str,
-) -> HashMap<String, Command> {
+pub fn create_command_dispatcher(config: &BotConfig, channel_name: &str) -> HashMap<String, Command> {
     let mut commands: HashMap<String, Command> = HashMap::new();
     if let Some(channel_config) = config.channels.get(channel_name) {
         let available_packages = &*COMMAND_GROUPS;
 
         for package_name in &channel_config.packages {
-            if let Some(group) = available_packages.iter().find(|g| &g.name == package_name) {
+            if let Some(group) = available_packages.iter().find(|g| &g.name.to_lowercase() == &package_name.to_lowercase()) {
                 commands.extend(group.command.clone());
             }
         }
@@ -396,18 +422,12 @@ pub fn so() -> Command {
                                 &msg,
                                 client.lock().await.borrow_mut(),
                                 "Get outskilled :P",
-                            )
-                            .await?;
+                            ).await?;
                         }
                         let bot_state = bot_state.read().await;
-                        bot_commands::shoutout(
-                            &bot_state.oauth_token_bot,
-                            bot_state.clone().bot_id,
-                            &get_twitch_user_id(&twitch_name).await?,
-                            msg.channel_id(),
-                        )
-                        .await;
-
+                        if let Ok(twitch_user_id) = get_twitch_user_id(&twitch_name).await {
+                            twitch_api::shoutout(&bot_state.oauth_token_bot, bot_state.clone().bot_id, &twitch_user_id, msg.channel_id()).await?;
+                        }
                         parse_template(&template, &variables)
                     } else {
                         "Arent you missing something?".to_string()
@@ -449,13 +469,28 @@ fn mod_ban() -> Command {
         permission: PermissionLevel::Moderator,
         handler: Arc::new(|msg, client, pool, _bot_state| {
             let fut = async move {
-                ban_player_from_queue(&msg, client, &pool).await?;
+                mod_action_user_from_queue(&msg, client, &pool, bot_commands::ModAction::Ban).await?;
                 Ok(())
             };
             Box::pin(fut)
         }),
         description: "Ban somebody from entering the queue".to_string(),
         usage: "!mod_ban @twitch_name Optional(reason)".to_string(),
+    }
+}
+
+fn mod_timeout() -> Command {
+    Command {
+        permission: PermissionLevel::Moderator,
+        handler: Arc::new(|msg, client, pool, _bot_state| {
+            let fut = async move {
+                mod_action_user_from_queue(&msg, client, &pool, bot_commands::ModAction::Timeout).await?;
+                Ok(())
+            };
+            Box::pin(fut)
+        }),
+        description: "Timeout somebody from entering the queue".to_string(),
+        usage: "!mod_timeout @twitch_name <Seconds> Optional(reason)".to_string(),
     }
 }
 fn addglobalcommand() -> Command {
@@ -521,28 +556,21 @@ fn mod_config() -> Command {
         permission: PermissionLevel::Moderator,
         handler: Arc::new(|msg, client, _pool, bot_state| {
             let fut = async move {
-                if is_moderator(&msg, Arc::clone(&client)).await {
-                    let bot_state = bot_state.read().await;
-                    let config =
-                        if let Some(config) = bot_state.config.get_channel_config(msg.channel()) {
-                            config
-                        } else {
-                            return Ok(());
-                        };
-                    let queue_reply = format!("Queue -> Open: {} || Length: {} || Fireteam size: {} || Combined: {} & Queue channel: {}", config.open, config.len, config.teamsize, config.combined, config.queue_channel);
-                    let package_reply =
-                        format!("Packages: {}", config.packages.join(", ").to_string());
-                    drop(bot_state);
-                    let reply = vec![queue_reply, package_reply];
-                    for reply in reply {
-                        client
-                            .lock()
-                            .await
-                            .privmsg(msg.channel(), &reply)
-                            .reply_to(msg.id())
-                            .send()
-                            .await?;
-                    }
+                let bot_state = bot_state.read().await;
+                let config =
+                    if let Some(config) = bot_state.config.get_channel_config(msg.channel()) {
+                        config
+                    } else {
+                        return Ok(());
+                    };
+                let queue_reply = format!("Queue -> Open: {} || Length: {} || Fireteam size: {} || Combined: {} & Queue channel: {}", config.open, config.len, config.teamsize, config.combined, config.queue_channel);
+                let package_reply =
+                    format!("Packages: {}", config.packages.join(", ").to_string());
+                let giveaway_reply = format!("Duration: {} || Max tickets: {} || Price of ticket: {}", config.giveaway.duration, config.giveaway.max_tickets, config.giveaway.ticket_cost);
+                drop(bot_state);
+                let reply = vec![queue_reply, package_reply, giveaway_reply];
+                for reply in reply {
+                    reply_to_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
                 }
                 Ok(())
             };
@@ -691,10 +719,10 @@ fn random() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
         handler: Arc::new(
-            |msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state| {
+            |msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool, bot_state| {
                 let fut = async move {
-                    let bot_state = bot_state.read().await;
-                    bot_state.random(&msg, client, &pool).await?;
+                    let mut bot_state = bot_state.write().await;
+                    bot_state.random(&msg, client).await?;
                     Ok(())
                 };
                 Box::pin(fut)
@@ -1018,16 +1046,19 @@ fn queue_len() -> Command {
     }
 }
 ///Shows the whole queue
-///
-///Use: !queue || !list
 fn queue_command() -> Command {
     Command {
         permission: PermissionLevel::User,
-        handler: Arc::new(
-            |msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state| {
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state| {
                 let fut = async move {
-                    let bot_state = bot_state.read().await;
-                    bot_state.handle_queue(&msg, client, &pool).await?;
+                    let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
+                    if words.len() == 1 {
+                        let bot_state = bot_state.read().await;
+                        bot_state.handle_queue(&msg, client, &pool).await?;
+                    } else {
+                        let bot_state = bot_state.read().await;
+                        bot_state.handle_join(&msg, client, &pool).await?;
+                    }
                     Ok(())
                 };
                 Box::pin(fut)
@@ -1065,27 +1096,27 @@ fn open_command() -> Command {
         handler: Arc::new(
             |msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _, bot_state| {
                 let fut = async move {
-                    let mut bot_state = bot_state.write().await.to_owned();
-                    let config = &mut bot_state.config;
-                    let channel_config = config.channels.get_mut(msg.channel());
-                    let reply = if let Some(channel_config) = channel_config {
-                        channel_config.open = true;
-                        if channel_config.combined {
-                            if let Some(channels) = bot_state.streaming_together.get(msg.channel())
-                            {
-                                for channel in channels {
-                                    if let Some(related_config) = config.channels.get_mut(channel) {
-                                        related_config.open = true;
-                                    }
-                                }
-                            }
+                    let bot_state = bot_state.write().await.to_owned();
+                    let mut config = bot_state.config;
+
+                    let mut channel_name = String::new();
+                    if let Some(channel_config) = config.get_channel_config(msg.channel()) {
+                        channel_name = channel_config.queue_channel.clone();
+                    }
+                    
+                    let channels_iter = config.channels.iter_mut().filter_map(|(x, channel_config)| {
+                        if channel_config.queue_channel == channel_name {
+                            channel_config.open = true;
+                            return Some(x.to_string())                                                                                           ;
+                        } else {
+                            None
                         }
-                        config.save_config();
-                        "✅ The queue is open!"
-                    } else {
-                        "Channel configuration not found."
-                    };
-                    send_message(&msg, client.lock().await.borrow_mut(), reply).await?;
+                    }).collect::<Vec<_>>();
+                    config.save_config();
+                    
+                    for channel in channels_iter {
+                        client.lock().await.privmsg(&channel, "✅ The queue is open!").send().await?;
+                    }
                     Ok(())
                 };
                 Box::pin(fut)
@@ -1104,27 +1135,27 @@ fn close_command() -> Command {
         handler: Arc::new(
             |msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _, bot_state| {
                 let fut = async move {
-                    let mut bot_state = bot_state.write().await.to_owned();
-                    let config = &mut bot_state.config;
-                    let channel_config = config.channels.get_mut(msg.channel());
-                    let reply = if let Some(channel_config) = channel_config {
-                        channel_config.open = false;
-                        if channel_config.combined {
-                            if let Some(channels) = bot_state.streaming_together.get(msg.channel())
-                            {
-                                for channel in channels {
-                                    if let Some(related_config) = config.channels.get_mut(channel) {
-                                        related_config.open = false;
-                                    }
-                                }
-                            }
+                    let bot_state = bot_state.write().await.to_owned();
+                    let mut config = bot_state.config;
+
+                    let mut channel_name = String::new();
+                    if let Some(channel_config) = config.get_channel_config(msg.channel()) {
+                        channel_name = channel_config.queue_channel.clone();
+                    }
+                    
+                    let channels_iter = config.channels.iter_mut().filter_map(|(x, channel_config)| {
+                        if channel_config.queue_channel == channel_name {
+                            channel_config.open = false;
+                            return Some(x.to_string())                                                                                           ;
+                        } else {
+                            None
                         }
-                        config.save_config();
-                        "❌ The queue is closed!"
-                    } else {
-                        "Channel configuration not found."
-                    };
-                    send_message(&msg, client.lock().await.borrow_mut(), reply).await?;
+                    }).collect::<Vec<_>>();
+                    config.save_config();
+                    
+                    for channel in channels_iter {
+                        client.lock().await.privmsg(&channel, "❌ The queue is closed!").send().await?;
+                    }
                     Ok(())
                 };
                 Box::pin(fut)
@@ -1309,22 +1340,12 @@ fn addplayertoqueue() -> Command {
                     twitch_name: twitch_name,
                     bungie_name: words[2..].join(" ").to_string(),
                 };
-                let queue_len = bot_state
-                    .read()
-                    .await
-                    .config
-                    .get_channel_config(msg.channel())
-                    .unwrap()
-                    .len;
-                process_queue_entry(
-                    &msg,
-                    client.lock().await.borrow_mut(),
-                    queue_len,
-                    &pool,
-                    user,
-                    &msg.channel(),
-                )
-                .await?;
+                let bot_state = bot_state.read().await;
+                let config = bot_state.config.get_channel_config(msg.channel()).unwrap();
+                let queue_len = config.len;
+                let queue_channel = &config.queue_channel;
+
+                process_queue_entry(&msg, client.lock().await.borrow_mut(), queue_len, &pool, user, queue_channel, bot_commands::Queue::ForceJoin).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -1339,7 +1360,7 @@ fn matt_time() -> Command {
         permission: PermissionLevel::User,
         handler: Arc::new(|msg, client, _pool, _bot_state| {
             let fut = async move {
-                let time = chrono::Utc::now().with_timezone(&FixedOffset::east_opt(3600).unwrap());
+                let time = chrono::Utc::now().with_timezone(&CET);
                 send_message(
                     &msg,
                     client.lock().await.borrow_mut(),
@@ -1355,13 +1376,57 @@ fn matt_time() -> Command {
     }
 }
 
+fn master_chal() -> Command {
+    Command {
+        permission: PermissionLevel::User,
+        handler: Arc::new(|msg, client, pool, bot_state| {
+            let fut = async move {
+                let bot_state = bot_state.read().await;
+                let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
+
+                if words.len() <= 1 {
+                    reply_to_message(&msg, client.lock().await.borrow_mut(), "Usage: !cr <activity> bungiename").await?;
+                    return Ok(());
+                }
+
+                let activity = words[1].to_string();
+                let membership = if words.len() == 2 {
+                    load_membership(&pool, msg.sender().name().to_string()).await
+                } else {
+                    let name = words[2..].join(" ");
+                    if let Some(bungie_name) = is_valid_bungie_name(&name) {
+                        Some(get_membershipid(&bungie_name, &bot_state.x_api_key).await?)
+                    } else {
+                        load_membership(&pool, name.strip_prefix("@").unwrap_or(&name).to_owned()).await
+                    }
+                };
+                let membership = match membership {
+                    Some(m) if m.type_m != -1 => m,
+                    _ => {
+                        reply_to_message(&msg, client.lock().await.borrow_mut(), "Use a correct bungiename!").await?;
+                        return Ok(());
+                    }
+                };
+                let chall_vec = get_master_challenges(membership.type_m, membership.id, &bot_state.x_api_key, activity.to_string()).await?;
+                reply_to_message(&msg, client.lock().await.borrow_mut(), &chall_vec.join(" || ")).await?;
+                
+                Ok(())
+            };
+            Box::pin(fut)
+        }),
+        description: "Get the number of challenges done in a master raid".to_string(),
+        usage: "!cr <activity> <name>".to_string(),
+    }
+}
+
 fn samosa_time() -> Command {
     Command {
         permission: PermissionLevel::User,
         handler: Arc::new(|msg, client, _pool, _bot_state| {
             let fut = async move {
                 let time =
-                    chrono::Utc::now().with_timezone(&FixedOffset::west_opt(3600 * 5).unwrap());
+                    chrono::Utc::now().with_timezone(&Pacific);
+                
                 send_message(
                     &msg,
                     client.lock().await.borrow_mut(),
@@ -1372,7 +1437,7 @@ fn samosa_time() -> Command {
             };
             Box::pin(fut)
         }),
-        description: "Shows current time of Sandisnapoutofit".to_string(),
+        description: "Shows current time of Samosa Mimosa Leviosa Glosa".to_string(),
         usage: "!samoanbed".to_string(),
     }
 }
@@ -1382,7 +1447,7 @@ fn cindi_time() -> Command {
         permission: PermissionLevel::User,
         handler: Arc::new(|msg, client, _pool, _bot_state| {
             let fut = async move {
-                let time = chrono::Utc::now();
+                let time = chrono::Utc::now().with_timezone(&chrono_tz::GMT0);
                 send_message(
                     &msg,
                     client.lock().await.borrow_mut(),
@@ -1403,13 +1468,28 @@ fn addpackage() -> Command {
         permission: PermissionLevel::Moderator,
         handler: Arc::new(|msg, client, _pool, bot_state| {
             let fut = async move {
-                bot_state.write().await.add_package(&msg, client).await?;
+                bot_state.write().await.add_remove_package(&msg, client, crate::models::Package::Add).await?;
                 Ok(())
             };
             Box::pin(fut)
         }),
         description: "Add a package".to_string(),
         usage: "!add_package nameOfPackage".to_string(),
+    }
+}
+
+fn removepackage() -> Command {
+    Command {
+        permission: PermissionLevel::Moderator,
+        handler: Arc::new(|msg, client, _pool, bot_state| {
+            let fut = async move {
+                bot_state.write().await.add_remove_package(&msg, client, crate::models::Package::Remove).await?;
+                Ok(())
+            };
+            Box::pin(fut)
+        }),
+        description: "Remove a package".to_string(),
+        usage: "!remove_package nameOfPackage".to_string(),
     }
 }
 
@@ -1500,7 +1580,7 @@ fn mod_reset() -> Command {
                 config.runs = 0;
                 config.combined = false;
                 config.queue_channel = msg.channel().to_string();
-                config.announcement_config.last_sent = None;
+                config.random_queue = false;
                 bot_state.config.save_config();
                 send_message(
                     &msg,
