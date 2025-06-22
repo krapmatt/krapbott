@@ -10,7 +10,7 @@ pub mod twitch_api;
 pub mod queue;
 mod giveaway;
 use bot::{grant_points_task, handle_obs_message, run_chat_bot};
-use database::initialize_currency_database;
+use database::initialize_database;
 use discord_bot::run_discord_bot;
 use models::{BotConfig, BotError};
 use obs_dock::{
@@ -23,7 +23,7 @@ use warp::{filters::{fs::dir, log}, Filter};
 #[tokio::main]
 async fn main() -> Result<(), BotError> {
     
-    let pool = initialize_currency_database().await?;
+    let pool = initialize_database().await?;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<(String, String)>();
     let tx_arc = Arc::new(tx);
@@ -67,20 +67,23 @@ async fn main() -> Result<(), BotError> {
         .and_then(update_queue_order);
     let next_route = warp::path("next")
         .and(warp::header::optional("cookie"))
-        .and(tx_filter)
+        .and(tx_filter).and(pool_filter.clone())
         .and_then(next_queue_handler);
     let run_route = warp::path("run-counter")
         .and(warp::get())
         .and(warp::header::optional("cookie"))
+        .and(pool_filter.clone())
         .and_then(get_run_counter_handler);
     let toggle_queue_route = warp::path("queue")
         .and(warp::path::param::<String>())
         .and(warp::post())
         .and(warp::header::optional("cookie"))
+        .and(pool_filter.clone())
         .and_then(toggle_queue_handler);
     let queue_state_route = warp::path("queue")
         .and(warp::path("state"))
-        .and(warp::path::param::<String>())
+        .and(warp::header::optional("cookie"))
+        .and(pool_filter.clone())
         .and(warp::get())
         .and_then(get_queue_state_handler);
     let cors = warp::cors()
@@ -98,7 +101,7 @@ async fn main() -> Result<(), BotError> {
         .or(toggle_queue_route)
         .or(queue_state_route)
         .or(queue_drag_drop)
-        .or(run_route).or(auth_routes).or(session_route).or(with_authorization()).with(cors);
+        .or(run_route).or(auth_routes).or(session_route).or(with_authorization(Arc::clone(&pool))).with(cors);
     let queue_page = dir("./public/queue.html");
     let main_route = queue_page.or(public_queue_api).or(routes);
 
@@ -124,13 +127,13 @@ async fn main() -> Result<(), BotError> {
         grant_points_task("216105918", Arc::clone(&pool_clone)).await;
     });
 
-    // Discord Bot Task
+    /*// Discord Bot Task
     tokio::spawn(async {
         loop {
             run_discord_bot().await;
             time::sleep(Duration::from_secs(5)).await;
         }
-    });
+    });*/
 
     // Chat Bot Task
     if let Err(e) = run_chat_bot(Arc::clone(&pool)).await {

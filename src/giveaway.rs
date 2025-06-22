@@ -2,7 +2,7 @@ use std::{borrow::BorrowMut, sync::Arc, time::Duration};
 
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
-use tokio::time::sleep;
+use tokio::time::{interval, sleep, Instant};
 
 use crate::{bot_commands::{reply_to_message, send_message}, commands::Command, models::{ChannelConfig, PermissionLevel}};
 
@@ -29,7 +29,7 @@ pub fn handle_giveaway() -> Command {
                 let msg_clone = msg.clone();
                 let bot_state_clone = Arc::clone(&bot_state);
                 let channel = msg.channel().to_string();
-                tokio::spawn(async move {
+                let handler = tokio::spawn(async move {
                     //Start of giveaway 
                     //Get default values of tickets (Change with commands)
                     let (duration, number_of_tickets, price);
@@ -46,20 +46,33 @@ pub fn handle_giveaway() -> Command {
                         drop(bot_state)
                     }
                     {
-                        send_message(&msg_clone, client_clone.lock().await.borrow_mut(), &format!("Giveaway has been started. You can buy a maximum of {} tickets for price of {} points for 1 ticket // USE !ticket <number>", number_of_tickets, price)).await.unwrap();
+                        send_message(&msg_clone, client_clone.lock().await.borrow_mut(), &format!("🎁 Giveaway has been started. You can buy a maximum of {} tickets for price of {} points for 1 ticket // USE !ticket <number>", number_of_tickets, price)).await.unwrap();
                     }
-                    sleep(Duration::from_secs(duration.try_into().unwrap())).await;
+                    let mut ticker = interval(Duration::from_secs(5*60));
+                    let start_time = Instant::now();
+                    
+                    loop {
+                        ticker.tick().await;
+
+                        if start_time.elapsed() >= Duration::from_secs(duration.try_into().unwrap()) {
+                            break;
+                        }
+
+                        // Periodic reminder message
+                        if let Err(e) = send_message(&msg_clone, client_clone.lock().await.borrow_mut(),&format!("⏰ Reminder: Giveaway is active! Use !ticket <1 - {}> to enter. Each ticket costs {} points!", number_of_tickets, price)).await {
+                            eprintln!("Failed to send giveaway reminder: {:?}", e);
+                        }
+                    }
+
                     let mut bot_state = bot_state_clone.write().await;
                     let config = bot_state.config.get_channel_config_mut(msg.channel());
                     config.giveaway.active = false;
                     bot_state.config.save_config();
                     {
-                        send_message(&msg_clone, client_clone.lock().await.borrow_mut(), "Giveaway has ended. Winner will be pulled soon!").await.unwrap();
+                        send_message(&msg_clone, client_clone.lock().await.borrow_mut(), "❗ Giveaway has ended. Winner will be pulled soon!").await.unwrap();
                     }
                     drop(bot_state)
                 });
-
-                
                 Ok(())
             };
             Box::pin(fut)

@@ -5,7 +5,7 @@ use std::{
     collections::HashMap, fs::File, io::{Read, Write}, path::Path, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 use tmi::{
-    client::{read::RecvError, write::SendError, ReconnectError}, Badge, Client, MessageParseError
+    client::{read::RecvError, write::SendError, ConnectError, ReconnectError}, Badge, Client, MessageParseError
 };
 use tokio::sync::Mutex;
 
@@ -115,6 +115,7 @@ pub enum BotError {
     ReconnectError(ReconnectError),
     SerenityError(serenity::Error),
     SqlxError(sqlx::Error),
+    ConnectError(ConnectError),
     Custom(String)
 
 }
@@ -123,7 +124,11 @@ impl fmt::Display for BotError {
         write!(f, "{}", self)
     }
 }
-
+impl From<ConnectError> for BotError {
+    fn from(err: ConnectError) -> Self {
+        BotError::ConnectError(err)
+    }
+}
 impl From<RecvError> for BotError {
     fn from(err: RecvError) -> Self {
         BotError::RecvError(err)

@@ -87,7 +87,16 @@ pub const GIVEAWAY_TABLE: &str = "
     )
 ";
 
-pub async fn initialize_currency_database() -> Result<Arc<SqlitePool>, sqlx::Error> {
+pub const SESSIONS_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS sessions (
+    session_token TEXT PRIMARY KEY,
+    twitch_id TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    FOREIGN KEY (twitch_id) REFERENCES users(id)
+);
+";
+
+pub async fn initialize_database() -> Result<Arc<SqlitePool>, sqlx::Error> {
     let database_url = "sqlite://public/commands.db";
 
     // Create the connection pool
@@ -97,13 +106,13 @@ pub async fn initialize_currency_database() -> Result<Arc<SqlitePool>, sqlx::Err
         .await?;
 
     // Initialize tables
-    /*let queries = [
-        QUEUE_TABLE, GIVEAWAY_TABLE, CURRENCY_TABLE, BAN_TABLE, ANNOUNCEMENT_TABLE, COMMAND_TABLE, USERS_TABLE, USER_TABLE, COMMAND_TABLE
+    let queries = [
+        SESSIONS_TABLE
     ];
 
     for query in queries {
         sqlx::query(query).execute(&pool).await?;
-    }*/
+    }
 
     Ok(Arc::new(pool))
 }

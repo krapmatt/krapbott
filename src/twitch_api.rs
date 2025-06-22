@@ -6,6 +6,24 @@ use serde_json::Value;
 
 use crate::{bot_commands::reply_to_message, models::BotError};
 
+//Ban Bots
+#[derive(Serialize)]
+struct BanRequest {
+    data: BanData,
+}
+#[derive(Serialize)]
+struct BanData {
+    user_id: String,
+}
+
+//Announcement
+#[derive(Serialize)]
+struct Data {
+    message: String,
+    color: String
+}
+
+//Fetch Lurkers
 #[derive(Deserialize, Debug)]
 struct ChatterResponse {
     data: Vec<Chatter>,
@@ -31,15 +49,7 @@ pub async fn fetch_lurkers(broadcaster_id: &str, token: &str, client_id: &str) -
     res.unwrap().data.into_iter().map(|c| c.user_name).collect()
 }
 
-//Pro twitch na ban botů
-#[derive(Serialize)]
-struct BanRequest {
-    data: BanData,
-}
-#[derive(Serialize)]
-struct BanData {
-    user_id: String,
-}
+
 // Best viewers on u.to/paq8IA
 pub async fn ban_bots(msg: &tmi::Privmsg<'_>, oauth_token: &str, client_id: String) {
     let url = format!("https://api.twitch.tv/helix/moderation/bans?broadcaster_id={}&moderator_id=1091219021", msg.channel_id());
@@ -130,4 +140,19 @@ pub async fn is_follower(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<
         let _ = reply_to_message(msg, &mut client, "Error occured! Tell Matt").await;
         true
     }
+}
+
+//Make announcment automatizations!
+pub async fn announcement(broadcaster_id: &str, mod_id: &str, oauth_token: &str, client_id: String, message: String) -> Result<(), BotError> {
+    let url = format!("https://api.twitch.tv/helix/chat/announcements?broadcaster_id={}&moderator_id={}", broadcaster_id, mod_id);
+    let res = reqwest::Client::new()
+        .post(&url)
+        .header("Client-Id", client_id)
+        .bearer_auth(oauth_token)
+        .form(&Data {message: message, color: "primary".to_string()})
+        .send()
+        .await.expect("Bad reqwest");
+    println!("{:?}", res.text().await);
+    
+    Ok(())
 }

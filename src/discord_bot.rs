@@ -15,7 +15,7 @@ use tokio::{sync::Mutex, time::sleep};
 
 use crate::{
     commands::COMMAND_GROUPS,
-    database::{initialize_currency_database, load_from_queue},
+    database::{initialize_database, load_from_queue},
     models::BotConfig,
 };
 
@@ -56,7 +56,7 @@ impl EventHandler for Handler {
         for channel_id in &channel_ids {
             if let Ok(messages) = channel_id.messages(&ctx.http, GetMessages::new()).await {
                 for id in messages {
-                    channel_id.delete_message(&ctx.http, id).await.unwrap();
+                    channel_id.delete_message(&ctx.http, id).await;
                 }
             }
         }
@@ -245,7 +245,7 @@ async fn discord_queue_embed(
     channel: &str,
     ctx: &Context,
 ) {
-    let conn = initialize_currency_database().await.unwrap();
+    let conn = initialize_database().await.unwrap();
     let mut queue = load_from_queue(&conn, &format!("#{}", channel)).await;
     queue.sort_by(|(a, _), (b, _)| a.cmp(b));
     // Create fancy embed message

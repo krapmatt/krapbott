@@ -2,7 +2,7 @@
   "channels": {
     "#krapmatt": {
       "open": true,
-      "len": 300000,
+      "len": 1,
       "teamsize": 1,
       "combined": false,
       "queue_channel": "#krapmatt",
@@ -33,10 +33,10 @@
       "prefix": "!",
       "random_queue": true,
       "giveaway": {
-        "duration": 200,
+        "duration": 600,
         "max_tickets": 10000,
         "ticket_cost": 100000,
-        "active": false
+        "active": true
       }
     }
   }

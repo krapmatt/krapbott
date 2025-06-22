@@ -3,6 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::SqlitePool;
+use uuid::Uuid;
 use std::sync::Arc;
 use tokio::sync::{mpsc::UnboundedSender, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -48,30 +49,27 @@ pub async fn connect_to_obs() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub async fn get_queue_handler(cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
-    if let Some(cookies) = cookies {
-        if let Some(session_id) = cookies.split(';')
-            .find(|c| c.trim().starts_with("session="))
-            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
-            let channel_id = format!("#{}", session_id.to_ascii_lowercase());
-            let mut config = BotConfig::load_config();
-            let config = config.get_channel_config_mut(&channel_id);
-            let queue_channel = &config.queue_channel;
+    if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
+        let channel_id = format!("#{}", twitch_name.to_ascii_lowercase());
+        let mut config = BotConfig::load_config();
+        let config = config.get_channel_config_mut(&channel_id);
+        let queue_channel = &config.queue_channel;
 
-            let queue = sqlx::query_as!(
-                QueueEntry,
-                "SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
-                queue_channel
-            ).fetch_all(&*pool).await.map_err(|_| warp::reject::reject())?;
+        let queue = sqlx::query_as!(
+            QueueEntry,
+            "SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
+            queue_channel
+        ).fetch_all(&*pool).await.map_err(|_| warp::reject::reject())?;
 
-            if queue.is_empty() {
-                return Ok(warp::reply::json(&queue));
-            }
-            let grouped_queue: Vec<Vec<QueueEntry>> = queue
-                .chunks(config.teamsize)
-                .map(|chunk| chunk.to_vec())
-                .collect();
-            return Ok(warp::reply::json(&grouped_queue));
+        if queue.is_empty() {
+            return Ok(warp::reply::json(&queue));
         }
+        let grouped_queue: Vec<Vec<QueueEntry>> = queue
+            .chunks(config.teamsize)
+            .map(|chunk| chunk.to_vec())
+            .collect();
+        return Ok(warp::reply::json(&grouped_queue));
+        
     }
     Ok(warp::reply::json(&serde_json::json!({ "error": "Not logged in" })))
 }
@@ -79,42 +77,38 @@ pub async fn get_queue_handler(cookies: Option<String>, pool: Arc<SqlitePool>) -
 pub async fn remove_from_queue_handler(cookies: Option<String>, body: serde_json::Value, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
     let twitch_name = body["twitch_name"].as_str().ok_or_else(|| warp::reject())?;
 
-    if let Some(cookies) = cookies {
-        if let Some(session_id) = cookies.split(';')
-            .find(|c| c.trim().starts_with("session="))
-            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
-            let channel_id = format!("#{}", session_id.to_ascii_lowercase());
-            let mut queue_channel = String::new();
-            if let Some(config)  = BotConfig::load_config().get_channel_config(&channel_id) {
-                queue_channel = config.queue_channel.clone()
-            }
-            let position = sqlx::query!(
-                "SELECT position FROM queue WHERE twitch_name = ? AND channel_id = ?",
+    if let Some(name) = get_twitch_name_from_cookie(cookies, &*pool).await {
+        let channel_id = format!("#{}", name.to_ascii_lowercase());
+        let mut queue_channel = String::new();
+        if let Some(config)  = BotConfig::load_config().get_channel_config(&channel_id) {
+            queue_channel = config.queue_channel.clone()
+        }
+        let position = sqlx::query!(
+            "SELECT position FROM queue WHERE twitch_name = ? AND channel_id = ?",
+            twitch_name, queue_channel
+        ).fetch_optional(&*pool).await.map_err(|_| warp::reject())?;
+    
+        if position.is_some() {
+            // Remove the user from queue
+            sqlx::query!(
+                "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
                 twitch_name, queue_channel
-            ).fetch_optional(&*pool).await.map_err(|_| warp::reject())?;
-        
-            if position.is_some() {
-                // Remove the user from queue
+            ).execute(&*pool).await.map_err(|_| warp::reject())?;
+    
+            let queue_entries = sqlx::query!(
+                "SELECT twitch_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
+                queue_channel
+            ).fetch_all(&*pool).await.map_err(|_| warp::reject())?;
+    
+            let mut new_position = 1;
+            for entry in queue_entries {
                 sqlx::query!(
-                    "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
-                    twitch_name, queue_channel
+                    "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
+                    new_position, entry.twitch_name, queue_channel
                 ).execute(&*pool).await.map_err(|_| warp::reject())?;
-        
-                let queue_entries = sqlx::query!(
-                    "SELECT twitch_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
-                    queue_channel
-                ).fetch_all(&*pool).await.map_err(|_| warp::reject())?;
-        
-                let mut new_position = 1;
-                for entry in queue_entries {
-                    sqlx::query!(
-                        "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
-                        new_position, entry.twitch_name, queue_channel
-                    ).execute(&*pool).await.map_err(|_| warp::reject())?;
-                    new_position += 1;
-                }
-                return Ok(warp::reply::with_status("Removed", StatusCode::OK));
+                new_position += 1;
             }
+            return Ok(warp::reply::with_status("Removed", StatusCode::OK));
         }
     }
     Ok(warp::reply::with_status(
@@ -135,149 +129,109 @@ pub struct QueueUpdate {
 }
 
 pub async fn update_queue_order(cookies: Option<String>, data: UpdateQueueOrderRequest, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
-    if let Some(cookies) = cookies {
-        if let Some(session_id) = cookies.split(';')
-            .find(|c| c.trim().starts_with("session="))
-            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
-            let channel_id = format!("#{}", session_id.to_ascii_lowercase());
-            let mut queue_channel = String::new();
-            if let Some(config)  = BotConfig::load_config().get_channel_config(&channel_id) {
-                queue_channel = config.queue_channel.clone()
-            }
-            sqlx::query!(
-                "UPDATE queue SET position = position + 10000 WHERE channel_id = ?",
-                queue_channel
-            ).execute(&*pool).await.map_err(|_| warp::reject())?;
-            for entry in &data.new_order {
-                sqlx::query!(
-                    "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
-                    entry.position, entry.twitch_name, queue_channel
-                ).execute(&*pool).await.map_err(|_| warp::reject())?;
-            }
-        
-            return Ok(warp::reply::json(&"Queue order updated"));
+    if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
+        let channel_id = format!("#{}", twitch_name.to_ascii_lowercase());
+        let mut queue_channel = String::new();
+        if let Some(config)  = BotConfig::load_config().get_channel_config(&channel_id) {
+            queue_channel = config.queue_channel.clone()
         }
+        sqlx::query!(
+            "UPDATE queue SET position = position + 10000 WHERE channel_id = ?",
+            queue_channel
+        ).execute(&*pool).await.map_err(|_| warp::reject())?;
+        for entry in &data.new_order {
+            sqlx::query!(
+                "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
+                entry.position, entry.twitch_name, queue_channel
+            ).execute(&*pool).await.map_err(|_| warp::reject())?;
+        }
+    
+        return Ok(warp::reply::json(&"Queue order updated"));
     }
     return Err(warp::reject())
 }
 
-pub async fn next_queue_handler(cookies: Option<String>, sender: Arc<UnboundedSender<(String, String)>>) -> Result<impl warp::Reply, warp::Rejection> {
-    if let Some(cookies) = cookies {
-        if let Some(session_id) = cookies.split(';')
-            .find(|c| c.trim().starts_with("session="))
-            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
-            if let Err(err) = sender.send((session_id.to_string(), "next".to_string())) {
-                eprintln!("Failed to send message: {:?}", err);
-                return Ok(warp::reply::with_status(
-                    "Failed to send message",
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ));
-            }
+pub async fn next_queue_handler(cookies: Option<String>, sender: Arc<UnboundedSender<(String, String)>>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
+        if let Err(err) = sender.send((twitch_name, "next".to_string())) {
+            eprintln!("Failed to send message: {:?}", err);
             return Ok(warp::reply::with_status(
-                "Next group message sent",
-                StatusCode::OK,
+                "Failed to send message",
+                StatusCode::INTERNAL_SERVER_ERROR,
             ));
         }
-    };
+        return Ok(warp::reply::with_status(
+            "Next group message sent",
+            StatusCode::OK,
+        ));
+    }
     return Ok(warp::reply::with_status(
         "Failed to send message",
         StatusCode::INTERNAL_SERVER_ERROR,
     ));
 }
-pub async fn keep_channel_alive(sender: Arc<Mutex<UnboundedSender<(String, String)>>>) -> Result<impl warp::Reply, warp::Rejection> {
-    if let Err(err) = sender
-        .lock()
-        .await
-        .send(("keep".to_string(), "alive".to_string()))
-    {
-        eprintln!("Failed to send message: {:?}", err);
-        return Ok(warp::reply::with_status(
-            "Failed to send message",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ));
-    }
 
-    Ok(warp::reply::with_status(
-        "Next group message sent",
-        StatusCode::OK,
-    ))
-}
-
-pub async fn get_run_counter_handler(cookies: Option<String>) -> Result<impl warp::Reply, warp::Rejection> {
-    if let Some(cookies) = cookies {
-        if let Some(session_id) = cookies.split(';')
-            .find(|c| c.trim().starts_with("session="))
-            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
-            let channel_id = format!("#{}", session_id.to_ascii_lowercase());
-            let config = BotConfig::load_config();
-            if let Some(channel_config) = config.get_channel_config(&channel_id) {
-                if let Some(config) = config.get_channel_config(&channel_config.queue_channel) {
-                    let runs = config.runs;
-                    return Ok(json(&json!({"run_counter": runs})));
-                }
+pub async fn get_run_counter_handler(cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
+        let channel_id = format!("#{}", twitch_name.to_ascii_lowercase());
+        let config = BotConfig::load_config();
+        if let Some(channel_config) = config.get_channel_config(&channel_id) {
+            if let Some(config) = config.get_channel_config(&channel_config.queue_channel) {
+                let runs = config.runs;
+                return Ok(json(&json!({"run_counter": runs})));
             }
         }
     }
     Err(warp::reject())
     
 }
-pub async fn get_queue_state_handler(channel_id: String) -> Result<impl warp::Reply, warp::Rejection> {
-    let mut config = BotConfig::load_config();
-    let channel_id = format!("#{}", channel_id);
-    let config = config.get_channel_config_mut(&channel_id);
-    let is_open = config.open;
-    Ok(warp::reply::json(
-        &serde_json::json!({ "is_open": is_open }),
-    ))
-}
-pub async fn toggle_queue_handler(toggle_action: String, cookies: Option<String>) -> Result<impl warp::Reply, warp::Rejection> {
-    if let Some(cookies) = cookies {
-        if let Some(session_id) = cookies.split(';')
-            .find(|c| c.trim().starts_with("session="))
-            .map(|c| c.trim().strip_prefix("session=").unwrap_or("")) {
-            let mut channel_name = format!("#{}", session_id.to_ascii_lowercase());
-            let mut config = BotConfig::load_config();
-            if let Some(name) = config.get_channel_config(&channel_name) {
-                channel_name = name.queue_channel.clone();
-            }
-            let updated_channels = config.channels.iter_mut().filter_map(|(channel_id, channel_config)| {
-                // Check if the channel matches the `queue_channel`
-                if channel_config.queue_channel == channel_name {
-                    match toggle_action.as_str() {
-                        "open" => {
-                            channel_config.open = true;
-                            Some((channel_id.clone(), "open"))
-                        }
-                        "close" => {
-                            channel_config.open = false;
-                            Some((channel_id.clone(), "closed"))
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            }).collect::<Vec<_>>();
-            config.save_config();
-            
-            return Ok(warp::reply::json(
-                &serde_json::json!({
-                    "success": true,
-                    "state": toggle_action,
-                    "updated_channels": updated_channels,
-                }),
-            ));
-        }
+pub async fn get_queue_state_handler(cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
+        let config = BotConfig::load_config();
+        let channel_id = format!("#{}", twitch_name.to_ascii_lowercase());
+        let config = config.get_channel_config(&channel_id).unwrap();
+        return Ok(warp::reply::json(
+        &serde_json::json!({ "is_open": config.open }),
+        ));
     }
     Err(warp::reject())
 }
-
-pub async fn sabotage_truck_queue() -> Result<impl warp::Reply, warp::Rejection> {
-    let mut config = BotConfig::load_config();
-    config.get_channel_config_mut("#nyc62truck").open =
-        !config.get_channel_config_mut("#nyc62truck").open;
-    config.save_config();
-    Ok(warp::reply::with_status("Sabotaged", StatusCode::OK))
+pub async fn toggle_queue_handler(toggle_action: String, cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
+        let mut channel_name = format!("#{}", twitch_name.to_ascii_lowercase());
+        let mut config = BotConfig::load_config();
+        if let Some(name) = config.get_channel_config(&channel_name) {
+            channel_name = name.queue_channel.clone();
+        }
+        let updated_channels = config.channels.iter_mut().filter_map(|(channel_id, channel_config)| {
+            // Check if the channel matches the `queue_channel`
+            if channel_config.queue_channel == channel_name {
+                match toggle_action.as_str() {
+                    "open" => {
+                        channel_config.open = true;
+                        Some((channel_id.clone(), "open"))
+                    }
+                    "close" => {
+                        channel_config.open = false;
+                        Some((channel_id.clone(), "closed"))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }).collect::<Vec<_>>();
+        config.save_config();
+        
+        return Ok(warp::reply::json(
+            &serde_json::json!({
+                "success": true,
+                "state": toggle_action,
+                "updated_channels": updated_channels,
+            }),
+        ));
+    }
+    Err(warp::reject())
 }
 
 const TWITCH_CLIENT_ID: &str = "mtcgb9falyzs4n3j7x3rqr51ho9gxr";
@@ -310,7 +264,6 @@ struct TokenRequest<'a> {
 /// Exchanges the code for an access token and fetches Twitch user info
 pub async fn twitch_callback(query: AuthCallbackQuery, pool: Arc<SqlitePool>) -> Result<impl Reply, Rejection> {
     let client = Client::new();
-
     let token_request = TokenRequest {
         client_id: &TWITCH_CLIENT_ID,
         client_secret: &TWITCH_CLIENT_SECRET,
@@ -337,13 +290,24 @@ pub async fn twitch_callback(query: AuthCallbackQuery, pool: Arc<SqlitePool>) ->
             warp::reject::not_found()
         })?;
 
-        if let Err(e) = save_user_tokens(&twitch_user, &token_data, pool).await {
+        if let Err(e) = save_user_tokens(&twitch_user, &token_data, pool.clone()).await {
             eprintln!("Failed to save tokens: {:?}", e);
         }
 
+        let session_token = Uuid::new_v4().to_string();
+        let expires_at = chrono::Utc::now().timestamp() + 604800;
+
+        sqlx::query!(
+            "INSERT INTO sessions (session_token, twitch_id, expires_at) VALUES (?, ?, ?)",
+            session_token, twitch_user.id, expires_at
+        ).execute(&*pool).await.map_err(|e| {
+            eprintln!("Failed to store session: {:?}", e);
+            warp::reject::not_found()
+        })?;
+
         let session_cookie = format!(
             "session={}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=604800",
-            twitch_user.login
+            session_token
         );
         let response = warp::reply::with_header(warp::reply::html("Login successful. Redirecting..."), "Set-Cookie", session_cookie);
         let res = warp::reply::with_header(response, "Location", "/queue_dock.html");
@@ -393,29 +357,31 @@ async fn save_user_tokens(user: &TwitchUser, tokens: &TwitchTokenResponse, pool:
 pub async fn check_session(cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl Reply, Rejection> {
     if let Some(cookies) = cookies {
         // Extract session ID (Twitch user ID)
-        if let Some(session_id) = cookies
+        if let Some(session_token) = cookies
             .split(';')
             .find(|c| c.trim().starts_with("session="))
             .map(|c| c.trim().strip_prefix("session=").unwrap_or(""))
         {
-            // Check if session exists in database
-            let user = sqlx::query!(
-                "SELECT id, profile_pp FROM users WHERE twitch_name = ?1", 
-                session_id
-            )
-            .fetch_optional(&*pool)
-            .await
-            .map_err(|e| {
+            let session = sqlx::query!(
+                "SELECT users.twitch_name, users.profile_pp, sessions.expires_at 
+                 FROM sessions 
+                 JOIN users ON users.id = sessions.twitch_id 
+                 WHERE sessions.session_token = ?1",
+                session_token
+            ).fetch_optional(&*pool).await.map_err(|e| {
                 eprintln!("DB Error: {:?}", e);
                 warp::reject::not_found()
             })?;
 
-            if let Some(user) = user {
-                return Ok(warp::reply::json(&serde_json::json!({
-                    "logged_in": true,
-                    "username": session_id,
-                    "profile_pp": user.profile_pp
-                })));
+            if let Some(session) = session {
+                let now = chrono::Utc::now().timestamp();
+                if session.expires_at > now {
+                    return Ok(warp::reply::json(&serde_json::json!({
+                        "logged_in": true,
+                        "username": session.twitch_name,
+                        "profile_pp": session.profile_pp
+                    })));
+                }
             }
         }
     }
@@ -423,23 +389,44 @@ pub async fn check_session(cookies: Option<String>, pool: Arc<SqlitePool>) -> Re
     Ok(warp::reply::json(&serde_json::json!({ "logged_in": false })))
 }
 
-pub async fn check_authorization(cookie: Option<String>) -> Result<String, Rejection> {
-    if let Some(session) = cookie {
-        // Check if the session cookie contains an authorized user
-        let name = format!("#{}", session);
-        let config = BotConfig::load_config();
-        if config.channels.contains_key(&name) {
-            return Ok(name);
+pub async fn check_authorization(cookie: Option<String>, pool: Arc<SqlitePool>) -> Result<String, Rejection> {
+    if let Some(cookies) = cookie {
+        if let Some(session_token) = cookies
+            .split(';')
+            .find(|c| c.trim().starts_with("session="))
+            .and_then(|c| c.trim().strip_prefix("session="))
+        {
+            let session = sqlx::query!(
+                "SELECT users.twitch_name, sessions.expires_at 
+                 FROM sessions 
+                 JOIN users ON users.id = sessions.twitch_id 
+                 WHERE sessions.session_token = ?1",
+                session_token
+            ).fetch_optional(&*pool).await.map_err(|_| warp::reject::not_found())?;
+
+            if let Some(session) = session {
+                let expire= chrono::Utc::now().timestamp() + 604800;
+                let _ = sqlx::query!(
+                    "UPDATE sessions SET expires_at = ?1 WHERE session_token = ?2",
+                    expire, session_token
+                ).execute(&*pool).await;
+                if session.expires_at > chrono::Utc::now().timestamp() {
+                    let name = format!("#{}", session.twitch_name.unwrap());
+                    let config = BotConfig::load_config();
+                    if config.channels.contains_key(&name) {
+                        return Ok(name);
+                    }
+                }
+            }
         }
-        Err(warp::reject::custom(NotAuthorizedError))
-    } else {
-        Err(warp::reject::custom(NotAuthorizedError))
     }
+
+    Err(warp::reject::custom(NotAuthorizedError))
 }
 
-pub fn with_authorization() -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
+pub fn with_authorization(pool: Arc<SqlitePool>) -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
     warp::header::optional("cookie")
-        .and(warp::any())
+        .and(warp::any().map(move || pool.clone()))
         .and_then(check_authorization)
 }
 
@@ -468,4 +455,23 @@ pub async fn get_public_queue(streamer: String, pool: Arc<SqlitePool>) -> Result
         .map(|chunk| chunk.to_vec())
         .collect();
     Ok(warp::reply::json(&grouped_queue))
+}
+
+async fn get_twitch_name_from_cookie(cookies: Option<String>, pool: &SqlitePool) -> Option<String> {
+    let cookie = cookies?;
+    let session_token = cookie.split(';').find(|c| c.trim().starts_with("session="))?.trim().strip_prefix("session=")?;
+
+    let row = sqlx::query!(
+        "SELECT users.twitch_name, sessions.expires_at 
+         FROM sessions 
+         JOIN users ON users.id = sessions.twitch_id 
+         WHERE sessions.session_token = ?",
+        session_token
+    ).fetch_optional(pool).await.ok()??;
+
+    if row.expires_at > chrono::Utc::now().timestamp() {
+        row.twitch_name
+    } else {
+        None
+    }
 }

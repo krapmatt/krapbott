@@ -1,27 +1,20 @@
 use crate::api::get_master_challenges;
 use crate::api::get_membershipid;
 use crate::bot_commands;
-use crate::bot_commands::announcement;
+use crate::queue;
+use crate::queue::is_valid_bungie_name;
+use crate::queue::process_queue_entry;
 use crate::twitch_api;
+use crate::twitch_api::announcement;
 use crate::twitch_api::get_twitch_user_id;
-use crate::bot_commands::is_valid_bungie_name;
 use crate::bot_commands::mod_action_user_from_queue;
 use crate::bot_commands::modify_command;
-use crate::bot_commands::process_queue_entry;
 use crate::bot_commands::register_user;
 use crate::bot_commands::reply_to_message;
 use crate::bot_commands::unban_player_from_queue;
 use crate::database::load_membership;
-use crate::giveaway::change_duration_giveaway;
-use crate::giveaway::change_max_tickets_giveaway;
-use crate::giveaway::change_price_ticket;
-use crate::giveaway::handle_giveaway;
-use crate::giveaway::join_giveaway;
-use crate::giveaway::pull_giveaway;
-use crate::models::AnnouncementState;
-use crate::models::CommandAction;
-use crate::models::TemplateManager;
-use crate::models::TwitchUser;
+use crate::giveaway::{change_duration_giveaway, change_max_tickets_giveaway, change_price_ticket, handle_giveaway, join_giveaway, pull_giveaway};
+use crate::models::{AnnouncementState, CommandAction, TemplateManager, TwitchUser};
 use crate::BotConfig;
 use crate::{
     bot::BotState,
@@ -57,7 +50,7 @@ pub struct CommandConfig {
 }
 pub struct CommandGroup {
     pub name: String,
-    pub command: HashMap<String, Command>,
+    pub command: Vec<CommandRegistration>,
 }
 
 #[derive(Clone)]
@@ -66,6 +59,20 @@ pub struct Command {
     pub handler: CommandHandler,
     pub description: String,
     pub usage: String,
+}
+#[derive(Clone)]
+pub struct CommandRegistration {
+    pub aliases: Vec<String>,
+    pub command: Command
+}
+
+macro_rules! cmd {
+    ($handler:expr, $($alias:expr), +) => {
+        CommandRegistration {
+            aliases: vec![$($alias.to_string()), +],
+            command: $handler,
+        }        
+    };
 }
 
 lazy_static::lazy_static! {
@@ -88,136 +95,146 @@ lazy_static::lazy_static! {
 lazy_static::lazy_static! {
     pub static ref ANNOUNCEMENT: CommandGroup = CommandGroup { name: "Announcement".to_string(),
         command: vec![
-            ("add_announcement".to_string(), add_announcement()),
-            ("remove_announcement".to_string(), remove_announcement()),
-            ("play_announcement".to_string(), play_announcement()),
-            ("announcement_interval".to_string(), announcement_freq()),
-            ("announcement_state".to_string(), announcement_state()),
-
+            cmd!(add_announcement(), "add_announcement"),
+            cmd!(announcement_state(), "announcement_state"),
+            cmd!(announcement_freq(), "announcement_interval"),
+            cmd!(play_announcement(), "play_announcement"),
+            cmd!(remove_announcement(), "remove_announcement")
         ].into_iter().collect()
     };
     pub static ref TIME: CommandGroup = CommandGroup { name: "Time".to_string(),
         command: vec![
-            ("mattbed".to_string(), matt_time()),
-            ("samoanbed".to_string(), samosa_time()),
-            ("cindibed".to_string(), cindi_time()),
+            cmd!(matt_time(), "mattbed"),
+            cmd!(samosa_time(), "samoanbed"),
+            cmd!(cindi_time(), "cindibed"),
 
         ].into_iter().collect()
     };
     pub static ref QUEUE_LIST: CommandGroup = CommandGroup { name: "List of queue".to_string(),
         command: vec![
-            ("queue".to_string(), queue_command()),
-            ("list".to_string(), queue_command()),
+            cmd!(queue_command(), "queue", "list"),
         ].into_iter().collect()
     };
     pub static ref QUEUE_COMMANDS: CommandGroup = CommandGroup { name: "Queue".to_string(),
         command: vec![
-            ("clear".to_string(), clear()),
-            ("queue_len".to_string(), queue_len()),
-            ("queue_size".to_string(), queue_size()),
-            ("join".to_string(), join_cmd()),
-            ("next".to_string(), next()),
-            ("remove".to_string(), remove()),
-            ("pos".to_string(), pos()),
-            ("leave".to_string(), leave()),
-            ("move".to_string(), move_cmd()),
-            ("prio".to_string(), prio_command()),
-            ("bribe".to_string(), prio_command()),
-            ("open".to_string(), open_command()),
-            ("open_queue".to_string(), open_command()),
-            ("close".to_string(), close_command()),
-            ("close_queue".to_string(), close_command()),
-            ("add".to_string(), addplayertoqueue()),
-            ("toggle_combined".to_string(), toggle_combine()),
-            ("toggle_sub".to_string(), sub_only())
+            cmd!(clear(), "clear"),
+            cmd!(queue_len(), "queue_len"),
+            cmd!(queue_size(), "queue_size"),
+            cmd!(join_cmd(), "join"),
+            cmd!(next(), "next"),
+            cmd!(remove(), "remove"),
+            cmd!(pos(), "pos", "position", "p"),
+            cmd!(leave(), "leave"),
+            cmd!(move_cmd(), "move"),
+            cmd!(prio_command(), "prio", "bribe"),
+            cmd!(deprio_command(), "deprio"),
+            cmd!(open_command(), "open", "open_queue"),
+            cmd!(close_command(), "close", "close_queue"),
+            cmd!(addplayertoqueue(), "add"),
+            cmd!(toggle_combine(), "toggle_combined"),
+            cmd!(sub_only(), "toggle_sub")
         ].into_iter().collect()
     };
     pub static ref SHOUTOUT: CommandGroup = CommandGroup { name: "Shoutout".to_string(),
         command: vec![
-            ("so".to_string(), so())
+            cmd!(so(), "so", "shoutout")
         ].into_iter().collect()
     };
     pub static ref POINTS: CommandGroup = CommandGroup { name: "Points".to_string(),
         command: vec![
-            ("dirt".to_string(), get_points()),
-            ("add_dirt".to_string(), add_points()),
-            ("remove_dirt".to_string(), remove_points()),
-
+            cmd!(get_points(), "dirt", "points"),
+            cmd!(add_points(), "add_dirt"),
+            cmd!(remove_points(), "remove_dirt"),
         ].into_iter().collect()
     };
     pub static ref LURK: CommandGroup = CommandGroup { name: "Lurk".to_string(),
         command: vec![
-            ("lurk".to_string(), lurk())
+            cmd!(lurk(), "lurk")
         ].into_iter().collect()
     };
 
     pub static ref RANDOM_QUEUE: CommandGroup = CommandGroup { name: "Random Queue".to_string(),
         command: vec![
-            ("random".to_string(), random()),
+            cmd!(random(), "random"),
         ].into_iter().collect()
     };
 
     pub static ref BUNGIE_API: CommandGroup = CommandGroup { name: "Bungie API".to_string(),
         command: vec![
-            ("total".to_string(), total()),
-            ("cr".to_string(), master_chal())
+            cmd!(total(), "total"),
+            cmd!(master_chal(), "cr")
         ].into_iter().collect()
     };
 
     pub static ref DATABASE_FOR_QUEUE: CommandGroup = CommandGroup { name: "Database for queue".to_string(),
         command: vec![
-            ("register".to_string(), register()),
-            ("mod_register".to_string(), mod_register()),
-            ("bungiename".to_string(), bungie_name()),
-            ("add_to_database".to_string(), add_manually_to_database()),
+            cmd!(register(), "register"),
+            cmd!(mod_register(), "mod_register"),
+            cmd!(bungie_name(), "bungiename"),
+            cmd!(add_manually_to_database(), "add_to_database"),
         ].into_iter().collect()
     };
 
     pub static ref GIVEAWAY: CommandGroup = CommandGroup { name: "Giveaway".to_string(),
         command: vec![
-            ("start_giveaway".to_string(), handle_giveaway()),
-            ("pull".to_string(), pull_giveaway()),
-            ("ticket".to_string(), join_giveaway()),
-            ("giveaway_duration".to_string(), change_duration_giveaway()),
-            ("giveaway_tickets".to_string(), change_max_tickets_giveaway()),
-            ("giveaway_price".to_string(), change_price_ticket())
+            cmd!(handle_giveaway(), "start_giveaway", "startgiveaway"),
+            cmd!(pull_giveaway(), "pull"),
+            cmd!(join_giveaway(), "ticket", "enter"),
+            cmd!(change_duration_giveaway(), "giveaway_duration", "giveawayduration"),
+            cmd!(change_max_tickets_giveaway(), "giveaway_tickets", "giveawaytickets"),
+            cmd!(change_price_ticket(), "giveaway_price", "giveawayprice")
         ].into_iter().collect()
 
     };
 
     pub static ref MODERATION: CommandGroup = CommandGroup { name: "Moderation".to_string(),
         command: vec![
-            ("connect".to_string(), connect()),
-            ("mod_config".to_string(), mod_config()),
-            ("addcommand".to_string(), addcommand()),
-            ("removecommand".to_string(), removecommand()),
-            ("addglobalcommand".to_string(), addglobalcommand()),
-            ("mod_ban".to_string(), mod_ban()),
-            ("mod_timeout".to_string(), mod_timeout()),
-            ("mod_unban".to_string(), mod_unban()),
-            ("add_package".to_string(), addpackage()),
-            ("remove_package".to_string(), removepackage()),
-            ("packages".to_string(), list_of_packages()),
-            ("set_template".to_string(), set_template()),
-            ("remove_template".to_string(), delete_template()),
-            ("streaming_together".to_string(), add_streaming_together()),
-            ("mod_reset".to_string(), mod_reset()),
-            ("help".to_string(), help_command()),
+            cmd!(connect(), "connect"),
+            cmd!(mod_config(), "mod_config"),
+            cmd!(addcommand(), "addcommand", "add_command"),
+            cmd!(removecommand(), "removecommand", "remove_command"),
+            cmd!(addglobalcommand(), "addglobalcommand", "add_globalcommand"),
+            cmd!(mod_ban(), "mod_ban"),
+            cmd!(mod_timeout(), "mod_timeout"),
+            cmd!(mod_unban(), "mod_unban"),
+            cmd!(addpackage(), "add_package", "addpackage"),
+            cmd!(removepackage(), "remove_package", "removepackage"),
+            cmd!(list_of_packages(), "packages"),
+            cmd!(set_template(), "set_template"),
+            cmd!(delete_template(), "remove_template"),
+            cmd!(add_streaming_together(), "streaming_together"),
+            cmd!(mod_reset(), "mod_reset"),
+            cmd!(help_command(), "help"),
         ].into_iter().collect()
     };
 }
 
-pub fn create_command_dispatcher(config: &BotConfig, channel_name: &str) -> HashMap<String, Command> {
+pub fn create_command_dispatcher(config: &BotConfig, channel_name: &str, custom_aliases: Option<&HashMap<String, String>>) -> HashMap<String, Command> {
     let mut commands: HashMap<String, Command> = HashMap::new();
-    if let Some(channel_config) = config.channels.get(channel_name) {
-        let available_packages = &*COMMAND_GROUPS;
 
+    if let Some(channel_config) = config.channels.get(channel_name) {
         for package_name in &channel_config.packages {
-            if let Some(group) = available_packages.iter().find(|g| &g.name.to_lowercase() == &package_name.to_lowercase()) {
-                commands.extend(group.command.clone());
+            if let Some(group) = COMMAND_GROUPS.iter().find(|g| &g.name.to_lowercase() == &package_name.to_lowercase()) {
+                for registration in &group.command {
+                    for alias in &registration.aliases {
+                        commands.insert(alias.to_lowercase(), registration.command.clone());
+                    }
+                }
             }
         }
     }
+
+    //Custom Aliases
+    /* 
+    if let Some(custom) = custom_aliases {
+        for (alias, command_name) in custom {
+            if let Some(command) = commands.get(command_name).cloned() {
+                commands.insert(alias.to_lowercase(), command);
+            }
+        }
+    }
+    */
+
     commands
 }
 
@@ -979,9 +996,7 @@ fn clear() -> Command {
                 let fut = async move {
                     let channel = msg.channel().to_owned();
                     // Clear the queue for the given channel
-                    sqlx::query!("DELETE FROM queue WHERE channel_id = ?", channel)
-                        .execute(&pool)
-                        .await?;
+                    sqlx::query!("DELETE FROM queue WHERE channel_id = ?", channel).execute(&pool).await?;
                     let mut client = client.lock().await;
                     send_message(&msg, client.borrow_mut(), "Queue has been cleared").await?;
                     Ok(())
@@ -1085,6 +1100,21 @@ fn prio_command() -> Command {
         }),
         description: "Prio command to make people prioed".to_string(),
         usage: "!prio name number of runs -> use in first group to increase the number of runs OR !prio name -> moves to next group".to_string()
+    }
+}
+
+fn deprio_command() -> Command {
+    Command {
+        permission: PermissionLevel::Moderator,
+        handler: Arc::new(|msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state| {
+            let fut = async move {
+                bot_state.read().await.deprio(&msg, client, &pool).await?;
+                Ok(())
+            };
+            Box::pin(fut)
+        }),
+        description: "Deprio command".to_string(),
+        usage: "!deprio <twitch_name>".to_string()
     }
 }
 ///Open the queue
@@ -1253,7 +1283,7 @@ fn play_announcement() -> Command {
     Command {
         permission: PermissionLevel::Moderator,
         handler: Arc::new(
-            |msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool, bot_state| {
+            |msg: Privmsg<'static>, _client: Arc<Mutex<tmi::Client>>, pool, bot_state| {
                 let fut = async move {
                     let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
                     if msg_vec.len() != 2 {
@@ -1273,14 +1303,7 @@ fn play_announcement() -> Command {
                     if let Some(row) = result {
                         let announ = row.announcement;
                         let bot_state = bot_state.read().await;
-                        announcement(
-                            msg.channel_id(),
-                            "1091219021",
-                            &bot_state.oauth_token_bot,
-                            bot_state.bot_id.clone(),
-                            announ,
-                        )
-                        .await?;
+                        announcement(msg.channel_id(),"1091219021",&bot_state.oauth_token_bot,bot_state.bot_id.clone(),announ).await?;
                     }
 
                     Ok(())
@@ -1345,7 +1368,7 @@ fn addplayertoqueue() -> Command {
                 let queue_len = config.len;
                 let queue_channel = &config.queue_channel;
 
-                process_queue_entry(&msg, client.lock().await.borrow_mut(), queue_len, &pool, user, queue_channel, bot_commands::Queue::ForceJoin).await?;
+                process_queue_entry(&msg, client.lock().await.borrow_mut(), queue_len, &pool, user, queue_channel, queue::Queue::ForceJoin).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -1597,11 +1620,14 @@ fn mod_reset() -> Command {
     }
 }
 
-fn find_command(command_name: &str) -> Option<(String, &Command)> {
+fn find_command<'a>(command_name: &str) -> Option<(&'a String, &'a Command)> {
     for group in COMMAND_GROUPS.iter() {
-        if let Some(command) = group.command.get(command_name) {
-            return Some((group.name.clone(), command));
+        for registration in &group.command {
+            if registration.aliases.iter().any(|alias| alias == command_name) {
+                return Some((&group.name, &registration.command));
+            }
         }
+
     }
     None
 }
@@ -1721,7 +1747,7 @@ fn get_points() -> Command {
 
 fn add_points() -> Command {
     Command {
-        permission: PermissionLevel::User,
+        permission: PermissionLevel::Moderator,
         handler: Arc::new(|msg, client, pool, _bot_state| {
             let fut = async move {
                 let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
@@ -1753,7 +1779,7 @@ fn add_points() -> Command {
 
 fn remove_points() -> Command {
     Command {
-        permission: PermissionLevel::User,
+        permission: PermissionLevel::Moderator,
         handler: Arc::new(|msg, client, pool, _bot_state| {
             let fut = async move {
                 let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
@@ -1789,21 +1815,10 @@ fn sub_only() -> Command {
         handler: Arc::new(|msg, client, _pool, bot_state| {
             let fut = async move {
                 let mut bot_state = bot_state.write().await;
-                let sub_only = bot_state
-                    .config
-                    .get_channel_config_mut(msg.channel())
-                    .sub_only;
-                bot_state
-                    .config
-                    .get_channel_config_mut(msg.channel())
-                    .sub_only = !sub_only;
+                let sub_only = bot_state.config.get_channel_config_mut(msg.channel()).sub_only;
+                bot_state.config.get_channel_config_mut(msg.channel()).sub_only = !sub_only;
                 bot_state.config.save_config();
-                send_message(
-                    &msg,
-                    client.lock().await.borrow_mut(),
-                    &format!("Sub only queue has been set to {}", !sub_only),
-                )
-                .await?;
+                send_message(&msg, client.lock().await.borrow_mut(), &format!("Sub only queue has been set to {}", !sub_only)).await?;
 
                 Ok(())
             };
