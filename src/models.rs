@@ -2,7 +2,7 @@ use core::fmt;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::{
-    collections::HashMap, fs::File, io::{Read, Write}, path::Path, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}
+    collections::{HashMap, HashSet}, fs::File, io::{Read, Write}, path::Path, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 use tmi::{
     client::{read::RecvError, write::SendError, ConnectError, ReconnectError}, Badge, Client, MessageParseError
@@ -41,6 +41,7 @@ impl SharedState {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum CommandAction {
     Add,
     Remove,
@@ -215,6 +216,15 @@ pub struct ChannelConfig {
     pub giveaway: Giveaway
 }
 
+impl ChannelConfig {
+    pub fn reset(&mut self, channel_id: &str) {
+        self.runs = 0;
+        self.combined = false;
+        self.queue_channel = channel_id.to_string();
+        self.random_queue = false;
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct BotConfig {
     pub channels: HashMap<String, ChannelConfig>, // Holds configuration for all channels
@@ -365,4 +375,38 @@ impl TemplateManager {
 pub enum Package {
     Add,
     Remove
+}
+#[derive(Clone)]
+pub struct SharedQueueGroup {
+    pub main_channel: String,
+    pub member_channels: HashSet<String>,
+    pub combined_enabled: bool,
+    pub queue_length: usize,
+    pub team_size: usize,
+}
+
+impl SharedQueueGroup {
+    pub fn new(main_channel: String, members: HashSet<String>, queue_length: usize, team_size: usize) -> Self {
+        Self {
+            main_channel,
+            member_channels: members,
+            combined_enabled: false,
+            queue_length,
+            team_size,
+        }
+    }
+
+    /// Toggle the combined queue state on/off.
+    /// Returns the new state (true if enabled)
+    pub fn toggle_combined(&mut self) -> bool {
+        self.combined_enabled = !self.combined_enabled;
+        self.combined_enabled
+    }
+
+    /// Get all channels including the main one
+    pub fn all_channels(&self) -> HashSet<String> {
+        let mut all = self.member_channels.clone();
+        all.insert(self.main_channel.clone());
+        all
+    }
 }

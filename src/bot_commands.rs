@@ -2,7 +2,7 @@ use dotenvy::{dotenv, var};
 use sqlx::SqlitePool;
 use std::{borrow::BorrowMut, sync::Arc};
 use tmi::Client;
-use crate::models::Package;
+use crate::models::{Package, SharedQueueGroup};
 use crate::queue::is_valid_bungie_name;
 use crate::{api::{get_membershipid, get_users_clears, MemberShip}, bot::BotState, database::{load_membership, remove_command, save_command, save_to_user_database}, models::{BotError, CommandAction, TwitchUser}};
 
@@ -81,7 +81,23 @@ impl BotState {
         Ok(())
     }
 
-    
+    /// Get the SharedQueueGroup that this channel belongs to (if any)
+    pub fn get_group_for_channel(&self, channel: &str) -> Option<&SharedQueueGroup> {
+        if let Some(main) = self.channel_to_main.get(channel) {
+            self.shared_groups.get(main)
+        } else {
+            None
+        }
+    }
+
+    /// Get mutable reference
+    pub fn get_group_for_channel_mut(&mut self, channel: &str) -> Option<&mut SharedQueueGroup> {
+        if let Some(main) = self.channel_to_main.get(channel) {
+            self.shared_groups.get_mut(main)
+        } else {
+            None
+        }
+    }
 }
 
 pub async fn register_user(pool: &SqlitePool, twitch_name: &str, bungie_name: &str) -> Result<String, BotError> {

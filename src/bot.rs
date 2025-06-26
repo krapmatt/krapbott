@@ -1,5 +1,5 @@
 use crate::{
-    bot_commands::send_message, commands::create_command_dispatcher, database::get_command_response, models::{has_permission, AnnouncementState, BotConfig, BotError}, twitch_api::{announcement, ban_bots, fetch_lurkers, get_twitch_user_id, is_channel_live}
+    bot_commands::send_message, commands::{create_command_dispatcher, traits::CommandT}, database::get_command_response, models::{has_permission, AnnouncementState, BotConfig, BotError, SharedQueueGroup}, twitch_api::{announcement, ban_bots, fetch_lurkers, get_twitch_user_id, is_channel_live}
 };
 use dotenvy::dotenv;
 use rand::{rng, Rng};
@@ -32,6 +32,9 @@ pub struct BotState {
     pub first_time_tag: Option<String>,
     pub config: BotConfig,
     pub streaming_together: HashMap<String, HashSet<String>>,
+    pub shared_groups: HashMap<String, SharedQueueGroup>,
+    pub channel_to_main: HashMap<String, String>,
+    pub dispatchers: Arc<RwLock<HashMap<String, HashMap<String, Arc<dyn CommandT>>>>>,
 }
 
 impl BotState {
@@ -50,6 +53,24 @@ impl BotState {
             first_time_tag: None,
             config: BotConfig::load_config(),
             streaming_together: HashMap::new(),
+            shared_groups: HashMap::new(),
+            channel_to_main: HashMap::new(),
+            dispatchers: Arc::new(HashMap::new().into()),
+        }
+        
+    }
+
+    pub fn streaming_group(&self, channel: &str) -> Vec<String> {
+        let binding = channel.to_string();
+        let main = self.channel_to_main.get(channel).unwrap_or(&binding);
+        if let Some(group) = self.shared_groups.get(main) {
+            let mut group_channels: Vec<String> = group.member_channels.iter().cloned().collect();
+            group_channels.push(main.clone());
+            group_channels.sort();
+            group_channels.dedup();
+            group_channels
+        } else {
+            vec![main.clone()]
         }
     }
 
@@ -321,8 +342,8 @@ async fn handle_privmsg(
             let command = command.to_lowercase();
             if let Some(cmd) = command_dispatcher.get(&command) {
                 let msg = msg.clone();
-                if has_permission(&msg, Arc::clone(&client), cmd.permission).await {
-                    (cmd.handler)(msg.into_owned().clone(), Arc::clone(&client), pool, Arc::clone(&bot_state)).await?;
+                if has_permission(&msg, Arc::clone(&client), cmd.permission()).await {
+                    cmd.execute(msg.into_owned().clone(), Arc::clone(&client), pool, Arc::clone(&bot_state)).await?;
                 }
             }
             return Ok(());

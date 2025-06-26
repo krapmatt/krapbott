@@ -11,7 +11,6 @@ pub mod queue;
 mod giveaway;
 use bot::{grant_points_task, handle_obs_message, run_chat_bot};
 use database::initialize_database;
-use discord_bot::run_discord_bot;
 use models::{BotConfig, BotError};
 use obs_dock::{
     check_session, get_public_queue, get_queue_handler, get_queue_state_handler, get_run_counter_handler, next_queue_handler, remove_from_queue_handler, toggle_queue_handler, twitch_callback, update_queue_order, with_authorization, AuthCallbackQuery

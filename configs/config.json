@@ -1,10 +1,39 @@
 {
   "channels": {
+    "#samoan_317": {
+      "open": true,
+      "len": 203,
+      "teamsize": 1,
+      "combined": true,
+      "queue_channel": "#krapmatt",
+      "packages": [
+        "Moderation",
+        "Queue"
+      ],
+      "runs": 0,
+      "announcement_config": {
+        "state": "Paused",
+        "interval": {
+          "secs": 300,
+          "nanos": 0
+        },
+        "last_sent": 1750941379561
+      },
+      "sub_only": false,
+      "prefix": "!",
+      "random_queue": false,
+      "giveaway": {
+        "duration": 3600,
+        "max_tickets": 100,
+        "ticket_cost": 15,
+        "active": false
+      }
+    },
     "#krapmatt": {
       "open": true,
-      "len": 1,
+      "len": 203,
       "teamsize": 1,
-      "combined": false,
+      "combined": true,
       "queue_channel": "#krapmatt",
       "packages": [
         "Moderation",
@@ -20,18 +49,18 @@
         "Bungie API",
         "Giveaway"
       ],
-      "runs": 9,
+      "runs": 0,
       "announcement_config": {
         "state": "Active",
         "interval": {
           "secs": 600,
           "nanos": 0
         },
-        "last_sent": 1747608598396
+        "last_sent": 1750628052333
       },
       "sub_only": false,
       "prefix": "!",
-      "random_queue": true,
+      "random_queue": false,
       "giveaway": {
         "duration": 600,
         "max_tickets": 10000,

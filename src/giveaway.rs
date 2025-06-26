@@ -19,7 +19,7 @@ impl Giveaway {
     Self { duration: 3600, max_tickets: 100, ticket_cost: 15, active: false }
  }
 }
-
+/* 
 pub fn handle_giveaway() -> Command {
     Command {
         permission: PermissionLevel::Broadcaster,
@@ -274,3 +274,4 @@ pub fn change_price_ticket() -> Command {
         |config, value| config.giveaway.ticket_cost = value,
     )
 }
+    */

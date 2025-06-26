@@ -577,7 +577,7 @@ impl BotState {
         Ok(())
     }
 
-    pub async fn toggle_combined_queue(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> Result<(), BotError> {
+    /*pub async fn toggle_combined_queue(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> Result<(), BotError> {
         // Update the bot confi
         let mut config = self.clone().config;
         
@@ -608,8 +608,58 @@ impl BotState {
         }
     
         Ok(())
-    }
+    }*/
 
+    pub async fn toggle_combined_queue(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> Result<(), BotError> {
+        let channel = msg.channel();
+        let mut config = self.config.clone();
+        // Get the shared group this channel belongs to
+        let group = match self.get_group_for_channel_mut(&format!("#{}", channel)) {
+            Some(g) => g,
+            None => {
+                send_message(msg, client.lock().await.borrow_mut(), "This channel is not in any shared streaming group.").await?;
+                return Ok(());
+            }
+        };
+
+        // Toggle combined state in the group
+        let new_combined = group.toggle_combined();
+
+        // Sync the queue_length and team_size from main channel config, if needed
+        if let Some(main_config) = config.get_channel_config(&group.main_channel) {
+            group.queue_length = main_config.len;
+            group.team_size = main_config.teamsize;
+        }
+
+        // Update each channel's config to reflect combined queue state
+        for chan in group.all_channels() {
+            let chan_config = config.get_channel_config_mut(&chan);
+            chan_config.combined = new_combined;
+            chan_config.open = new_combined;
+            chan_config.len = group.queue_length;
+            chan_config.teamsize = group.team_size;
+            chan_config.queue_channel = if new_combined {
+                group.main_channel.clone()
+            } else {
+                chan.clone()
+            };
+            
+        }
+
+        // Save config persistently if you want
+        config.save_config();
+
+        // Reply to chat
+        let reply = if new_combined {
+            "Combined Queue activated"
+        } else {
+            "Combined Queue deactivated"
+        };
+
+        send_message(msg, client.lock().await.borrow_mut(), reply).await?;
+
+        Ok(())
+    }
 }
 
 pub fn is_valid_bungie_name(name: &str) -> Option<String> {
