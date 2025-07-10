@@ -5,7 +5,7 @@ use regex::Regex;
 use sqlx::SqlitePool;
 use tmi::Client;
 
-use crate::{api::get_membershipid, bot::BotState, bot_commands::{reply_to_message, send_message}, database::{is_bungiename, save_to_user_database, user_exists_in_database}, models::{is_subscriber, BotError, TwitchUser}};
+use crate::{api::get_membershipid, bot::BotState, bot_commands::{reply_to_message, send_message}, database::{is_bungiename, save_to_user_database, user_exists_in_database}, models::{is_subscriber, AliasConfig, BotError, TwitchUser}};
 
 lazy_static::lazy_static!{
     static ref BUNGIE_REGEX: Regex = Regex::new(r"^(?P<name>.+)#(?P<digits>\d{4})").unwrap();
@@ -17,22 +17,31 @@ pub enum Queue {
 }
 
 impl BotState {
-    pub async fn handle_join(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn handle_join(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool, alias_config: Arc<AliasConfig>) -> Result<(), BotError> {
         let mut client = client.lock().await;
-
+    
         let config = match self.config.get_channel_config(msg.channel()) {
             Some(config) => config,
             None => return Ok(()),
         };
+        let join_mode = config.random_queue;
         let channel = config.clone().queue_channel;
 
         if !config.open {
-            client.privmsg(msg.channel(), "Queue is closed").send().await?;
+            let response = match join_mode {
+                true => format!("Raffle is currently closed! @{}", msg.sender().name()),
+                false => format!("Queue is currently closed! @{}", msg.sender().name())
+            };
+            send_message(&msg, &mut client, &response).await?;
             return Ok(());
         }
 
         if config.sub_only && !is_subscriber(msg) {
-            send_message(msg, &mut client, "Only subscribers can enter the queue.").await?;
+            let response = match join_mode {
+                true => format!("Raffle is only open to subscribers! @{}", msg.sender().name()),
+                false => format!("Queue is only open to subscribers! @{}", msg.sender().name())
+            };
+            send_message(msg, &mut client, &response).await?;
             return Ok(());
         }
 
@@ -85,9 +94,9 @@ impl BotState {
             if is_banned_from_queue(msg, pool, &mut client, &name, &self.x_api_key).await? {
                 return Ok(());
             }
-            process_queue_entry(msg, &mut client, config.len, pool, new_user, &channel, Queue::Join).await?;
+            process_queue_entry(msg, &mut client, config.len, pool, new_user, &channel, Queue::Join, join_mode).await?;
         } else {
-            send_invalid_name_reply(msg, &mut client).await?;
+            send_invalid_name_reply(msg, &mut client, alias_config).await?;
         }
     
        
@@ -113,7 +122,7 @@ impl BotState {
         let words: Vec<&str> = text.split_ascii_whitespace().collect();
     
         if words.len() < 2 {
-            let reply = "Wrong usage! Use: !prio <twitch_name> [runs]";
+            let reply = "Wrong usage!";
             send_message(msg, client.lock().await.borrow_mut(), reply).await?;
             return Ok(());
         }
@@ -158,7 +167,7 @@ impl BotState {
             ).execute(&mut *tx).await?;
         }
         tx.commit().await?;
-        add_to_queue(queue_len, pool, &TwitchUser { twitch_name: twitch_name.to_owned(), bungie_name: name.bungie_name }, &channel, Queue::Join).await?;
+        add_to_queue(queue_len, pool, &TwitchUser { twitch_name: twitch_name.to_owned(), bungie_name: name.bungie_name}, &channel, Queue::Join, false).await?;
 
         send_message(&msg, client.lock().await.borrow_mut(), &format!("{} has been deprioed.", twitch_name)).await?;
 
@@ -169,7 +178,7 @@ impl BotState {
         let words: Vec<&str> = text.split_ascii_whitespace().collect();
     
         if words.len() < 2 {
-            let reply = "Wrong usage! Use: !prio <twitch_name> [runs]";
+            let reply = "Wrong usage! Use: <twitch_name> [runs]";
             send_message(msg, client.lock().await.borrow_mut(), reply).await?;
             return Ok(());
         }
@@ -235,24 +244,29 @@ impl BotState {
             format!("{} has been pushed to the second group", twitch_name)
         } else if words.len() == 3 {
             let runs: i32 = words[2].parse().unwrap_or(1);
+            let second_group: i32 = (teamsize + 1).try_into().unwrap();
     
             sqlx::query!(
-                "UPDATE queue SET position = position + 10000 WHERE channel_id = ?",
-                channel
+                "UPDATE queue SET position = position + 10000 WHERE channel_id = ? AND position >= ?",
+                channel, second_group
             ).execute(&mut *tx).await?;
-    
-            sqlx::query!("UPDATE queue SET position = 1, locked_first = TRUE, group_priority = 1, priority_runs_left = ? 
+            sqlx::query!("UPDATE queue SET position = ?, group_priority = 1, priority_runs_left = COALESCE(?, priority_runs_left), locked_first = FALSE
                 WHERE twitch_name = ? AND channel_id = ?",
-                runs, twitch_name, channel
+                second_group, runs, twitch_name, channel
             ).execute(&mut *tx).await?;
     
             // 🔹 Reorder the rest of the queue
-            let mut new_position = 2;
+            
             let queue_entries = sqlx::query!(
-                "SELECT twitch_name FROM queue WHERE channel_id = ? AND position > 10000 ORDER BY position ASC",
-                channel
+                "SELECT twitch_name FROM queue 
+                WHERE channel_id = ? 
+                AND position > 10000 
+                AND twitch_name != ? 
+                ORDER BY position ASC",
+                channel, twitch_name
             ).fetch_all(&mut *tx).await?;
     
+            let mut new_position = second_group + 1;
             for entry in queue_entries {
                 sqlx::query!(
                     "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
@@ -263,7 +277,7 @@ impl BotState {
     
             format!("{} has been promoted to priority for {} runs", twitch_name, runs)
         } else {
-            "Wrong usage! Use: !prio <twitch_name> [runs]".to_string()
+            "Wrong usage! Use: <twitch_name> [runs]".to_string()
         };
     
         tx.commit().await?;
@@ -359,28 +373,35 @@ impl BotState {
             "#,
             channel, sender_name
         ).fetch_optional(pool).await?;
+        let sender = msg.sender().name().to_string();
+        let reply = if !config.random_queue {
+            match result {
+                Some(index) => {
+                    let group = (index - 1) / teamsize + 1;
+                    if group == 1 {
+                        format!("You are at position {}/{} and in LIVE group! DinoDance", index, max_count)
+                    } else if group == 2 {
+                        format!("You are at position {}/{} and in NEXT group! GoldPLZ", index, max_count)
+                    } else {
+                        format!("You are at position {}/{} (Group {}) !", index, max_count, group)
+                    }
+                },
+                None => {
+                    
+                    if !config.open {
+                        format!("The queue is CLOSED 🚫 and you are not in queue, {} ", sender)
+                    } else if max_count >= TryInto::<i64>::try_into(config.len).unwrap() {
+                        format!("Queue is FULL and you are not in queue, {}", sender)
+                    } else {
+                        format!("You are not in queue, {}. There is {} users in queue", sender, max_count)
+                    }
 
-        let reply = match result {
-            Some(index) => {
-                let group = (index - 1) / teamsize + 1;
-                if group == 1 {
-                    format!("You are at position {}/{} and in LIVE group! DinoDance", index, max_count)
-                } else if group == 2 {
-                    format!("You are at position {}/{} and in NEXT group! GoldPLZ", index, max_count)
-                } else {
-                    format!("You are at position {}/{} (Group {}) !", index, max_count, group)
                 }
-            },
-            None => {
-                let sender = msg.sender().name().to_string();
-                if !config.open {
-                    format!("The queue is CLOSED 🚫 and you are not in queue, {} ", sender)
-                } else if max_count >= TryInto::<i64>::try_into(config.len).unwrap() {
-                    format!("Queue is FULL and you are not in queue, {}", sender)
-                } else {
-                    format!("You are not in queue, {}. There is {} users in queue", sender, max_count)
-                }
-
+            }
+        } else {
+            match result {
+                Some(_) => format!("✅ You are entered in the raffle, {sender}"),
+                None => format!("❌ You are not entered in the raffle, {sender}")
             }
         };
         reply_to_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
@@ -428,10 +449,14 @@ impl BotState {
                 }
 
                 tx.commit().await?;
-                format!("{} has been removed from queue.", name)
+                if !config.random_queue {
+                    format!("BigSad {name} has left the queue.")
+                } else {
+                    format!("BigSad {name} has left the raffle.")
+                }
             }
         } else {
-            format!("You are not in queue, {}.", name)
+            format!("You were already free, {name}")
         };
         send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
         Ok(())
@@ -458,11 +483,16 @@ impl BotState {
             send_message(msg, client.lock().await.borrow_mut(), "Queue is empty!").await?;
             return Ok(());
         }
-    
+        
         //Convert queue into formatted strings
         let queue_msg: Vec<String> = queue_entries.iter().enumerate().map(|(i, q)| format!("{}. {} ({})", i + 1, q.twitch_name, q.bungie_name)).collect();
         let format_group = |group: &[String]| group.join(", ");
-    
+        if config.random_queue {
+            let live_group = if queue_msg.len() > 0 { &queue_msg[..queue_msg.len().min(teamsize)] } else { &[] };
+            let rest_group = if queue_msg.len() > teamsize { &queue_msg[teamsize ..] } else { &[] };
+            reply_to_message(&msg, client.lock().await.borrow_mut(), &format!("Chosen: {} // Entered people: {}", format_group(live_group), format_group(rest_group))).await?;
+            return Ok(());
+        }
         let reply = if queue_msg.iter().map(|s| s.len()).sum::<usize>() < 400 {
             let live_group = if queue_msg.len() > 0 { &queue_msg[..queue_msg.len().min(teamsize)] } else { &[] };
             let next_group = if queue_msg.len() > teamsize { &queue_msg[teamsize..queue_msg.len().min(teamsize * 2)] } else { &[] };
@@ -576,40 +606,7 @@ impl BotState {
         send_message(msg, client.lock().await.borrow_mut(), &format!("User {} has been moved to the next group.", twitch_name)).await?;
         Ok(())
     }
-
-    /*pub async fn toggle_combined_queue(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> Result<(), BotError> {
-        // Update the bot confi
-        let mut config = self.clone().config;
-        
-        if let Some(shared_chats) = self.streaming_together.get(msg.channel()) {
-            let source_config = self.config.get_channel_config_mut(msg.channel());
-            let mut all_channels = shared_chats.clone();
-            all_channels.insert(msg.channel().to_string());
-            for channel in all_channels {
-                let channel_config = config.get_channel_config_mut(&channel);
-                channel_config.combined = !channel_config.combined;
-                channel_config.open = !channel_config.open;
-                channel_config.len = source_config.len;
-                channel_config.teamsize = source_config.teamsize;
-                if channel_config.combined {
-                    channel_config.queue_channel = msg.channel().to_string();
-                } else {
-                    channel_config.queue_channel = channel.clone();
-                }
-            }
-            let reply = if !source_config.combined {
-                "Combined Queue activated"
-            } else {
-                "Combined Queue deactivated"
-            };
-            send_message(&msg, client.lock().await.borrow_mut(), reply).await?;
-
-            config.save_config();
-        }
     
-        Ok(())
-    }*/
-
     pub async fn toggle_combined_queue(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> Result<(), BotError> {
         let channel = msg.channel();
         let mut config = self.config.clone();
@@ -666,7 +663,7 @@ pub fn is_valid_bungie_name(name: &str) -> Option<String> {
     BUNGIE_REGEX.captures(name).map(|caps| format!("{}#{}", &caps["name"].trim(), &caps["digits"]))
 }
 
-async fn add_to_queue(queue_len: usize, pool: &SqlitePool, user: &TwitchUser, channel_id: &str, join_type: Queue) -> Result<String, BotError> {
+async fn add_to_queue(queue_len: usize, pool: &SqlitePool, user: &TwitchUser, channel_id: &str, join_type: Queue, raffle: bool) -> Result<String, BotError> {
     match join_type {
         Queue::Join => {
             let count: i64 = sqlx::query_scalar!(
@@ -675,7 +672,11 @@ async fn add_to_queue(queue_len: usize, pool: &SqlitePool, user: &TwitchUser, ch
             ).fetch_one(pool).await.unwrap_or(0);
         
             if count >= queue_len as i64 {
-                return Ok(format!("❌ {}, you can't enter the queue, it is full", user.twitch_name));
+                if !raffle {
+                    return Ok(format!("❌ {}, you can't enter the queue, it is full", user.twitch_name));
+                } else {
+                    return Ok(format!("❌ {}, you can't enter the raffle, it is full", user.twitch_name));
+                }
             }
             if bungie_name_exists_in_queue(pool, &user.bungie_name, channel_id).await? {
                 return Ok(format!("❌ {}, wishes for some jail time ⛓", user.twitch_name))
@@ -694,28 +695,47 @@ async fn add_to_queue(queue_len: usize, pool: &SqlitePool, user: &TwitchUser, ch
         next_position, user.twitch_name, user.bungie_name, channel_id
     ).execute(pool).await;
     match result {
-        Ok(_) => Ok(format!("✅ {} entered the queue at position #{}", user.twitch_name, next_position)),
+        Ok(_) => {
+            if !raffle {
+                Ok(format!("✅ {} entered the queue at position #{next_position}", user.twitch_name))
+            } else {
+                Ok(format!("✅ {} entered the raffle", user.twitch_name))
+            }
+        },
         Err(sqlx::Error::Database(err)) if err.is_unique_violation() => {
-            Ok(format!("❌ {} is already in queue", user.bungie_name))
+            Ok(format!("❌ Error Occured entering! {}", user.bungie_name))
         }
         Err(e) => Err(e.into())
     }
     
 }
 
-async fn send_invalid_name_reply(msg: &tmi::Privmsg<'_>, client: &mut Client) -> Result<(), BotError>{
-    let reply = format!("❌ 1) Use !join bungiename#0000, {} 2) Make sure you have cross save on: https://www.youtube.com/watch?v=2nncg_QYXPM", msg.sender().name());
-    send_message(msg, client, &reply).await?;
+async fn send_invalid_name_reply(msg: &tmi::Privmsg<'_>, client: &mut Client, alias_config: Arc<AliasConfig>) -> Result<(), BotError> {
+    println!("{:?}", alias_config.get_aliases("join"));
+    let mut aliases = alias_config.get_aliases("join");
+    let join = alias_config.get_removed_aliases("join");
+    let j =alias_config.get_removed_aliases("j");
+
+    if !join {
+        aliases.push("join".to_string());
+    }
+    if !j {
+        aliases.push("j".to_string());
+    }  
+    let reply1 = format!("❌ To join use: {}", aliases.join(" // "));
+    let reply2 = format!("❌ If your bungiename is correct make sure your crosssave is on! Here is video to help: https://www.youtube.com/watch?v=2nncg_QYXPM");
+    send_message(msg, client, &reply1).await?;
+    send_message(msg, client, &reply2).await?;
     Ok(())
 }
 
-pub async fn process_queue_entry(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, pool: &SqlitePool, user: TwitchUser, channel_id: &str, queue_join: Queue) -> Result<(), BotError> {
+pub async fn process_queue_entry(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, pool: &SqlitePool, user: TwitchUser, channel_id: &str, queue_join: Queue, raffle: bool) -> Result<(), BotError> {
    
     let reply = if twitchuser_exists_in_queue(&pool, &user.clone().twitch_name, channel_id).await? {
         update_queue(&pool, &user).await?;
         format!("{} updated their Bungie name to {}", user.clone().twitch_name, user.clone().bungie_name)
     } else {
-        add_to_queue(queue_len, &pool, &user, channel_id, queue_join).await?
+        add_to_queue(queue_len, &pool, &user, channel_id, queue_join, raffle).await?
     };
     send_message(msg, client, &reply).await?;
     Ok(())
@@ -793,67 +813,98 @@ async fn randomize_queue(pool: &SqlitePool, channel: &str, teamsize: i32) -> Res
 }
 
 async fn next_handler(channel: &str, teamsize: i32, pool: &SqlitePool) -> Result<String, BotError> {
-    let mut tx = pool.begin().await?; // Start transaction
+    let mut tx = pool.begin().await?;
 
-    // Fetch next group (priority first)
+    // Step 1: Fetch current group
     let queue_entries = sqlx::query!(
-        "SELECT twitch_name, priority_runs_left 
+        "SELECT twitch_name, priority_runs_left, locked_first 
          FROM queue 
          WHERE channel_id = ? 
-         ORDER BY 
-            CASE WHEN priority_runs_left > 0 THEN 0 ELSE 1 END, 
-            position ASC 
+         ORDER BY position ASC 
          LIMIT ?",
         channel, teamsize
     ).fetch_all(&mut *tx).await?;
-    let mut result = Vec::new();
+
+    // Step 2: Check if any prio'd user is active in this group
+    let has_active_prio = queue_entries.iter().any(|entry| {
+        entry.locked_first.unwrap_or(false) && entry.priority_runs_left.unwrap_or(0) > 0
+    });
+
     for entry in &queue_entries {
-        if entry.priority_runs_left > Some(0) {
-            // Reduce priority runs
-            sqlx::query!(
-                "UPDATE queue SET priority_runs_left = priority_runs_left - 1 WHERE twitch_name = ? AND channel_id = ?",
-                entry.twitch_name,
-                channel
-            )
-            .execute(&mut *tx)
-            .await?;
-        } else {
-            // Remove non-priority users
-            sqlx::query!(
-                "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
-                entry.twitch_name,
-                channel
-            ).execute(&mut *tx).await?;
+        match (entry.locked_first.unwrap_or(false), entry.priority_runs_left.unwrap_or(0)) {
+            (true, runs_left) if runs_left > 0 => {
+                let new_count = runs_left - 1;
+                if new_count == 0 {
+                    // Priority user done
+                    sqlx::query!(
+                        "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
+                        entry.twitch_name,
+                        channel
+                    ).execute(&mut *tx).await?;
+                } else {
+                    // Decrement runs
+                    sqlx::query!(
+                        "UPDATE queue SET priority_runs_left = ? WHERE twitch_name = ? AND channel_id = ?",
+                        new_count,
+                        entry.twitch_name,
+                        channel
+                    ).execute(&mut *tx).await?;
+                }
+            }
+            _ => {
+                // Not a prio user — remove immediately
+                sqlx::query!(
+                    "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
+                    entry.twitch_name,
+                    channel
+                ).execute(&mut *tx).await?;
+            }
         }
     }
-    // Fetch remaining queue
+
+    // Step 3: Lock next group of priority users (if any)
+    sqlx::query!(
+        "UPDATE queue SET locked_first = TRUE
+         WHERE channel_id = ? AND group_priority = 1 AND locked_first = FALSE 
+         AND twitch_name IN (
+             SELECT twitch_name FROM queue 
+             WHERE channel_id = ? 
+             ORDER BY position ASC 
+             LIMIT ?
+         )",
+        channel, channel, teamsize
+    ).execute(&mut *tx).await?;
+
+    // Step 4: Get the new top of the queue for response
     let remaining_queue = sqlx::query!(
-        "SELECT twitch_name, bungie_name FROM queue WHERE channel_id = ? ORDER BY position ASC LIMIT ?",
+        "SELECT twitch_name, bungie_name FROM queue 
+         WHERE channel_id = ? 
+         ORDER BY position ASC 
+         LIMIT ?",
         channel, teamsize
-    )
-    .fetch_all(&mut *tx).await?;
+    ).fetch_all(&mut *tx).await?;
 
-    for row in remaining_queue {
-        result.push(format!("@{} ({})", row.twitch_name, row.bungie_name));
-    }
+    let result: Vec<_> = remaining_queue
+        .into_iter()
+        .map(|row| format!("@{} ({})", row.twitch_name, row.bungie_name))
+        .collect();
 
-    // Recalculate positions
+    // Step 5: Recalculate positions
     let rows = sqlx::query!(
         "SELECT rowid FROM queue WHERE channel_id = ? ORDER BY position ASC",
         channel
     ).fetch_all(&mut *tx).await?;
 
-    // Update positions
     for (index, row) in rows.iter().enumerate() {
-        let index = index as i32 + 1;
+        let new_pos = index as i32 + 1;
         sqlx::query!(
             "UPDATE queue SET position = ? WHERE rowid = ?",
-            index, // New position
-            row.rowid
+            new_pos, row.rowid
         ).execute(&mut *tx).await?;
     }
 
     tx.commit().await?;
+
     Ok(if result.is_empty() {
         "Queue is empty".to_string()
     } else {

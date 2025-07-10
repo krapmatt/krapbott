@@ -6,7 +6,7 @@ use sqlx::SqlitePool;
 use tmi::{Client, Privmsg};
 use tokio::{sync::{Mutex, RwLock}, time::{interval, Instant}};
 
-use crate::{bot::BotState, bot_commands::{reply_to_message, send_message}, commands::{normalize_twitch_name, oldcommands::FnCommand, traits::CommandT, words}, models::{BotError, ChannelConfig, PermissionLevel}};
+use crate::{bot::BotState, bot_commands::{reply_to_message, send_message}, commands::{normalize_twitch_name, oldcommands::FnCommand, traits::CommandT, words}, models::{AliasConfig, BotError, ChannelConfig, PermissionLevel}};
 
 pub struct GiveawayHandler;
 
@@ -19,7 +19,7 @@ impl CommandT for GiveawayHandler {
 
     fn permission(&self) -> crate::models::PermissionLevel { PermissionLevel::Broadcaster }
 
-    fn execute(&self, msg: tmi::Privmsg<'static>, client: std::sync::Arc<serenity::prelude::Mutex<tmi::Client>>, pool: sqlx::SqlitePool, bot_state: std::sync::Arc<serenity::prelude::RwLock<crate::bot::BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: tmi::Privmsg<'static>, client: std::sync::Arc<Mutex<tmi::Client>>, pool: sqlx::SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
         Box::pin(async move {
             let client_clone = Arc::clone(&client);
             let msg_clone = msg.clone();
@@ -77,9 +77,9 @@ pub struct JoinGiveaway;
 impl CommandT for JoinGiveaway {
     fn description(&self) -> &str { "Join a giveaway using points" }
     fn usage(&self) -> &str { "!ticket <amount>" }
-    fn name(&self) -> &str { "join_giveaway" }
+    fn name(&self) -> &str { "enter_giveaway" }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Follower }
-    fn execute(&self, msg: tmi::Privmsg<'static>, client: Arc<serenity::prelude::Mutex<tmi::Client>>, pool: sqlx::SqlitePool, bot_state: Arc<serenity::prelude::RwLock<crate::bot::BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: tmi::Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: sqlx::SqlitePool, bot_state: Arc<RwLock<crate::bot::BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
         Box::pin(async move {
             let words: Vec<&str> = words(&msg);
             let name = msg.sender().name().to_string();
@@ -195,7 +195,7 @@ impl CommandT for ChangePointsCommand {
         PermissionLevel::Moderator
     }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, _: Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, _: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
         let mode = self.mode.clone();
         Box::pin(async move {
             let Some((_, args)) = msg.text().split_once(" ") else {
@@ -268,7 +268,7 @@ pub fn pull_giveaway() -> Arc<dyn CommandT> {
         },
         "Pulls the winner of finished giveaway",
         "pull",
-        "pull",
+        "Pull",
         PermissionLevel::Broadcaster
     ))
 }
@@ -316,7 +316,7 @@ where F: Fn(&mut ChannelConfig, usize) + Send + Sync + Clone + 'static {
 
 pub fn change_duration_giveaway() -> Arc<dyn CommandT> {
     make_giveaway_config_command(
-        "giveaway_duration",
+        "Giveaway Duration",
         "Changes duration of giveaway (in seconds)",
         "!giveaway_duration <seconds>",
         "There was an issue somewhere: Use: !giveaway_duration <seconds>",
@@ -327,7 +327,7 @@ pub fn change_duration_giveaway() -> Arc<dyn CommandT> {
 
 pub fn change_max_tickets_giveaway() -> Arc<dyn CommandT> {
     make_giveaway_config_command(
-        "giveaway_tickets",
+        "Giveaway Max Tickets",
         "Changes maximum number of tickets in giveaway",
         "!giveaway_tickets <number of tickets>",
         "There was an issue somewhere: Use: !giveaway_tickets <number>",
@@ -338,7 +338,7 @@ pub fn change_max_tickets_giveaway() -> Arc<dyn CommandT> {
 
 pub fn change_price_ticket() -> Arc<dyn CommandT> {
     make_giveaway_config_command(
-        "giveaway_price",
+        "Giveaway Ticket Price",
         "Changes price of tickets in giveaway",
         "!giveaway_price <price>",
         "There was an issue somewhere: Use: !giveaway_price <number>",
@@ -375,7 +375,7 @@ pub fn get_points_command() -> Arc<dyn CommandT> {
         },
         "Get your dirt (points)",
         "!dirt",
-        "dirt",
+        "Points",
         PermissionLevel::User,
     ))
 }

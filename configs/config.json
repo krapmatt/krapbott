@@ -21,7 +21,7 @@
       },
       "sub_only": false,
       "prefix": "!",
-      "random_queue": false,
+      "random_queue": true,
       "giveaway": {
         "duration": 3600,
         "max_tickets": 100,
@@ -32,24 +32,15 @@
     "#krapmatt": {
       "open": true,
       "len": 203,
-      "teamsize": 1,
+      "teamsize": 5,
       "combined": true,
       "queue_channel": "#krapmatt",
       "packages": [
-        "Moderation",
-        "Shoutout",
-        "Lurk",
-        "Random Queue",
-        "Database for queue",
-        "Time",
-        "Announcement",
-        "Points",
-        "List of queue",
-        "Queue",
-        "Bungie API",
-        "Giveaway"
+        "moderation",
+        "bungie api",
+        "queue"
       ],
-      "runs": 0,
+      "runs": 44,
       "announcement_config": {
         "state": "Active",
         "interval": {
@@ -60,9 +51,9 @@
       },
       "sub_only": false,
       "prefix": "!",
-      "random_queue": false,
+      "random_queue": true,
       "giveaway": {
-        "duration": 600,
+        "duration": 1,
         "max_tickets": 10000,
         "ticket_cost": 100000,
         "active": true

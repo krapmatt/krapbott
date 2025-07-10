@@ -2,6 +2,7 @@ use dotenvy::{dotenv, var};
 use sqlx::SqlitePool;
 use std::{borrow::BorrowMut, sync::Arc};
 use tmi::Client;
+use crate::commands::{update_dispatcher_if_needed, words};
 use crate::models::{Package, SharedQueueGroup};
 use crate::queue::is_valid_bungie_name;
 use crate::{api::{get_membershipid, get_users_clears, MemberShip}, bot::BotState, database::{load_membership, remove_command, save_command, save_to_user_database}, models::{BotError, CommandAction, TwitchUser}};
@@ -45,9 +46,9 @@ impl BotState {
         Ok(())
     }
 
-    pub async fn add_remove_package(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, state: Package) -> Result<(), BotError> {
+    pub async fn add_remove_package(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, state: Package, pool: &SqlitePool) -> Result<(), BotError> {
         let config = self.config.get_channel_config_mut(msg.channel());
-        let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
+        let words: Vec<&str> = words(&msg);
 
         if words.len() <= 1 {
             send_message(&msg, client.lock().await.borrow_mut(), "You didnt mention name of the package!").await?;
@@ -61,6 +62,7 @@ impl BotState {
                     "You already have this package".to_string()
                 } else {
                     config.packages.push(package_name.clone());
+                    update_dispatcher_if_needed(msg.channel(), &self.config, pool, Arc::clone(&self.dispatchers)).await?;
                     self.config.save_config();
                     format!("Package {} has been added", package_name)
                 }
@@ -68,6 +70,7 @@ impl BotState {
             Package::Remove => {
                 if let Some(index) = config.packages.iter().position(|x| *x.to_lowercase() == package_name.to_lowercase()) {
                     config.packages.remove(index);
+                    update_dispatcher_if_needed(msg.channel(), &self.config, pool, Arc::clone(&self.dispatchers)).await?;
                     self.config.save_config();
                     format!("Package {} has been removed", package_name)
                 } else {

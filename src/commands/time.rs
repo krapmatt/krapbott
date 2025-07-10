@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use tmi::{Client, Privmsg};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::{bot::BotState, bot_commands::send_message, commands::traits::CommandT, models::{BotError, PermissionLevel}};
+use crate::{bot::BotState, bot_commands::send_message, commands::traits::CommandT, models::{AliasConfig, BotError, PermissionLevel}};
 
 struct TimeCommand {
     name: String,
@@ -23,7 +23,7 @@ impl CommandT for TimeCommand {
     fn usage(&self) -> &str { &self.usage }
     fn permission(&self) -> PermissionLevel { self.permission }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, _db: SqlitePool, _state: Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, _db: SqlitePool, _state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
         let timezone = self.timezone;
         let name = self.name.clone();
 

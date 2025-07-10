@@ -1,5 +1,5 @@
 use crate::{
-    bot_commands::send_message, commands::{create_command_dispatcher, traits::CommandT}, database::get_command_response, models::{has_permission, AnnouncementState, BotConfig, BotError, SharedQueueGroup}, twitch_api::{announcement, ban_bots, fetch_lurkers, get_twitch_user_id, is_channel_live}
+    bot, bot_commands::send_message, commands::{create_dispatcher, traits::CommandT}, database::{fetch_aliases_from_db, get_command_response}, models::{has_permission, AnnouncementState, BotConfig, BotError, SharedQueueGroup}, twitch_api::{announcement, ban_bots, fetch_lurkers, get_twitch_user_id, is_channel_live}
 };
 use dotenvy::dotenv;
 use rand::{rng, Rng};
@@ -23,6 +23,10 @@ use tokio::{
     time::interval,
 };
 
+pub type CommandMap = HashMap<String, Arc<dyn CommandT + Send + Sync>>;
+
+pub type DispatcherCache = HashMap<String, CommandMap>;
+
 #[derive(Clone)]
 pub struct BotState {
     pub oauth_token_bot: String,
@@ -34,7 +38,7 @@ pub struct BotState {
     pub streaming_together: HashMap<String, HashSet<String>>,
     pub shared_groups: HashMap<String, SharedQueueGroup>,
     pub channel_to_main: HashMap<String, String>,
-    pub dispatchers: Arc<RwLock<HashMap<String, HashMap<String, Arc<dyn CommandT>>>>>,
+    pub dispatchers: Arc<RwLock<DispatcherCache>>,
 }
 
 impl BotState {
@@ -97,7 +101,15 @@ pub async fn bot_task(channel: String, state: Arc<RwLock<BotState>>, pool: Arc<S
     let mut retry_attempts = 0;
     let channel_clone = channel.clone();
     println!("Starting bot for channel: {}", channel);
+    {
+    let bot_state_guard = state.write().await;
+    let aliases = fetch_aliases_from_db(&channel, &pool).await.unwrap();
+    let dispatcher = create_dispatcher(&bot_state_guard.config, &channel, &aliases);
     
+        bot_state_guard.dispatchers.write().await.insert(channel.clone(), dispatcher);
+    }
+
+
     let mut channel_id_map: HashMap<String, String> = HashMap::new();
     //ADD CHANNEL ID MAP TO BOTSTATE
     let channels = BotConfig::load_config()
@@ -198,13 +210,7 @@ async fn run_bot_loop(state: Arc<RwLock<BotState>>, client: Arc<Mutex<Client>>, 
                         .lock()
                         .await.privmsg(msg.channel(),"Kr4pTr4p is the last bot this channel needed.",).send().await?;
                 }
-                handle_privmsg(
-                    msg.clone(),
-                    Arc::clone(&state),
-                    pool.clone(),
-                    Arc::clone(&client),
-                )
-                .await?;
+                handle_privmsg(msg.clone(), Arc::clone(&state), pool.clone(), Arc::clone(&client)).await?;
             }
             tmi::Message::Reconnect => {
                 let mut client = client.lock().await;
@@ -223,15 +229,15 @@ pub async fn manage_channels(state: Arc<RwLock<BotState>>, pool: Arc<SqlitePool>
     loop {
         // Periodically check for new channels in the configuration
         let bot_config = BotConfig::load_config();
-
         for (channel, _) in &bot_config.channels {
             if !tasks.contains_key(channel) {
-                // Spawn a new bot task for this channel
+            // Spawn a new bot task for this channel
                 let channel_clone = channel.clone();
                 let state_clone = Arc::clone(&state);
                 let pool_clone = Arc::clone(&pool);
 
                 let handle = tokio::spawn(async move {
+                    
                     bot_task(channel_clone, state_clone, pool_clone).await;
                 });
 
@@ -272,8 +278,8 @@ pub async fn manage_channels(state: Arc<RwLock<BotState>>, pool: Arc<SqlitePool>
     }
 }
 
-pub async fn run_chat_bot(pool: Arc<SqlitePool>) -> Result<(), BotError> {
-    manage_channels(Arc::new(RwLock::new(BotState::new())), pool).await;
+pub async fn run_chat_bot(pool: Arc<SqlitePool>, bot_state: Arc<RwLock<BotState>>) -> Result<(), BotError> {
+    manage_channels(bot_state, pool).await;
 
     Ok(())
 }
@@ -302,12 +308,7 @@ pub async fn handle_obs_message(
     Ok(())
 }
 
-async fn handle_privmsg(
-    msg: tmi::Privmsg<'_>,
-    bot_state: Arc<RwLock<BotState>>,
-    pool: SqlitePool,
-    client: Arc<Mutex<Client>>,
-) -> Result<(), BotError> {
+async fn handle_privmsg(msg: tmi::Privmsg<'_>, bot_state: Arc<RwLock<BotState>>, pool: SqlitePool, client: Arc<Mutex<Client>>) -> Result<(), BotError> {
     let mut locked_state = bot_state.write().await;
 
     locked_state.config = BotConfig::load_config();
@@ -315,18 +316,9 @@ async fn handle_privmsg(
         && (msg.sender().login().to_ascii_lowercase() == "thatjk" || msg.channel() == "#samoan_317")
     {
         let number = rng().random_range(1..1000);
-        send_message(
-            &msg,
-            client.lock().await.borrow_mut(),
-            &format!(
-                "{} you are {}% PoS <3",
-                msg.sender().name().to_string(),
-                number
-            ),
-        )
-        .await?;
+        send_message(&msg, client.lock().await.borrow_mut(), &format!("{} you are {}% PoS <3", msg.sender().name().to_string(), number)).await?;
     }
-    let command_dispatcher = create_command_dispatcher(&locked_state.config, msg.channel(), None);
+
     let prefix = locked_state.config.get_channel_config(msg.channel()).unwrap().prefix.clone();
     drop(locked_state);
     if msg.text().starts_with("!") {
@@ -340,12 +332,21 @@ async fn handle_privmsg(
 
         if let Some(command) = parts.next() {
             let command = command.to_lowercase();
-            if let Some(cmd) = command_dispatcher.get(&command) {
+            let dispatcher = {
+                let bot_state = bot_state.read().await;
+                let cache = bot_state.dispatchers.read().await;
+                cache.get(msg.channel()).cloned()
+            };
+            if let Some(dispatcher) = dispatcher {
+                if let Some(cmd) = dispatcher.get(&command) {
                 let msg = msg.clone();
-                if has_permission(&msg, Arc::clone(&client), cmd.permission()).await {
-                    cmd.execute(msg.into_owned().clone(), Arc::clone(&client), pool, Arc::clone(&bot_state)).await?;
+                    if has_permission(&msg, Arc::clone(&client), cmd.permission()).await {
+                        let aliases = fetch_aliases_from_db(msg.channel(), &pool).await?;
+                        cmd.execute(msg.into_owned().clone(), Arc::clone(&client), pool, Arc::clone(&bot_state), Arc::new(aliases)).await?;
+                    }
                 }
             }
+            
             return Ok(());
         }
     }

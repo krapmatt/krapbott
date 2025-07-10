@@ -2,10 +2,10 @@ use std::{borrow::BorrowMut, future::Future, sync::Arc};
 
 use futures::future::BoxFuture;
 use sqlx::SqlitePool;
-use tmi::Privmsg;
+use tmi::{Client, Privmsg};
 use tokio::{sync::{Mutex, RwLock}};
 
-use crate::{bot::BotState, models::{BotError, PermissionLevel}};
+use crate::{bot::BotState, models::{AliasConfig, BotError, PermissionLevel}};
 
 pub trait CommandT: Send + Sync {
     fn name(&self) -> &str;
@@ -13,16 +13,10 @@ pub trait CommandT: Send + Sync {
     fn usage(&self) -> &str;
     fn permission(&self) -> PermissionLevel;
 
-    fn execute(
-        &self,
-        msg: Privmsg<'static>,
-        client: Arc<Mutex<tmi::Client>>,
-        db: SqlitePool,
-        state: Arc<RwLock<BotState>>,
-    ) -> BoxFuture<'static, Result<(), BotError>>;
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>>;
 }
 
-pub async fn with_client<F, Fut>(client: Arc<Mutex<tmi::Client>>, f: F) -> Result<(), BotError>
+pub async fn with_client<F, Fut>(client: Arc<Mutex<Client>>, f: F) -> Result<(), BotError>
 where
     F: FnOnce(&mut tmi::Client) -> Fut,
     Fut: Future<Output = Result<(), BotError>>,

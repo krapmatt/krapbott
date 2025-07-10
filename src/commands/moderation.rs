@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tmi::{Client, Privmsg};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::{bot::BotState, bot_commands::{self, mod_action_user_from_queue, modify_command, reply_to_message, send_message, unban_player_from_queue}, commands::{oldcommands::FnCommand, traits::CommandT, COMMAND_GROUPS}, models::{BotError, CommandAction, Package, PermissionLevel, TemplateManager}};
+use crate::{bot::BotState, bot_commands::{self, mod_action_user_from_queue, modify_command, reply_to_message, send_message, unban_player_from_queue}, commands::{oldcommands::FnCommand, traits::CommandT, update_dispatcher_if_needed, words, COMMAND_GROUPS}, models::{AliasConfig, BotError, CommandAction, Package, PermissionLevel, TemplateManager}};
 
 pub fn mod_unban() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
@@ -17,7 +17,7 @@ pub fn mod_unban() -> Arc<dyn CommandT> {
         },
         "Unban a person from the queue.",
         "mod_unban @twitch_name",
-        "mod_unban",
+        "Mod Unban",
         PermissionLevel::Moderator
     ))
 }
@@ -32,7 +32,7 @@ pub fn mod_ban() -> Arc<dyn CommandT> {
         },
         "Ban a person from the queue.",
         "mod_ban @twitch_name",
-        "mod_ban",
+        "Mod Ban",
         PermissionLevel::Moderator
     ))
 }
@@ -47,7 +47,7 @@ pub fn mod_timeout() -> Arc<dyn CommandT> {
         },
         "Timeout someone from entering the queue.",
         "mod_timeout @twitch_name <seconds> Optional(reason)",
-        "mod_timeout",
+        "Mod Timeout",
         PermissionLevel::Moderator
     ))
 }
@@ -86,7 +86,7 @@ pub fn mod_config() -> Arc<dyn CommandT> {
         },
         "Shows the settings of one's queue and packages.",
         "!mod_config",
-        "mod_config",
+        "Mod Config",
         PermissionLevel::Moderator,
     ))
 }
@@ -113,7 +113,7 @@ pub fn connect() -> Arc<dyn CommandT> {
         },
         "Connect krapbott to a new twitch channel.",
         "connect @twitchname",
-        "connect",
+        "Connect",
         PermissionLevel::Moderator,
     ))
 }
@@ -137,7 +137,7 @@ pub fn mod_reset() -> Arc<dyn CommandT> {
         },
         "Reset bot. Recommended to do before every stream",
         "!mod_reset",
-        "mod_reset",
+        "Mod Reset",
         PermissionLevel::Moderator,
     ))
 }
@@ -145,32 +145,32 @@ pub fn mod_reset() -> Arc<dyn CommandT> {
 
 pub fn addpackage() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg, client, _pool, bot_state| {
+        |msg, client, pool, bot_state| {
             let fut = async move {
-                bot_state.write().await.add_remove_package(&msg, client, Package::Add).await?;
+                bot_state.write().await.add_remove_package(&msg, client, Package::Add, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
         },
         "Add a package",
         "add_package nameOfPackage",
-        "add_package",
+        "Add Package",
         PermissionLevel::Moderator,
     ))
 }
 
 pub fn removepackage() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg, client, _pool, bot_state| {
+        |msg, client, pool, bot_state| {
             let fut = async move {
-                bot_state.write().await.add_remove_package(&msg, client, Package::Remove).await?;
+                bot_state.write().await.add_remove_package(&msg, client, Package::Remove, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
         },
         "Remove a package",
         "remove_package nameOfPackage",
-        "remove_package",
+        "Remove Package",
         PermissionLevel::Moderator,
     ))
 }
@@ -210,7 +210,7 @@ pub fn list_of_packages() -> Arc<dyn CommandT> {
         },
         "Show all included packages",
         "packages",
-        "packages",
+        "Packages",
         PermissionLevel::Moderator,
     ))
 }
@@ -242,7 +242,7 @@ pub fn set_template() -> Arc<dyn CommandT> {
         },
         "Sets the template for a command with available template.",
         "set_template <package> <command> <template>",
-        "set_template",
+        "Set template",
         PermissionLevel::Moderator,
     ))
 }
@@ -269,7 +269,7 @@ pub fn delete_template() -> Arc<dyn CommandT> {
         },
         "Deletes template for given command",
         "remove_template <command>",
-        "remove_template",
+        "Remove template",
         PermissionLevel::Moderator,
     ))
 }
@@ -308,7 +308,7 @@ impl CommandT for ModifyCommand {
         self.permission
     }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, _state: Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, _state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
         let action = self.action;
         let channel = (self.channel_extractor)(&msg);
         Box::pin(async move {
@@ -323,7 +323,7 @@ pub fn addglobalcommand() -> Arc<dyn CommandT> {
         PermissionLevel::Moderator,
         "Add a simple command for all channels",
         "!addglobalcommand name reply",
-        "addglobalcommand",
+        "Add global command",
         CommandAction::AddGlobal,
         |_| None,
     ))
@@ -334,7 +334,7 @@ pub fn removecommand() -> Arc<dyn CommandT> {
         PermissionLevel::Moderator,
         "Remove a simple command",
         "!remove_command nameOfCommand",
-        "remove_command",
+        "Remove Command",
         CommandAction::Remove,
         |msg| Some(msg.channel().to_string()),
     ))
@@ -345,8 +345,74 @@ pub fn addcommand() -> Arc<dyn CommandT> {
         PermissionLevel::Moderator,
         "Add a simple command to this channel",
         "!addcommand nameOfCommand reply",
-        "addcommand",
+        "Add Command",
         CommandAction::Add,
         |msg| Some(msg.channel().to_string()),
     ))
+}
+
+pub struct AliasCommand;
+
+impl CommandT for AliasCommand {
+    fn name(&self) -> &str { "Alias" }
+    fn usage(&self) -> &str { "!alias add <alias> <command> | !alias remove <alias>" }
+    fn description(&self) -> &str { "Add or remove a custom alias for a command." }
+    fn permission(&self) -> PermissionLevel { PermissionLevel::Moderator }
+
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+        Box::pin(async move {
+            let words: Vec<&str> = words(&msg);
+            let reply;
+
+            if words.len() < 3 {
+                reply = "Usage: !alias add <alias> <command> OR !alias remove <alias>".to_string();
+                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+                return Ok(());
+            }
+
+            let action = words[1].to_lowercase();
+            let channel = msg.channel();
+
+            match action.as_str() {
+                "add" if words.len() == 4 => {
+                    let alias = words[2].to_lowercase();
+                    let command = words[3].to_lowercase();
+
+                    sqlx::query!(
+                        "INSERT OR REPLACE INTO command_aliases (channel, alias, command) VALUES (?, ?, ?)",
+                        channel,
+                        alias,
+                        command
+                    )
+                    .execute(&pool)
+                    .await?;
+
+                    update_dispatcher_if_needed(channel, &bot_state.read().await.config, &pool, bot_state.read().await.dispatchers.clone()).await?;
+
+                    reply = format!("Added alias '{}' for command '{}'", alias, command);
+                }
+                "remove" if words.len() == 3 => {
+                    let alias = words[2].to_lowercase();
+
+                    sqlx::query!(
+                        "DELETE FROM command_aliases WHERE channel = ? AND alias = ?",
+                        channel,
+                        alias
+                    )
+                    .execute(&pool)
+                    .await?;
+
+                    update_dispatcher_if_needed(channel, &bot_state.read().await.config, &pool, bot_state.read().await.dispatchers.clone()).await?;
+
+                    reply = format!("Removed alias '{}'", alias);
+                }
+                _ => {
+                    reply = "Invalid syntax. Use: !alias add <alias> <command> OR !alias remove <alias>".to_string();
+                }
+            }
+
+            send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+            Ok(())
+        })
+    }
 }

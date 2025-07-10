@@ -376,7 +376,7 @@ pub enum Package {
     Add,
     Remove
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SharedQueueGroup {
     pub main_channel: String,
     pub member_channels: HashSet<String>,
@@ -408,5 +408,21 @@ impl SharedQueueGroup {
         let mut all = self.member_channels.clone();
         all.insert(self.main_channel.clone());
         all
+    }
+}
+
+#[derive(Debug)]
+pub struct AliasConfig {
+    pub aliases: HashMap<String, String>,
+    pub disabled_commands: HashSet<String>,
+    pub removed_aliases: HashSet<String>,
+}
+
+impl AliasConfig {
+    pub fn get_aliases(&self, name: &str) -> Vec<String> {
+        self.aliases.iter().filter_map(|(key, val)| if val == name { Some(key.to_owned()) } else { None }).collect()
+    }
+    pub fn get_removed_aliases(&self, name: &str) -> bool {
+        self.removed_aliases.get(name).is_some()
     }
 }

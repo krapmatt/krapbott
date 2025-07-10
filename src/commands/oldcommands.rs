@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tmi::{Client, Privmsg};
 use tokio::{sync::{Mutex, RwLock}};
 
-use crate::{bot::BotState, bot_commands::send_message, commands::{generate_variables, parse_template, traits::CommandT}, models::{BotError, PermissionLevel, TemplateManager}, twitch_api::{self, get_twitch_user_id}};
+use crate::{bot::BotState, bot_commands::send_message, commands::{generate_variables, parse_template, traits::CommandT}, models::{AliasConfig, BotError, PermissionLevel, TemplateManager}, twitch_api::{self, get_twitch_user_id}};
 
 pub struct FnCommand<F> {
     func: F,
@@ -46,8 +46,8 @@ where
     F: Fn(Privmsg<'static>, Arc<Mutex<Client>>, SqlitePool, Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>>
         + Send + Sync + 'static,
 {
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, state: Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
-        (self.func)(msg, client, pool, state)
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+        (self.func)(msg, client, pool, bot_state)
     }
 
     fn description(&self) -> &str {
@@ -69,8 +69,7 @@ where
 
 
 pub fn so() -> Arc<dyn CommandT> {
-    Arc::new(FnCommand::new(
-        |msg, client, pool, bot_state| {
+    Arc::new(FnCommand::new(|msg, client, pool, bot_state| {
             Box::pin(async move {
                 let template_manager = TemplateManager {
                     pool: pool.clone().into(),
@@ -98,19 +97,14 @@ pub fn so() -> Arc<dyn CommandT> {
                         "Arent you missing something?".to_string()
                     };
                     {
-                        client
-                            .lock()
-                            .await
-                            .privmsg(msg.channel(), &reply)
-                            .send()
-                            .await?;
+                        client.lock().await.privmsg(msg.channel(), &reply).send().await?;
                     }
                     Ok(())
             })
         },
         "Shoutout a channel. Has template",
         "!so @name",
-        "shoutout",
+        "Shoutout" ,
         PermissionLevel::Vip
     ))
 }

@@ -1,11 +1,10 @@
 use crate::{
-    api::{get_membershipid, MemberShip},
-    models::{BotError, TwitchUser},
+    api::{get_membershipid, MemberShip}, models::{AliasConfig, BotError, TwitchUser}
 };
 use sqlx::{
     sqlite::SqlitePoolOptions, SqlitePool,
 };
-use std::sync::Arc;
+use std::{sync::Arc};
 pub const QUEUE_TABLE: &str = "CREATE TABLE IF NOT EXISTS queue (
     position INTEGER NOT NULL,
     twitch_name TEXT NOT NULL,
@@ -96,6 +95,32 @@ pub const SESSIONS_TABLE: &str = "
 );
 ";
 
+pub const COMMAND_ALIASES: &str = "
+    CREATE TABLE IF NOT EXISTS command_aliases (
+        channel TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        command TEXT NOT NULL,
+        PRIMARY KEY (channel, alias)
+    );
+";
+
+pub const COMMAND_DISABLED: &str = "
+    CREATE TABLE IF NOT EXISTS command_disabled (
+        channel TEXT NOT NULL,
+        command TEXT NOT NULL,
+        PRIMARY KEY (channel, command)
+    );
+";
+
+pub const COMMAND_ALIASES_REMOVALS: &str = "
+    CREATE TABLE IF NOT EXISTS command_alias_removals (
+        channel TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        PRIMARY KEY (channel, alias)
+    ); 
+";
+
+
 pub async fn initialize_database() -> Result<Arc<SqlitePool>, sqlx::Error> {
     let database_url = "sqlite://public/commands.db";
 
@@ -107,7 +132,7 @@ pub async fn initialize_database() -> Result<Arc<SqlitePool>, sqlx::Error> {
 
     // Initialize tables
     let queries = [
-        SESSIONS_TABLE
+        COMMAND_ALIASES, COMMAND_ALIASES_REMOVALS, COMMAND_DISABLED
     ];
 
     for query in queries {
@@ -273,9 +298,32 @@ pub async fn user_exists_in_database(pool: &SqlitePool, twitch_name: String) -> 
         "SELECT bungie_name FROM user WHERE twitch_name = ?",
         twitch_name
     )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .map(|row| row.bungie_name) // Extract `bungie_name` if found
+    .fetch_optional(pool).await.ok().flatten().map(|row| row.bungie_name)
+}
+
+
+pub async fn fetch_aliases_from_db(channel: &str, pool: &SqlitePool) -> Result<AliasConfig, BotError> {
+    let alias_rows = sqlx::query!(
+        "SELECT alias, command FROM command_aliases WHERE channel = ?",
+        channel
+    ).fetch_all(pool).await?;
+
+    let disabled = sqlx::query!(
+        "SELECT command FROM command_disabled WHERE channel = ?",
+        channel
+    ).fetch_all(pool).await?;
+
+    let removed = sqlx::query!(
+        "SELECT alias FROM command_alias_removals WHERE channel = ?",
+        channel
+    ).fetch_all(pool).await?;
+
+    Ok(AliasConfig {
+        aliases: alias_rows
+            .into_iter()
+            .map(|r| (r.alias.to_lowercase(), r.command.to_lowercase()))
+            .collect(),
+        disabled_commands: disabled.into_iter().map(|r| r.command.to_lowercase()).collect(),
+        removed_aliases: removed.into_iter().map(|r| r.alias.to_lowercase()).collect(),
+    })
 }

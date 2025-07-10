@@ -15,13 +15,15 @@ use models::{BotConfig, BotError};
 use obs_dock::{
     check_session, get_public_queue, get_queue_handler, get_queue_state_handler, get_run_counter_handler, next_queue_handler, remove_from_queue_handler, toggle_queue_handler, twitch_callback, update_queue_order, with_authorization, AuthCallbackQuery
 };
-use std::{sync::Arc, time::Duration};
-use tokio::{sync::mpsc, time};
-use warp::{filters::{fs::dir, log}, Filter};
+use std::sync::Arc;
+use tokio::{sync::{mpsc, RwLock}};
+use warp::{filters::{fs::dir}, Filter};
+
+use crate::{bot::BotState, obs_dock::{delete_alias_handler, get_aliases_handler, get_all_command_aliases, remove_default_alias_handler, restore_default_alias_handler, set_alias_handler, toggle_default_command_handler}};
 
 #[tokio::main]
 async fn main() -> Result<(), BotError> {
-    
+    let bot_state = Arc::new(RwLock::new(BotState::new()));
     let pool = initialize_database().await?;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<(String, String)>();
@@ -36,6 +38,11 @@ async fn main() -> Result<(), BotError> {
     let pool_filter = warp::any().map({
         let pool = Arc::clone(&pool);
         move || Arc::clone(&pool)
+    });
+
+    let state_filter = warp::any().map({
+        let state = Arc::clone(&bot_state);
+        move || Arc::clone(&state)
     });
 
     let static_files = dir("./public");
@@ -87,13 +94,67 @@ async fn main() -> Result<(), BotError> {
         .and_then(get_queue_state_handler);
     let cors = warp::cors()
         .allow_any_origin()
-        .allow_methods(vec!["GET", "POST"])
+        .allow_methods(vec!["GET", "POST", "DELETE"])
         .allow_headers(vec!["Content-Type", "Authorization", "Cookie"]).allow_credentials(true);
     let public_queue_api = warp::path!("queue" / String)
         .and(warp::get())
         .and(pool_filter.clone())
         .and_then(get_public_queue);
+    
+    let alias_page = warp::path("alias")
+    .and(warp::fs::file("./public/alias.html"));
+    let alias_api = warp::path("api")
+    .and(warp::path("aliases"))
+    .and(pool_filter.clone())
+    .and(warp::header::optional("cookie"));
+    let alias_get = alias_api.clone()
+        .and(warp::get())
+        .and_then(get_aliases_handler);
+    let alias_post = alias_api.clone()
+        .and(warp::post())
+        .and(state_filter.clone())
+        .and(warp::body::json())
+        .and_then(set_alias_handler);
+    let alias_delete = alias_api
+        .and(warp::delete())
+        .and(state_filter.clone())
+        .and(warp::body::json())
+        .and_then(delete_alias_handler);    
+    let alias_ui_route = warp::path!("api" / "aliases")
+        .and(warp::get())
+        .and(warp::header::optional("cookie"))
+        .and(pool_filter.clone())
+        .and_then(get_all_command_aliases);
+    let alias_toggle = warp::path!("api" / "aliases" / "disable")
+        .and(warp::post())
+        .and(pool_filter.clone())
+        .and(warp::header::optional("cookie"))
+        .and(state_filter.clone())
+        .and(warp::body::json())
+        .and_then(toggle_default_command_handler);
+    let alias_default_removal = warp::path!("api" / "aliases" / "remove-default-alias")
+        .and(warp::post())
+        .and(pool_filter.clone())
+        .and(warp::header::optional("cookie"))
+        .and(state_filter.clone())
+        .and(warp::body::json())
+        .and_then(remove_default_alias_handler);
+    let alias_default_restore = warp::path!("api" / "aliases" / "restore-default-alias")
+        .and(warp::post())
+        .and(pool_filter.clone())
+        .and(warp::header::optional("cookie"))
+        .and(state_filter.clone())
+        .and(warp::body::json())
+        .and_then(restore_default_alias_handler);
+
     let routes = static_files
+        .or(alias_ui_route)
+        .or(alias_get)
+        .or(alias_toggle)
+        .or(alias_default_removal)
+        .or(alias_default_restore)
+        .or(alias_post)
+        .or(alias_delete)
         .or(get_queue)
         .or(remove_route)
         .or(next_route)
@@ -102,7 +163,7 @@ async fn main() -> Result<(), BotError> {
         .or(queue_drag_drop)
         .or(run_route).or(auth_routes).or(session_route).or(with_authorization(Arc::clone(&pool))).with(cors);
     let queue_page = dir("./public/queue.html");
-    let main_route = queue_page.or(public_queue_api).or(routes);
+    let main_route = queue_page.or(public_queue_api).or(alias_page).or(routes);
 
     tokio::spawn(async move {
         warp::serve(main_route)
@@ -123,7 +184,7 @@ async fn main() -> Result<(), BotError> {
     });
     let pool_clone = Arc::clone(&pool);
     tokio::spawn(async move {
-        grant_points_task("216105918", Arc::clone(&pool_clone)).await;
+        let _ = grant_points_task("216105918", Arc::clone(&pool_clone)).await;
     });
 
     /*// Discord Bot Task
@@ -135,7 +196,7 @@ async fn main() -> Result<(), BotError> {
     });*/
 
     // Chat Bot Task
-    if let Err(e) = run_chat_bot(Arc::clone(&pool)).await {
+    if let Err(e) = run_chat_bot(Arc::clone(&pool), Arc::clone(&bot_state)).await {
         eprintln!("Chat bot error: {}", e);
     }
 

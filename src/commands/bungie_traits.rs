@@ -2,16 +2,16 @@ use std::{borrow::BorrowMut, sync::Arc};
 
 use futures::future::BoxFuture;
 use sqlx::SqlitePool;
-use tmi::Privmsg;
+use tmi::{Client, Privmsg};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::{api::{get_master_challenges, get_membershipid}, bot::BotState, bot_commands::reply_to_message, commands::{normalize_twitch_name, traits::CommandT, words}, database::load_membership, models::{BotError, PermissionLevel}, queue::is_valid_bungie_name};
+use crate::{api::{get_master_challenges, get_membershipid}, bot::BotState, bot_commands::reply_to_message, commands::{normalize_twitch_name, traits::CommandT, words}, database::load_membership, models::{AliasConfig, BotError, PermissionLevel}, queue::is_valid_bungie_name};
 
 pub struct TotalCommand;
 
 impl CommandT for TotalCommand {
     fn name(&self) -> &str {
-        "total"
+        "Total Raids"
     }
     fn description(&self) -> &str {
         "Shows all the raid clears of bungie name"
@@ -23,7 +23,7 @@ impl CommandT for TotalCommand {
         PermissionLevel::User
     }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
         Box::pin(async move {
             bot_state.read().await.total_raid_clears(&msg, client.lock().await.borrow_mut(), &pool).await?;
             Ok(())
@@ -35,7 +35,7 @@ pub struct MasterChalCommand;
 
 impl CommandT for MasterChalCommand {
     fn name(&self) -> &str {
-        "master_chal"
+        "Master Challenges"
     }
     fn description(&self) -> &str {
         "Get the number of challenges done in a master raid"
@@ -47,13 +47,14 @@ impl CommandT for MasterChalCommand {
         PermissionLevel::User
     }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
         Box::pin(async move {
+            println!("Here");
             let bot_state = bot_state.read().await;
             let words: Vec<&str> = words(&msg);
 
             if words.len() <= 1 {
-                reply_to_message(&msg, client.lock().await.borrow_mut(), "Usage: !cr <activity> bungiename").await?;
+                reply_to_message(&msg, client.lock().await.borrow_mut(), "❌ Invalid usage").await?;
                 return Ok(());
             }
 

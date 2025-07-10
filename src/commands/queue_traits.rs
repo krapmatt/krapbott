@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tmi::Privmsg;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::{bot::BotState, bot_commands::{bungiename, register_user, send_message}, commands::{oldcommands::FnCommand, traits::CommandT, words}, models::{BotError, PermissionLevel, SharedQueueGroup, TwitchUser}, queue::{self, process_queue_entry}};
+use crate::{bot::BotState, bot_commands::{bungiename, register_user, send_message}, commands::{oldcommands::FnCommand, traits::CommandT, words}, models::{AliasConfig, BotError, PermissionLevel, SharedQueueGroup, TwitchUser}, queue::{self, process_queue_entry}};
 
 pub struct JoinCommand;
 
@@ -14,14 +14,14 @@ impl CommandT for JoinCommand {
 
     fn description(&self) -> &str { "Join the queue" }
 
-    fn usage(&self) -> &str { "!join" }
+    fn usage(&self) -> &str { "!j" }
 
     fn permission(&self) -> PermissionLevel { PermissionLevel::Follower }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
         Box::pin(async move {
             let bot_state = bot_state.read().await;
-            bot_state.handle_join(&msg, client, &pool).await?;
+            bot_state.handle_join(&msg, client, &pool, alias_config).await?;
             Ok(())
         })
     }
@@ -35,7 +35,7 @@ impl CommandT for NextComamnd {
     fn usage(&self) -> &str { "!next" }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Broadcaster }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
         Box::pin(async move {
             let mut bot_state = bot_state.write().await;
             let reply = bot_state.handle_next(msg.channel().to_string(), &pool).await?;
@@ -52,7 +52,7 @@ impl CommandT for QueueSize {
     fn description(&self) -> &str { "Update size of group" }
     fn usage(&self) -> &str { "!queue_size number" }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Moderator }
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool: SqlitePool, bot_state: Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
         Box::pin(async move {
             let words: Vec<&str> = words(&msg);
             let reply;
@@ -99,7 +99,7 @@ impl CommandT for QueueLength {
     fn usage(&self) -> &str { "!queue_len number" }
     fn description(&self) -> &str { "Change the lenght of queue" }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Moderator }
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool: SqlitePool, bot_state: Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
         Box::pin(async move {
             let words: Vec<&str> = words(&msg);
             let reply;
@@ -154,8 +154,9 @@ pub fn addplayertoqueue() -> Arc<dyn CommandT>  {
                 let config = bot_state.config.get_channel_config(msg.channel()).unwrap();
                 let queue_len = config.len;
                 let queue_channel = &config.queue_channel;
+                let raffle = config.random_queue;
 
-                process_queue_entry(&msg, client.lock().await.borrow_mut(), queue_len, &pool, user, queue_channel, queue::Queue::ForceJoin).await?;
+                process_queue_entry(&msg, client.lock().await.borrow_mut(), queue_len, &pool, user, queue_channel, queue::Queue::ForceJoin, raffle).await?;
                 Ok(())
             })
         },
@@ -212,14 +213,8 @@ pub fn list() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, bot_state| {
             Box::pin(async move {
-                let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
-                if words.len() == 1 {
-                    let bot_state = bot_state.read().await;
-                    bot_state.handle_queue(&msg, client, &pool).await?;
-                } else {
-                    let bot_state = bot_state.read().await;
-                    bot_state.handle_join(&msg, client, &pool).await?;
-                }
+                let bot_state = bot_state.read().await;
+                bot_state.handle_queue(&msg, client, &pool).await?;
                 Ok(())
             })
         },
@@ -227,6 +222,22 @@ pub fn list() -> Arc<dyn CommandT> {
         "!list, !queue",
         "list",
         PermissionLevel::Follower
+    ))
+}
+
+pub fn random() -> Arc<dyn CommandT> {
+    Arc::new(FnCommand::new(
+        |msg, client, _pool, bot_state| {
+            Box::pin(async move {
+                let mut bot_state = bot_state.write().await;
+                bot_state.random(&msg, client).await?;
+                Ok(())
+            })
+        },
+        "Raffle Mode",
+        "",
+        "Random",
+        PermissionLevel::Moderator
     ))
 }
 
