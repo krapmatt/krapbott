@@ -8,21 +8,28 @@ pub mod models;
 pub mod obs_dock;
 pub mod twitch_api;
 pub mod queue;
-mod giveaway;
-use bot::{grant_points_task, handle_obs_message, run_chat_bot};
+use bot::{handle_obs_message, run_chat_bot};
 use database::initialize_database;
-use models::{BotConfig, BotError};
+use models::BotConfig;
 use obs_dock::{
     check_session, get_public_queue, get_queue_handler, get_queue_state_handler, get_run_counter_handler, next_queue_handler, remove_from_queue_handler, toggle_queue_handler, twitch_callback, update_queue_order, with_authorization, AuthCallbackQuery
 };
+use tracing::{error, info};
+use tracing_appender::rolling;
 use std::sync::Arc;
 use tokio::{sync::{mpsc, RwLock}};
 use warp::{filters::{fs::dir}, Filter};
 
-use crate::{bot::BotState, obs_dock::{delete_alias_handler, get_aliases_handler, get_all_command_aliases, remove_default_alias_handler, restore_default_alias_handler, set_alias_handler, toggle_default_command_handler}};
+use crate::{bot::BotState, models::BotResult, obs_dock::{delete_alias_handler, get_aliases_handler, get_all_command_aliases, remove_default_alias_handler, restore_default_alias_handler, set_alias_handler, toggle_default_command_handler}};
 
 #[tokio::main]
-async fn main() -> Result<(), BotError> {
+async fn main() -> BotResult<()> {
+    let file_appender = rolling::daily("logs", "krapbott.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    tracing_subscriber::fmt().with_writer(non_blocking).with_target(false).with_timer(tracing_subscriber::fmt::time::uptime()).with_level(true).init();
+
+    info!("KrapBott started");
+
     let bot_state = Arc::new(RwLock::new(BotState::new()));
     let pool = initialize_database().await?;
 
@@ -177,33 +184,16 @@ async fn main() -> Result<(), BotError> {
     let pool_clone = Arc::clone(&pool);
     tokio::spawn(async move {
         while let Some((channel_id, command)) = rx.recv().await {
-            if let Err(e) = handle_obs_message(channel_id, command, Arc::clone(&pool_clone)).await {
-                eprintln!("OBS bot error: {}", e);
+            if let Err(e) = handle_obs_message(channel_id.clone(), command.clone(), Arc::clone(&pool_clone)).await {
+                error!(%channel_id, ?command, "OBS bot error: {}", e);
             }
         }
     });
-    let pool_clone = Arc::clone(&pool);
-    tokio::spawn(async move {
-        let _ = grant_points_task("216105918", Arc::clone(&pool_clone)).await;
-    });
-
-    /*// Discord Bot Task
-    tokio::spawn(async {
-        loop {
-            run_discord_bot().await;
-            time::sleep(Duration::from_secs(5)).await;
-        }
-    });*/
 
     // Chat Bot Task
     if let Err(e) = run_chat_bot(Arc::clone(&pool), Arc::clone(&bot_state)).await {
-        eprintln!("Chat bot error: {}", e);
+        error!("Chat bot error: {}", e);
     }
 
     Ok(())
 }
-/*
-Giveaway -> Config - start time & keyword // Database - entries
-Command start -> while function -> announcements for in how long it ends -> last 5 seconds countdown
-
-*/

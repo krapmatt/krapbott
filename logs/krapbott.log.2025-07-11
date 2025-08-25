@@ -1,0 +1,107 @@
+[2m   0.000169900s[0m [32m INFO[0m KrapBott started
+[2m   0.008722200s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.008720400s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.016950500s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.579001500s[0m [32m INFO[0m (Re)connecting client for #samoan_317
+[2m   0.588733300s[0m [32m INFO[0m (Re)connecting client for #krapmatt
+[2m  15.504672900s[0m [31mERROR[0m unhandled custom rejection, returning 500 response: NotAuthorizedError
+[2m  15.508794700s[0m [31mERROR[0m unhandled custom rejection, returning 500 response: NotAuthorizedError
+[2m 135.382744200s[0m [32m INFO[0m Processing OBS message: krapmatt -> next
+[2m 136.194406300s[0m [32m INFO[0m Processing OBS message: krapmatt -> next
+[2m   0.000199300s[0m [32m INFO[0m KrapBott started
+[2m   0.004078400s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.004102900s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.005740100s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.475794300s[0m [32m INFO[0m (Re)connecting client for #samoan_317
+[2m   0.487893300s[0m [32m INFO[0m (Re)connecting client for #krapmatt
+[2m   0.000199300s[0m [32m INFO[0m KrapBott started
+[2m   0.004312400s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.004314600s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.005806700s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.475171500s[0m [32m INFO[0m (Re)connecting client for #krapmatt
+[2m   0.496751700s[0m [32m INFO[0m (Re)connecting client for #samoan_317
+[2m   0.000210500s[0m [32m INFO[0m KrapBott started
+[2m   0.004013500s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.004011900s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.005631500s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.507016300s[0m [32m INFO[0m (Re)connecting client for #samoan_317
+[2m   0.516832200s[0m [32m INFO[0m (Re)connecting client for #krapmatt
+[2m   0.000212700s[0m [32m INFO[0m KrapBott started
+[2m   0.004595000s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.004591200s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.006337800s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.519124400s[0m [32m INFO[0m (Re)connecting client for #samoan_317
+[2m   0.523168700s[0m [32m INFO[0m (Re)connecting client for #krapmatt
+[2m   0.000220600s[0m [32m INFO[0m KrapBott started
+[2m   0.004489400s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.004489100s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.005998000s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.492273500s[0m [32m INFO[0m (Re)connecting client for #krapmatt
+[2m   0.502470000s[0m [32m INFO[0m (Re)connecting client for #samoan_317
+[2m   0.000173600s[0m [32m INFO[0m KrapBott started
+[2m   0.008458100s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.008466700s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.017115000s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.256464200s[0m [31mERROR[0m Bot task has failed for channel #samoan_317: Failed to parse twitch id
+[2m   0.256615300s[0m [31mERROR[0m Bot task has failed for channel #krapmatt: Failed to parse twitch id
+[2m  30.012860500s[0m [32m INFO[0m Restarting bot task for channel: #krapmatt
+[2m  30.012956300s[0m [32m INFO[0m Restarting bot task for channel: #samoan_317
+[2m  30.012971100s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m  30.012990100s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m  30.236520500s[0m [31mERROR[0m Bot task for channel failed: Failed to parse twitch id
+[2m  30.237728900s[0m [31mERROR[0m Bot task for channel failed: Failed to parse twitch id
+[2m   0.000209200s[0m [32m INFO[0m KrapBott started
+[2m   0.004282300s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.004281400s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.005749200s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.239824400s[0m [31mERROR[0m Bot task has failed for channel #samoan_317: Failed to parse twitch id
+[2m   0.240134500s[0m [31mERROR[0m Bot task has failed for channel #krapmatt: Failed to parse twitch id
+[2m  30.016145100s[0m [32m INFO[0m Restarting bot task for channel: #krapmatt
+[2m  30.016234800s[0m [32m INFO[0m Restarting bot task for channel: #samoan_317
+[2m  30.016270200s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m  30.016266300s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m  30.241158300s[0m [31mERROR[0m Bot task for channel failed: Failed to parse twitch id
+[2m  30.241460700s[0m [31mERROR[0m Bot task for channel failed: Failed to parse twitch id
+[2m  60.032379900s[0m [32m INFO[0m Restarting bot task for channel: #krapmatt
+[2m  60.032473500s[0m [32m INFO[0m Restarting bot task for channel: #samoan_317
+[2m  60.032479700s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m  60.032502300s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m  60.256836200s[0m [31mERROR[0m Bot task for channel failed: Failed to parse twitch id
+[2m  60.262288900s[0m [31mERROR[0m Bot task for channel failed: Failed to parse twitch id
+[2m  90.037898600s[0m [32m INFO[0m Restarting bot task for channel: #samoan_317
+[2m  90.037966000s[0m [32m INFO[0m Restarting bot task for channel: #krapmatt
+[2m  90.037993400s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m  90.038008500s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m  90.716734600s[0m [31mERROR[0m Bot task for channel failed: Failed to parse twitch id
+[2m  90.716999400s[0m [31mERROR[0m Bot task for channel failed: Failed to parse twitch id
+[2m 120.044043600s[0m [32m INFO[0m Restarting bot task for channel: #krapmatt
+[2m 120.044130500s[0m [32m INFO[0m Restarting bot task for channel: #samoan_317
+[2m 120.044163300s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m 120.044217800s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m 120.269860400s[0m [31mERROR[0m Bot task for channel failed: Failed to parse twitch id
+[2m 120.271889200s[0m [31mERROR[0m Bot task for channel failed: Failed to parse twitch id
+[2m   0.000220000s[0m [32m INFO[0m KrapBott started
+[2m   0.004599100s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.004599800s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.006585100s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.297551100s[0m [31mERROR[0m Bot task has failed for channel #samoan_317: Failed to parse twitch id
+[2m   0.299657800s[0m [31mERROR[0m Bot task has failed for channel #krapmatt: Failed to parse twitch id
+[2m   0.000222600s[0m [32m INFO[0m KrapBott started
+[2m   0.004125000s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.004129600s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.006516100s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.511999500s[0m [32m INFO[0m (Re)connecting client for #krapmatt
+[2m   0.512148600s[0m [32m INFO[0m (Re)connecting client for #samoan_317
+[2m   0.000195800s[0m [32m INFO[0m KrapBott started
+[2m   0.000141700s[0m [32m INFO[0m KrapBott started
+[2m   0.010178400s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.010174100s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.011875600s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.304870900s[0m [32m INFO[0m (Re)connecting client for #krapmatt
+[2m   0.304986600s[0m [32m INFO[0m (Re)connecting client for #samoan_317
+[2m   0.000245400s[0m [32m INFO[0m KrapBott started
+[2m   0.004219600s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.004220600s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.005859800s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.624842100s[0m [32m INFO[0m (Re)connecting client for #krapmatt
+[2m   0.625016000s[0m [32m INFO[0m (Re)connecting client for #samoan_317

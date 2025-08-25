@@ -87,6 +87,7 @@ pub async fn is_channel_live(channel_id: &str, token: &str, client_id: &str) -> 
         .send()
         .await?;
     let json: serde_json::Value = response.json().await?;
+    println!("{:?}", json);
     Ok(json["data"].as_array().map_or(false, |data| !data.is_empty()))
 }
 

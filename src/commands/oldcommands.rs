@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tmi::{Client, Privmsg};
 use tokio::{sync::{Mutex, RwLock}};
 
-use crate::{bot::BotState, bot_commands::send_message, commands::{generate_variables, parse_template, traits::CommandT}, models::{AliasConfig, BotError, PermissionLevel, TemplateManager}, twitch_api::{self, get_twitch_user_id}};
+use crate::{bot::BotState, bot_commands::send_message, commands::{generate_variables, parse_template, traits::CommandT}, models::{AliasConfig, BotError, BotResult, PermissionLevel, TemplateManager}, twitch_api::{self, get_twitch_user_id}};
 
 pub struct FnCommand<F> {
     func: F,
@@ -22,7 +22,7 @@ where
             Arc<Mutex<tmi::Client>>,
             SqlitePool,
             Arc<RwLock<BotState>>,
-        ) -> BoxFuture<'static, Result<(), BotError>> + Send + Sync + 'static,
+        ) -> BoxFuture<'static, BotResult<()>> + Send + Sync + 'static,
 {
     pub fn new(
         func: F,
@@ -43,10 +43,10 @@ where
 
 impl<F> CommandT for FnCommand<F>
 where
-    F: Fn(Privmsg<'static>, Arc<Mutex<Client>>, SqlitePool, Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>>
+    F: Fn(Privmsg<'static>, Arc<Mutex<Client>>, SqlitePool, Arc<RwLock<BotState>>) -> BoxFuture<'static, BotResult<()>>
         + Send + Sync + 'static,
 {
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         (self.func)(msg, client, pool, bot_state)
     }
 

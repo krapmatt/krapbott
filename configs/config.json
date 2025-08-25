@@ -8,7 +8,8 @@
       "queue_channel": "#krapmatt",
       "packages": [
         "Moderation",
-        "Queue"
+        "Queue",
+        "points"
       ],
       "runs": 0,
       "announcement_config": {
@@ -17,16 +18,21 @@
           "secs": 300,
           "nanos": 0
         },
-        "last_sent": 1750941379561
+        "last_sent": 1752244170438
       },
       "sub_only": false,
       "prefix": "!",
-      "random_queue": true,
+      "random_queue": false,
       "giveaway": {
         "duration": 3600,
         "max_tickets": 100,
         "ticket_cost": 15,
         "active": false
+      },
+      "points_config": {
+        "name": "points",
+        "interval": 10,
+        "points_per_time": 10
       }
     },
     "#krapmatt": {
@@ -38,9 +44,10 @@
       "packages": [
         "moderation",
         "bungie api",
-        "queue"
+        "queue",
+        "points"
       ],
-      "runs": 44,
+      "runs": 46,
       "announcement_config": {
         "state": "Active",
         "interval": {
@@ -51,12 +58,17 @@
       },
       "sub_only": false,
       "prefix": "!",
-      "random_queue": true,
+      "random_queue": false,
       "giveaway": {
         "duration": 1,
         "max_tickets": 10000,
         "ticket_cost": 100000,
         "active": true
+      },
+      "points_config": {
+        "name": "points",
+        "interval": 10,
+        "points_per_time": 10
       }
     }
   }

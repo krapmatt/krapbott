@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tmi::{Client, Privmsg};
 use tokio::{sync::{Mutex, RwLock}};
 
-use crate::{bot::BotState, models::{AliasConfig, BotError, PermissionLevel}};
+use crate::{bot::BotState, models::{AliasConfig, BotError, BotResult, PermissionLevel}};
 
 pub trait CommandT: Send + Sync {
     fn name(&self) -> &str;
@@ -13,13 +13,13 @@ pub trait CommandT: Send + Sync {
     fn usage(&self) -> &str;
     fn permission(&self) -> PermissionLevel;
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>>;
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>>;
 }
 
-pub async fn with_client<F, Fut>(client: Arc<Mutex<Client>>, f: F) -> Result<(), BotError>
+pub async fn with_client<F, Fut>(client: Arc<Mutex<Client>>, f: F) -> BotResult<()>
 where
     F: FnOnce(&mut tmi::Client) -> Fut,
-    Fut: Future<Output = Result<(), BotError>>,
+    Fut: Future<Output = BotResult<()>>,
 {
     let mut locked = client.lock().await;
     f(&mut locked.borrow_mut()).await
@@ -51,7 +51,7 @@ impl Command for RateLimitedCommand {
         self.inner.permission()
     }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>) -> BoxFuture<'static, BotResult<()>> {
         let limiter = self.limiter.clone();
         let inner = self.inner.clone();
         Box::pin(async move {

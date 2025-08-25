@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tmi::{Client, Privmsg};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::{bot::BotState, bot_commands::{self, mod_action_user_from_queue, modify_command, reply_to_message, send_message, unban_player_from_queue}, commands::{oldcommands::FnCommand, traits::CommandT, update_dispatcher_if_needed, words, COMMAND_GROUPS}, models::{AliasConfig, BotError, CommandAction, Package, PermissionLevel, TemplateManager}};
+use crate::{bot::BotState, bot_commands::{self, mod_action_user_from_queue, modify_command, reply_to_message, send_message, unban_player_from_queue}, commands::{oldcommands::FnCommand, traits::CommandT, update_dispatcher_if_needed, words, COMMAND_GROUPS}, models::{AliasConfig, BotError, BotResult, CommandAction, Package, PermissionLevel, TemplateManager}};
 
 pub fn mod_unban() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
@@ -308,7 +308,7 @@ impl CommandT for ModifyCommand {
         self.permission
     }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, _state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, _state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         let action = self.action;
         let channel = (self.channel_extractor)(&msg);
         Box::pin(async move {
@@ -359,7 +359,7 @@ impl CommandT for AliasCommand {
     fn description(&self) -> &str { "Add or remove a custom alias for a command." }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Moderator }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let words: Vec<&str> = words(&msg);
             let reply;

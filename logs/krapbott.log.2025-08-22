@@ -1,0 +1,12 @@
+[2m   0.000194600s[0m [32m INFO[0m KrapBott started
+[2m   0.004442000s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.004445700s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.021352200s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.302393700s[0m [32m INFO[0m (Re)connecting client for #samoan_317
+[2m   1.140438700s[0m [32m INFO[0m (Re)connecting client for #krapmatt
+[2m   0.000205000s[0m [32m INFO[0m KrapBott started
+[2m   0.004020400s[0m [32m INFO[0m Starting bot for channel: #krapmatt
+[2m   0.004022900s[0m [32m INFO[0m Starting bot for channel: #samoan_317
+[2m   0.005636700s[0m [32m INFO[0m [1mTlsServer::run[0m[1m{[0m[3maddr[0m[2m=[0m0.0.0.0:443[1m}[0m[2m:[0m listening on https://0.0.0.0:443
+[2m   0.280601200s[0m [32m INFO[0m (Re)connecting client for #samoan_317
+[2m   1.403608900s[0m [32m INFO[0m (Re)connecting client for #krapmatt

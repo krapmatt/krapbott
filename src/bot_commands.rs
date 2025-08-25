@@ -3,13 +3,13 @@ use sqlx::SqlitePool;
 use std::{borrow::BorrowMut, sync::Arc};
 use tmi::Client;
 use crate::commands::{update_dispatcher_if_needed, words};
-use crate::models::{Package, SharedQueueGroup};
+use crate::models::{BotResult, Package, SharedQueueGroup};
 use crate::queue::is_valid_bungie_name;
 use crate::{api::{get_membershipid, get_users_clears, MemberShip}, bot::BotState, database::{load_membership, remove_command, save_command, save_to_user_database}, models::{BotError, CommandAction, TwitchUser}};
 
 impl BotState {
     //Get total clears of raid of a player
-    pub async fn total_raid_clears(&self, msg: &tmi::Privmsg<'_>, client: &mut Client, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn total_raid_clears(&self, msg: &tmi::Privmsg<'_>, client: &mut Client, pool: &SqlitePool) -> BotResult<()> {
         let mut membership = MemberShip { id: String::new(), type_m: -1 };
         let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
         
@@ -46,12 +46,12 @@ impl BotState {
         Ok(())
     }
 
-    pub async fn add_remove_package(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, state: Package, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn add_remove_package(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, state: Package, pool: &SqlitePool) -> BotResult<()> {
         let config = self.config.get_channel_config_mut(msg.channel());
         let words: Vec<&str> = words(&msg);
 
         if words.len() <= 1 {
-            send_message(&msg, client.lock().await.borrow_mut(), "You didnt mention name of the package!").await?;
+            send_message(&msg, client.lock().await.borrow_mut(), "❌ No mention of package!").await?;
             return Ok(());
         }
 
@@ -59,12 +59,12 @@ impl BotState {
         let reply = match state {
             Package::Add => {
                 if config.packages.contains(&package_name) {
-                    "You already have this package".to_string()
+                    "You already have this package 📦".to_string()
                 } else {
                     config.packages.push(package_name.clone());
                     update_dispatcher_if_needed(msg.channel(), &self.config, pool, Arc::clone(&self.dispatchers)).await?;
                     self.config.save_config();
-                    format!("Package {} has been added", package_name)
+                    format!("📦 Package {} has been added", package_name)
                 }
             },
             Package::Remove => {
@@ -72,9 +72,9 @@ impl BotState {
                     config.packages.remove(index);
                     update_dispatcher_if_needed(msg.channel(), &self.config, pool, Arc::clone(&self.dispatchers)).await?;
                     self.config.save_config();
-                    format!("Package {} has been removed", package_name)
+                    format!("📦 Package {} has been removed", package_name)
                 } else {
-                    format!("Package {} does not exist or you don't have it activated", package_name)
+                    format!("📦 Package {} does not exist or you don't have it activated", package_name)
                 }
             }
         };
@@ -113,20 +113,20 @@ pub async fn register_user(pool: &SqlitePool, twitch_name: &str, bungie_name: &s
         };
         save_to_user_database(&pool, new_user, x_api_key).await?
     } else {
-        "❌ You have typed invalid format of bungiename, make sure it looks like -> bungiename#0000".to_string()
+        "❌ Invalid format of Bungie Name, This is correct format! -> bungiename#0000".to_string()
     };
     Ok(reply)
 }
 //if is/not in database
-pub async fn bungiename(msg: &tmi::Privmsg<'_>, client: &mut Client, pool: &SqlitePool, twitch_name: String) -> Result<(), BotError> {
+pub async fn bungiename(msg: &tmi::Privmsg<'_>, client: &mut Client, pool: &SqlitePool, twitch_name: String) -> BotResult<()> {
     let result = sqlx::query_scalar!(
         "SELECT bungie_name FROM user WHERE twitch_name = ?",
         twitch_name
     ).fetch_optional(pool).await?;
 
     let reply = match result {
-        Some(bungie_name) => format!("@{} || BungieName: {} ||", twitch_name, bungie_name),
-        None => format!("{}, you are not registered", twitch_name),
+        Some(bungie_name) => format!("Twitch Name: {twitch_name} | Bungie Name: {bungie_name}"),
+        None => format!("{}, you are not registered ❌", twitch_name),
     };
 
     send_message(msg, client, &reply).await?;
@@ -134,16 +134,16 @@ pub async fn bungiename(msg: &tmi::Privmsg<'_>, client: &mut Client, pool: &Sqli
     Ok(())
 }
 
-pub async fn send_message(msg: &tmi::Privmsg<'_>, client: &mut Client, reply: &str) -> Result<(), BotError> {
+pub async fn send_message(msg: &tmi::Privmsg<'_>, client: &mut Client, reply: &str) -> BotResult<()> {
     client.privmsg(msg.channel(), &reply).send().await?;
     Ok(())
 }
-pub async fn reply_to_message(msg: &tmi::Privmsg<'_>, client: &mut Client, reply: &str) -> Result<(), BotError> {
+pub async fn reply_to_message(msg: &tmi::Privmsg<'_>, client: &mut Client, reply: &str) -> BotResult<()> {
     client.privmsg(msg.channel(), &reply).reply_to(msg.id()).send().await?;
     Ok(())
 }
 
-pub async fn unban_player_from_queue(msg: &tmi::Privmsg<'_>, client:Arc<tokio::sync::Mutex<Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+pub async fn unban_player_from_queue(msg: &tmi::Privmsg<'_>, client:Arc<tokio::sync::Mutex<Client>>, pool: &SqlitePool) -> BotResult<()> {
     let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
     let reply = if words.len() < 2 {
         "Maybe try to add a Twitch name. Somebody deserves the unban. krapmaStare".to_string()
@@ -172,7 +172,7 @@ pub enum ModAction {
     Ban, 
 }
 
-pub async fn mod_action_user_from_queue(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool, mod_action: ModAction) -> Result<(), BotError> {
+pub async fn mod_action_user_from_queue(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool, mod_action: ModAction) -> BotResult<()> {
     let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
     if words.len() < 2 {
         send_message(msg, client.lock().await.borrow_mut(), "Usage: !mod_ban <twitch name> Optional(reason)").await?;
@@ -223,7 +223,7 @@ pub async fn mod_action_user_from_queue(msg: &tmi::Privmsg<'_>, client: Arc<toki
     Ok(())
 }
 
-pub async fn modify_command(msg: &tmi::Privmsg<'_>, client:Arc<tokio::sync::Mutex<Client>>, pool: &SqlitePool, action: CommandAction, channel: Option<String>) -> Result<(), BotError> {
+pub async fn modify_command(msg: &tmi::Privmsg<'_>, client:Arc<tokio::sync::Mutex<Client>>, pool: &SqlitePool, action: CommandAction, channel: Option<String>) -> BotResult<()> {
     let words: Vec<&str> = msg.text().split_whitespace().collect();
     let mut reply;
     if words.len() < 2 {

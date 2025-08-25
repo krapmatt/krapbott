@@ -34,6 +34,9 @@ use crate::commands::moderation::AliasCommand;
 use crate::commands::oldcommands::so;
 use crate::commands::points_traits::change_duration_giveaway;
 use crate::commands::points_traits::change_max_tickets_giveaway;
+use crate::commands::points_traits::change_name_points;
+use crate::commands::points_traits::change_points_interval;
+use crate::commands::points_traits::change_points_per_interval;
 use crate::commands::points_traits::change_price_ticket;
 use crate::commands::points_traits::get_points_command;
 use crate::commands::points_traits::pull_giveaway;
@@ -67,6 +70,7 @@ use crate::commands::time::samosa_time;
 use crate::commands::traits::CommandT;
 use crate::database::fetch_aliases_from_db;
 use crate::models::AliasConfig;
+use crate::models::BotResult;
 use crate::BotConfig;
 use crate::{
     bot::BotState,
@@ -94,7 +98,7 @@ type CommandHandler = Arc<
             SqlitePool,
             Arc<RwLock<BotState>>,
             AliasConfig
-        ) -> BoxFuture<'static, Result<(), BotError>>
+        ) -> BoxFuture<'static, BotResult<()>>
         + Send
         + Sync,
 >;
@@ -189,13 +193,16 @@ lazy_static::lazy_static!{
         commands: vec![
             cmd!(Arc::new(GiveawayHandler), "startgiveaway", "start_giveaway"),
             cmd!(Arc::new(JoinGiveaway), "ticket"),
-            cmd!(Arc::new(ChangePointsCommand { mode: ChangeMode::Add}) as Arc<dyn CommandT>, "add_points", "add_dirt"),
-            cmd!(Arc::new(ChangePointsCommand { mode: ChangeMode::Remove}) as Arc<dyn CommandT>, "remove_points", "remove_dirt"),
+            cmd!(Arc::new(ChangePointsCommand { mode: ChangeMode::Add}) as Arc<dyn CommandT>, "add_points"),
+            cmd!(Arc::new(ChangePointsCommand { mode: ChangeMode::Remove}) as Arc<dyn CommandT>, "remove_points"),
             cmd!(pull_giveaway(), "pull"),
             cmd!(change_max_tickets_giveaway(), "giveaway_tickets"),
             cmd!(change_duration_giveaway(), "giveaway_duration"),
             cmd!(change_price_ticket(), "giveaway_price"),
-            cmd!(get_points_command(), "points", "dirt"),
+            cmd!(get_points_command(), "points"),
+            cmd!(change_name_points(), "points_name"),
+            cmd!(change_points_interval(), "points_interval"),
+            cmd!(change_points_per_interval(), "points_amount")
         ], 
     };
 
@@ -249,7 +256,7 @@ pub struct CommandOverride {
     command_name: String
 }
 
-pub async fn update_dispatcher_if_needed(channel: &str, config: &BotConfig, pool: &SqlitePool, dispatcher_cache: Arc<RwLock<DispatcherCache>>) -> Result<(), BotError> {
+pub async fn update_dispatcher_if_needed(channel: &str, config: &BotConfig, pool: &SqlitePool, dispatcher_cache: Arc<RwLock<DispatcherCache>>) -> BotResult<()> {
     let alias_config = fetch_aliases_from_db(channel, pool).await?;
     let new_dispatcher = create_dispatcher(config, channel, &alias_config);
 

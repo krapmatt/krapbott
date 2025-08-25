@@ -1,14 +1,16 @@
 use crate::{
-    bot, bot_commands::send_message, commands::{create_dispatcher, traits::CommandT}, database::{fetch_aliases_from_db, get_command_response}, models::{has_permission, AnnouncementState, BotConfig, BotError, SharedQueueGroup}, twitch_api::{announcement, ban_bots, fetch_lurkers, get_twitch_user_id, is_channel_live}
+    bot, bot_commands::send_message, commands::{create_dispatcher, traits::CommandT}, database::{fetch_aliases_from_db, get_command_response}, models::{has_permission, AnnouncementState, BotConfig, BotError, BotResult, SharedQueueGroup}, twitch_api::{announcement, ban_bots, fetch_lurkers, get_twitch_user_id, is_channel_live}
 };
 use dotenvy::dotenv;
 use rand::{rng, Rng};
 use regex::Regex;
 use sqlx::SqlitePool;
 use tmi::{Client, Tag};
+use tracing::{error, info};
 use unicode_general_category::{get_general_category, GeneralCategory};
 use unicode_normalization::UnicodeNormalization;
 
+use core::error;
 use std::{
     borrow::BorrowMut,
     collections::{HashMap, HashSet},
@@ -19,8 +21,7 @@ use std::{
 use tokio::{
     sync::{
         Mutex, RwLock,
-    },
-    time::interval,
+    }, task::JoinHandle, time::{interval, sleep}
 };
 
 pub type CommandMap = HashMap<String, Arc<dyn CommandT + Send + Sync>>;
@@ -39,6 +40,7 @@ pub struct BotState {
     pub shared_groups: HashMap<String, SharedQueueGroup>,
     pub channel_to_main: HashMap<String, String>,
     pub dispatchers: Arc<RwLock<DispatcherCache>>,
+    pub active_point_loops: Arc<RwLock<HashMap<String, JoinHandle<()>>>>,
 }
 
 impl BotState {
@@ -60,6 +62,7 @@ impl BotState {
             shared_groups: HashMap::new(),
             channel_to_main: HashMap::new(),
             dispatchers: Arc::new(HashMap::new().into()),
+            active_point_loops: Arc::new(HashMap::new().into())
         }
         
     }
@@ -97,10 +100,10 @@ impl BotState {
     }
 }
 
-pub async fn bot_task(channel: String, state: Arc<RwLock<BotState>>, pool: Arc<SqlitePool>) -> Result<(), BotError> {
+pub async fn bot_task(channel: String, state: Arc<RwLock<BotState>>, pool: Arc<SqlitePool>) -> BotResult<()> {
     let mut retry_attempts = 0;
     let channel_clone = channel.clone();
-    println!("Starting bot for channel: {}", channel);
+    info!("Starting bot for channel: {}", channel);
     {
     let bot_state_guard = state.write().await;
     let aliases = fetch_aliases_from_db(&channel, &pool).await.unwrap();
@@ -109,7 +112,7 @@ pub async fn bot_task(channel: String, state: Arc<RwLock<BotState>>, pool: Arc<S
         bot_state_guard.dispatchers.write().await.insert(channel.clone(), dispatcher);
     }
 
-
+    let id = get_twitch_user_id(&channel.strip_prefix("#").unwrap_or(&channel)).await?;
     let mut channel_id_map: HashMap<String, String> = HashMap::new();
     //ADD CHANNEL ID MAP TO BOTSTATE
     let channels = BotConfig::load_config()
@@ -118,9 +121,11 @@ pub async fn bot_task(channel: String, state: Arc<RwLock<BotState>>, pool: Arc<S
         .collect::<Vec<String>>();
     for mut channel in channels {
         channel.remove(0);
-        let id = get_twitch_user_id(&channel).await?;
-        channel_id_map.insert(id, format!("#{}", channel));
+        channel_id_map.insert(id.clone(), format!("#{}", channel));
     }
+
+
+
     {
         let bot_state_clone = Arc::clone(&state);
 
@@ -133,14 +138,33 @@ pub async fn bot_task(channel: String, state: Arc<RwLock<BotState>>, pool: Arc<S
                 .to_string();
             if let Ok(id) = get_twitch_user_id(&channel).await {
                 if let Err(e) = start_annnouncement_scheduler(bot_state_clone, id, channel.clone(), &*pool_clone).await {
-                    eprintln!("Announcement error: {}", e);
+                    error!("Announcement error: {}", e);
                 }
             }
         });
     }
+    
+    {
+        let bot_state = state.write().await;
+        let channel_clone = channel.clone();
+        println!("{}", &channel_clone);
+        let config = bot_state.config.get_channel_config(&channel).unwrap();
+        if config.packages.contains(&"points".to_string()) {
+            let mut loops = bot_state.active_point_loops.write().await;
+            if !loops.contains_key(&channel) {
+                let pool_clone = pool.clone();
+                let handle = tokio::spawn(async move {
+                    if let Err(e) = grant_points_task(&id, pool_clone, &channel_clone).await {
+                        error!("Points loop crashed for {}: {}", &channel_clone, e);
+                    }
+                });
+                loops.insert(channel.clone(), handle);
+            }
+        }
+    }
 
     loop {
-        println!("(Re)connecting client for {}", channel);
+        info!("(Re)connecting client for {}", channel);
         let client = {
             let mut bot_state = state.write().await;
             Arc::new(Mutex::new(
@@ -154,31 +178,27 @@ pub async fn bot_task(channel: String, state: Arc<RwLock<BotState>>, pool: Arc<S
                 break Ok(());
             }
             Err(e) => {
-                println!("Em here");
-                println!(
-                    "Bot task for {} failed: {}. Restarting",
-                    channel, e
-                );
+                info!("Bot task for {} failed: {}. Restarting", channel, e);
                 retry_attempts += 1;
                 let backoff = 2u64.pow(retry_attempts.min(6)) * 1000;
                 tokio::time::sleep(Duration::from_millis(backoff)).await;
             }
         }
         if retry_attempts >= 25 {
-            println!("Bot task for {} has failed too many times. Giving up.", channel);
+            error!("Bot task for {} has failed too many times. Giving up.", channel);
             break Ok(());
         }
     }
 }
 
-async fn run_bot_loop(state: Arc<RwLock<BotState>>, client: Arc<Mutex<Client>>, pool: &SqlitePool, channel_id_map: HashMap<String, String>) -> Result<(), BotError> {
+async fn run_bot_loop(state: Arc<RwLock<BotState>>, client: Arc<Mutex<Client>>, pool: &SqlitePool, channel_id_map: HashMap<String, String>) -> BotResult<()> {
     loop {
         let irc_msg_result = client.lock().await.recv().await;
 
         let irc_msg = match irc_msg_result  {
             Ok(msg) => msg,
             Err(e) => {
-                eprintln!("Connection error: {}. Attempting reconnect", e);
+                error!("Connection error: {}. Attempting reconnect", e);
                 return Err(BotError::RecvError(e));
             }
         };
@@ -206,9 +226,7 @@ async fn run_bot_loop(state: Arc<RwLock<BotState>>, client: Arc<Mutex<Client>>, 
                 if is_bannable_link(msg.text()) && first_time == Some("1".to_string()) {
                     let state = state.read().await;
                     ban_bots(&msg, &state.oauth_token_bot, state.bot_id.clone()).await;
-                    client
-                        .lock()
-                        .await.privmsg(msg.channel(),"Kr4pTr4p is the last bot this channel needed.",).send().await?;
+                    client.lock().await.privmsg(msg.channel(),"Kr4pTr4p is the last bot this channel needed.").send().await?;
                 }
                 handle_privmsg(msg.clone(), Arc::clone(&state), pool.clone(), Arc::clone(&client)).await?;
             }
@@ -238,7 +256,9 @@ pub async fn manage_channels(state: Arc<RwLock<BotState>>, pool: Arc<SqlitePool>
 
                 let handle = tokio::spawn(async move {
                     
-                    bot_task(channel_clone, state_clone, pool_clone).await;
+                    if let Err(e) = bot_task(channel_clone.clone(), state_clone, pool_clone).await {
+                        error!("Bot task has failed for channel {}: {}",channel_clone, e)
+                    }
                 });
 
                 tasks.insert(channel.clone(), handle);
@@ -251,14 +271,14 @@ pub async fn manage_channels(state: Arc<RwLock<BotState>>, pool: Arc<SqlitePool>
             };
 
             if should_restart {
-                println!("Restarting bot task for channel: {}", channel);
+                info!("Restarting bot task for channel: {}", channel);
                 let channel_clone = channel.clone();
                 let state_clone = Arc::clone(&state);
                 let pool_clone = pool.clone();
 
                 let handle = tokio::spawn(async move {
                     if let Err(e) = bot_task(channel_clone, state_clone, pool_clone).await {
-                        eprintln!("Bot task for channel failed: {}", e);
+                        error!("Bot task for channel failed: {}", e);
                     }
                 });
 
@@ -278,7 +298,7 @@ pub async fn manage_channels(state: Arc<RwLock<BotState>>, pool: Arc<SqlitePool>
     }
 }
 
-pub async fn run_chat_bot(pool: Arc<SqlitePool>, bot_state: Arc<RwLock<BotState>>) -> Result<(), BotError> {
+pub async fn run_chat_bot(pool: Arc<SqlitePool>, bot_state: Arc<RwLock<BotState>>) -> BotResult<()> {
     manage_channels(bot_state, pool).await;
 
     Ok(())
@@ -288,11 +308,11 @@ pub async fn handle_obs_message(
     channel_id: String,
     command: String,
     pool: Arc<SqlitePool>,
-) -> Result<(), BotError> {
+) -> BotResult<()> {
     let mut bot_state = BotState::new();
     let mut client = bot_state.client_builder().await?;
 
-    println!("Processing OBS message: {} -> {}", channel_id, command);
+    info!("Processing OBS message: {} -> {}", channel_id, command);
     if command == "next" {
         let reply = bot_state
             .handle_next(format!("#{}", channel_id), &*pool)
@@ -308,7 +328,7 @@ pub async fn handle_obs_message(
     Ok(())
 }
 
-async fn handle_privmsg(msg: tmi::Privmsg<'_>, bot_state: Arc<RwLock<BotState>>, pool: SqlitePool, client: Arc<Mutex<Client>>) -> Result<(), BotError> {
+async fn handle_privmsg(msg: tmi::Privmsg<'_>, bot_state: Arc<RwLock<BotState>>, pool: SqlitePool, client: Arc<Mutex<Client>>) -> BotResult<()> {
     let mut locked_state = bot_state.write().await;
 
     locked_state.config = BotConfig::load_config();
@@ -356,7 +376,7 @@ async fn handle_privmsg(msg: tmi::Privmsg<'_>, bot_state: Arc<RwLock<BotState>>,
 }
 
 #[warn(dead_code)]
-async fn handle_usernotice(notice: tmi::UserNotice<'_>) -> Result<(), BotError> {
+async fn handle_usernotice(notice: tmi::UserNotice<'_>) -> BotResult<()> {
     todo!()
 }
 
@@ -389,7 +409,7 @@ fn is_bannable_link(text: &str) -> bool {
         || DISCORD_RE.is_match(&cleaned_text)
 }
 
-async fn start_annnouncement_scheduler(bot_state: Arc<RwLock<BotState>>, channel_id: String, channel_name: String, pool: &SqlitePool) -> Result<(), BotError> {
+async fn start_annnouncement_scheduler(bot_state: Arc<RwLock<BotState>>, channel_id: String, channel_name: String, pool: &SqlitePool) -> BotResult<()> {
     let mut sleep_duration = Duration::from_secs(60);
     let channel = format!("#{}", channel_name);
 
@@ -454,16 +474,18 @@ async fn start_annnouncement_scheduler(bot_state: Arc<RwLock<BotState>>, channel
     }
 }
 
-pub async fn grant_points_task(broadcaster_id: &str, pool: Arc<SqlitePool>) -> Result<(), BotError> {
+pub async fn grant_points_task(broadcaster_id: &str, pool: Arc<SqlitePool>, name: &str) -> BotResult<()> {
     dotenv().ok();
     let oauth_token = var("TWITCH_OAUTH_TOKEN_BOTT").expect("No bot oauth token");
     let bot_id = var("TWITCH_CLIENT_ID_BOT").expect("msg");
     let active_viewers = Arc::new(Mutex::new(HashSet::new()));
-    let mut interval = interval(Duration::from_secs(600)); // Every 10 min
-    loop {
-        if is_channel_live("krapmatt", &oauth_token, &bot_id).await? {
-            interval.tick().await;
 
+    loop {
+        if is_channel_live(name.strip_prefix("#").unwrap_or(name), &oauth_token, &bot_id).await? {
+            let bot_config = BotConfig::load_config();
+            let config = bot_config.get_channel_config(name).unwrap();
+
+            let points = config.points_config.points_per_time;
             let mut viewers = active_viewers.lock().await.clone(); // Get chatters
 
             // Fetch Lurkers from Twitch API
@@ -476,16 +498,15 @@ pub async fn grant_points_task(broadcaster_id: &str, pool: Arc<SqlitePool>) -> R
             for viewer in viewers.iter() {
                 sqlx::query!(
                     "INSERT INTO currency (twitch_name, points, channel) VALUES (?, ?, ?) 
-                    ON CONFLICT(twitch_name, channel) DO UPDATE SET points = points + 10",
-                    viewer,
-                    10,
-                    broadcaster_id
-                )
-                .execute(&*pool)
-                .await?;
+                    ON CONFLICT(twitch_name, channel) DO UPDATE SET points = points + ?",
+                    viewer, 10, broadcaster_id, points
+                ).execute(&*pool).await?;
             }
 
             active_viewers.lock().await.clear(); // Reset chatters after granting points
+
+            sleep(Duration::from_secs(config.points_config.interval)).await;
         }
+        sleep(Duration::from_secs(10)).await;
     }
 }

@@ -5,7 +5,7 @@ use regex::Regex;
 use sqlx::SqlitePool;
 use tmi::Client;
 
-use crate::{api::get_membershipid, bot::BotState, bot_commands::{reply_to_message, send_message}, database::{is_bungiename, save_to_user_database, user_exists_in_database}, models::{is_subscriber, AliasConfig, BotError, TwitchUser}};
+use crate::{api::get_membershipid, bot::BotState, bot_commands::{reply_to_message, send_message}, database::{is_bungiename, save_to_user_database, user_exists_in_database}, models::{is_subscriber, AliasConfig, BotError, BotResult, TwitchUser}};
 
 lazy_static::lazy_static!{
     static ref BUNGIE_REGEX: Regex = Regex::new(r"^(?P<name>.+)#(?P<digits>\d{4})").unwrap();
@@ -17,7 +17,7 @@ pub enum Queue {
 }
 
 impl BotState {
-    pub async fn handle_join(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool, alias_config: Arc<AliasConfig>) -> Result<(), BotError> {
+    pub async fn handle_join(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool, alias_config: Arc<AliasConfig>) -> BotResult<()> {
         let mut client = client.lock().await;
     
         let config = match self.config.get_channel_config(msg.channel()) {
@@ -117,7 +117,7 @@ impl BotState {
     
         Ok(result)
     }
-    pub async fn deprio(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn deprio(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> BotResult<()> {
         let text = msg.text().to_owned();
         let words: Vec<&str> = text.split_ascii_whitespace().collect();
     
@@ -173,7 +173,7 @@ impl BotState {
 
         Ok(())
     }
-    pub async fn prio(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn prio(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> BotResult<()> {
         let text = msg.text().to_owned();
         let words: Vec<&str> = text.split_ascii_whitespace().collect();
     
@@ -287,7 +287,7 @@ impl BotState {
     }
 
     //Moderator can remove player from queue
-    pub async fn handle_remove(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn handle_remove(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> BotResult<()> {
         let parts: Vec<&str> = msg.text().split_whitespace().collect();
         if parts.len() != 2 {
             return Ok(()); // No valid username provided
@@ -349,7 +349,7 @@ impl BotState {
     }   
 
     //Show the user where he is in queue
-    pub async fn handle_pos(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn handle_pos(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> BotResult<()> {
         let sender_name = msg.sender().name().to_string();
         let config = if let Some(config) = self.config.get_channel_config(msg.channel()) {
             config
@@ -409,7 +409,7 @@ impl BotState {
     }
 
     //User leaves queue
-    pub async fn handle_leave(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn handle_leave(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> BotResult<()> {
         let name = msg.sender().name().to_string();
         let config = self.config.get_channel_config(msg.channel()).unwrap();
         let teamsize: i32 = config.teamsize.try_into().unwrap();
@@ -422,7 +422,7 @@ impl BotState {
         ).fetch_optional(pool).await?;
         let reply = if let Some(position) = position_to_leave {
             
-            if position <= teamsize.into() {
+            if position <= Into::<i64>::into(teamsize) {
                 format!("You cannot leave the live group! If you want to be removed ask streamer or wait for !next")
             } else {
                 let mut tx = pool.begin().await?;
@@ -464,7 +464,7 @@ impl BotState {
     
 
     //Shows whole queue
-    pub async fn handle_queue(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn handle_queue(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> BotResult<()> {
         let config = if let Some(config) = self.config.get_channel_config(msg.channel()) {
             config
         } else {
@@ -512,7 +512,7 @@ impl BotState {
     }
 
     //random fireteam
-    pub async fn random(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> Result<(), BotError>{
+    pub async fn random(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> BotResult<()>{
         let channel = msg.channel().to_string();
         let config = &mut self.config;
         let bla = config.get_channel_config(msg.channel()).unwrap();
@@ -536,7 +536,7 @@ impl BotState {
         Ok(())
     }
 
-    pub async fn move_groups(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> Result<(), BotError> {
+    pub async fn move_groups(&self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>, pool: &SqlitePool) -> BotResult<()> {
         let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
         if words.len() < 2 {
             send_message(msg, client.lock().await.borrow_mut(), "Usage: !move <twitch_name>").await?;
@@ -607,7 +607,7 @@ impl BotState {
         Ok(())
     }
     
-    pub async fn toggle_combined_queue(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> Result<(), BotError> {
+    pub async fn toggle_combined_queue(&mut self, msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> BotResult<()> {
         let channel = msg.channel();
         let mut config = self.config.clone();
         // Get the shared group this channel belongs to
@@ -710,7 +710,7 @@ async fn add_to_queue(queue_len: usize, pool: &SqlitePool, user: &TwitchUser, ch
     
 }
 
-async fn send_invalid_name_reply(msg: &tmi::Privmsg<'_>, client: &mut Client, alias_config: Arc<AliasConfig>) -> Result<(), BotError> {
+async fn send_invalid_name_reply(msg: &tmi::Privmsg<'_>, client: &mut Client, alias_config: Arc<AliasConfig>) -> BotResult<()> {
     println!("{:?}", alias_config.get_aliases("join"));
     let mut aliases = alias_config.get_aliases("join");
     let join = alias_config.get_removed_aliases("join");
@@ -729,7 +729,7 @@ async fn send_invalid_name_reply(msg: &tmi::Privmsg<'_>, client: &mut Client, al
     Ok(())
 }
 
-pub async fn process_queue_entry(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, pool: &SqlitePool, user: TwitchUser, channel_id: &str, queue_join: Queue, raffle: bool) -> Result<(), BotError> {
+pub async fn process_queue_entry(msg: &tmi::Privmsg<'_>, client: &mut Client, queue_len: usize, pool: &SqlitePool, user: TwitchUser, channel_id: &str, queue_join: Queue, raffle: bool) -> BotResult<()> {
    
     let reply = if twitchuser_exists_in_queue(&pool, &user.clone().twitch_name, channel_id).await? {
         update_queue(&pool, &user).await?;
@@ -759,7 +759,7 @@ async fn bungie_name_exists_in_queue(pool: &SqlitePool, bungie_name: &str, chann
     Ok(exists == 1)
 }
 
-async fn update_queue(pool: &SqlitePool, user: &TwitchUser) -> Result<(), BotError> {
+async fn update_queue(pool: &SqlitePool, user: &TwitchUser) -> BotResult<()> {
     sqlx::query!(
         "UPDATE queue SET bungie_name = ? WHERE twitch_name = ?",
         user.bungie_name, user.twitch_name
@@ -808,7 +808,7 @@ async fn randomize_queue(pool: &SqlitePool, channel: &str, teamsize: i32) -> Res
     tx.commit().await?;
     let selected_team = next_group.iter().map(|q| format!("@{} ({})", q.twitch_name, q.bungie_name)).collect::<Vec<String>>().join(", ");
         // 🔹 Announce the random selection
-    let announcement = format!("🎲 Randomly selected team: {}", selected_team);
+    let announcement = format!("🎲 Winner of the raffle!: {}", selected_team);
     Ok(announcement)
 }
 
@@ -825,11 +825,6 @@ async fn next_handler(channel: &str, teamsize: i32, pool: &SqlitePool) -> Result
         channel, teamsize
     ).fetch_all(&mut *tx).await?;
 
-    // Step 2: Check if any prio'd user is active in this group
-    let has_active_prio = queue_entries.iter().any(|entry| {
-        entry.locked_first.unwrap_or(false) && entry.priority_runs_left.unwrap_or(0) > 0
-    });
-
     for entry in &queue_entries {
         match (entry.locked_first.unwrap_or(false), entry.priority_runs_left.unwrap_or(0)) {
             (true, runs_left) if runs_left > 0 => {
@@ -838,16 +833,13 @@ async fn next_handler(channel: &str, teamsize: i32, pool: &SqlitePool) -> Result
                     // Priority user done
                     sqlx::query!(
                         "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
-                        entry.twitch_name,
-                        channel
+                        entry.twitch_name, channel
                     ).execute(&mut *tx).await?;
                 } else {
                     // Decrement runs
                     sqlx::query!(
                         "UPDATE queue SET priority_runs_left = ? WHERE twitch_name = ? AND channel_id = ?",
-                        new_count,
-                        entry.twitch_name,
-                        channel
+                        new_count, entry.twitch_name, channel
                     ).execute(&mut *tx).await?;
                 }
             }
@@ -855,8 +847,7 @@ async fn next_handler(channel: &str, teamsize: i32, pool: &SqlitePool) -> Result
                 // Not a prio user — remove immediately
                 sqlx::query!(
                     "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
-                    entry.twitch_name,
-                    channel
+                    entry.twitch_name, channel
                 ).execute(&mut *tx).await?;
             }
         }

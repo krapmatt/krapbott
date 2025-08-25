@@ -1,12 +1,27 @@
-use std::{borrow::BorrowMut, sync::Arc, time::Duration};
+use std::{borrow::BorrowMut, str::FromStr, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
 use rand::{Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tmi::{Client, Privmsg};
-use tokio::{sync::{Mutex, RwLock}, time::{interval, Instant}};
+use tokio::{sync::{Mutex, RwLock}, time::{interval, sleep, Instant}};
 
-use crate::{bot::BotState, bot_commands::{reply_to_message, send_message}, commands::{normalize_twitch_name, oldcommands::FnCommand, traits::CommandT, words}, models::{AliasConfig, BotError, ChannelConfig, PermissionLevel}};
+use crate::{bot::BotState, bot_commands::{reply_to_message, send_message}, commands::{normalize_twitch_name, oldcommands::FnCommand, traits::CommandT, words}, models::{AliasConfig, BotError, BotResult, ChannelConfig, PermissionLevel}};
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
+pub struct Giveaway {
+    pub duration: usize,
+    pub max_tickets: usize,
+    pub ticket_cost: usize,
+    pub active: bool
+}
+
+impl Giveaway {
+ pub fn new() -> Self {
+    Self { duration: 3600, max_tickets: 100, ticket_cost: 15, active: false }
+ }
+}
 
 pub struct GiveawayHandler;
 
@@ -19,7 +34,7 @@ impl CommandT for GiveawayHandler {
 
     fn permission(&self) -> crate::models::PermissionLevel { PermissionLevel::Broadcaster }
 
-    fn execute(&self, msg: tmi::Privmsg<'static>, client: std::sync::Arc<Mutex<tmi::Client>>, pool: sqlx::SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: tmi::Privmsg<'static>, client: std::sync::Arc<Mutex<tmi::Client>>, pool: sqlx::SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let client_clone = Arc::clone(&client);
             let msg_clone = msg.clone();
@@ -43,30 +58,33 @@ impl CommandT for GiveawayHandler {
             {
                 send_message(&msg_clone, client_clone.lock().await.borrow_mut(), &format!("🎁 Giveaway has been started. You can buy a maximum of {} tickets for price of {} points for 1 ticket // USE !ticket <number>", number_of_tickets, price)).await.unwrap();
             }
-            let mut ticker = interval(Duration::from_secs(5*60));
             let start_time = Instant::now();
             
-            loop {
-                ticker.tick().await;
+            tokio::spawn(async move {
+                loop {
+                    sleep(Duration::from_secs(5*60)).await;
 
-                if start_time.elapsed() >= Duration::from_secs(duration.try_into().unwrap()) {
-                    break;
+                    if start_time.elapsed() >= Duration::from_secs(duration.try_into().unwrap()) {
+                        break;
+                    }
+
+                    // Periodic reminder message
+                    if let Err(e) = send_message(&msg_clone, client_clone.lock().await.borrow_mut(),&format!("⏰ Reminder: Giveaway is active! Use !ticket <1 - {}> to enter. Each ticket costs {} points!", number_of_tickets, price)).await {
+                        eprintln!("Failed to send giveaway reminder: {:?}", e);
+                    }
                 }
-
-                // Periodic reminder message
-                if let Err(e) = send_message(&msg_clone, client_clone.lock().await.borrow_mut(),&format!("⏰ Reminder: Giveaway is active! Use !ticket <1 - {}> to enter. Each ticket costs {} points!", number_of_tickets, price)).await {
-                    eprintln!("Failed to send giveaway reminder: {:?}", e);
+                let mut bot_state = bot_state_clone.write().await;
+                let config = bot_state.config.get_channel_config_mut(msg.channel());
+                config.giveaway.active = false;
+                bot_state.config.save_config();
+                {
+                    send_message(&msg, client.lock().await.borrow_mut(), "❗ Giveaway has ended. Winner will be pulled soon!").await.unwrap();
                 }
-            }
+                drop(bot_state);
+            });
+            
 
-            let mut bot_state = bot_state_clone.write().await;
-            let config = bot_state.config.get_channel_config_mut(msg.channel());
-            config.giveaway.active = false;
-            bot_state.config.save_config();
-            {
-                send_message(&msg_clone, client_clone.lock().await.borrow_mut(), "❗ Giveaway has ended. Winner will be pulled soon!").await.unwrap();
-            }
-            drop(bot_state);
+            
                 Ok(())
         })
     }
@@ -79,7 +97,7 @@ impl CommandT for JoinGiveaway {
     fn usage(&self) -> &str { "!ticket <amount>" }
     fn name(&self) -> &str { "enter_giveaway" }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Follower }
-    fn execute(&self, msg: tmi::Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: sqlx::SqlitePool, bot_state: Arc<RwLock<crate::bot::BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: tmi::Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: sqlx::SqlitePool, bot_state: Arc<RwLock<crate::bot::BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let words: Vec<&str> = words(&msg);
             let name = msg.sender().name().to_string();
@@ -195,7 +213,7 @@ impl CommandT for ChangePointsCommand {
         PermissionLevel::Moderator
     }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, _: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         let mode = self.mode.clone();
         Box::pin(async move {
             let Some((_, args)) = msg.text().split_once(" ") else {
@@ -208,10 +226,10 @@ impl CommandT for ChangePointsCommand {
 
             let points: i64 = points.parse().unwrap_or(0);
             let twitch_user = normalize_twitch_name(twitch);
-
+            let channel = msg.channel_id();
             let result = sqlx::query!(
-                "SELECT points FROM currency WHERE twitch_name = ? COLLATE NOCASE",
-                twitch_user
+                "SELECT points FROM currency WHERE channel = ? AND twitch_name = ? COLLATE NOCASE",
+                channel, twitch_user
             ).fetch_optional(&pool).await?;
 
             if let Some(row) = result {
@@ -219,13 +237,15 @@ impl CommandT for ChangePointsCommand {
                     ChangeMode::Add => row.points + points,
                     ChangeMode::Remove => row.points - points,
                 };
-
+                let config = &bot_state.read().await.config;
+                let config = config.get_channel_config(msg.channel()).unwrap();
                 sqlx::query!(
-                    "UPDATE currency SET points = ? WHERE twitch_name = ? COLLATE NOCASE",
-                    new_points, twitch_user
+                    "INSERT INTO currency (twitch_name, points, channel) VALUES (?1, ?2, ?3) 
+                    ON CONFLICT(twitch_name, channel) DO UPDATE SET points = ?2",
+                    twitch_user, new_points, channel
                 ).execute(&pool).await?;
 
-                send_message(&msg, client.lock().await.borrow_mut(), &format!("{twitch_user} now has {new_points} points")).await?;
+                send_message(&msg, client.lock().await.borrow_mut(), &format!("{twitch_user} now has {new_points} {}", config.points_config.name)).await?;
             } else {
                 send_message(&msg, client.lock().await.borrow_mut(), "User not found in the database").await?;
             }
@@ -233,9 +253,6 @@ impl CommandT for ChangePointsCommand {
         })
     }
 }
-
-//Box::new(ChangePointsCommand { mode: ChangeMode::Add }) as Box<dyn CommandT>
-//Box::new(ChangePointsCommand { mode: ChangeMode::Remove }) as Box<dyn CommandT>
 
 pub fn pull_giveaway() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
@@ -349,23 +366,22 @@ pub fn change_price_ticket() -> Arc<dyn CommandT> {
 
 pub fn get_points_command() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg, client, pool, _| {
+        |msg, client, pool, bot_state| {
             let fut = async move {
                 let channel = msg.channel_id();
                 let twitch_name = msg.sender().name().to_string();
 
                 let points = sqlx::query!(
                     "SELECT points FROM currency WHERE twitch_name = ? AND channel = ?",
-                    twitch_name,
-                    channel
-                )
-                .fetch_optional(&pool)
-                .await?;
+                    twitch_name, channel
+                ).fetch_optional(&pool).await?;
+                let bot_state = bot_state.read().await;
+                let config = bot_state.config.get_channel_config(msg.channel()).unwrap();
 
                 let response = if let Some(row) = points {
-                    format!("You have {} kilograms of dirt!", row.points)
+                    format!("You have {} {}!", row.points, config.points_config.name)
                 } else {
-                    "You have 0 kilograms of dirt!".to_string()
+                    format!("You have no {}", config.points_config.name)
                 };
 
                 send_message(&msg, client.lock().await.borrow_mut(), &response).await?;
@@ -373,10 +389,83 @@ pub fn get_points_command() -> Arc<dyn CommandT> {
             };
             Box::pin(fut)
         },
-        "Get your dirt (points)",
-        "!dirt",
+        "Get your points (points)",
+        "!points",
         "Points",
         PermissionLevel::User,
     ))
 }
 
+pub fn make_points_config_command<T, F>(name: &'static str, description: &'static str, usage: &'static str, invalid_msg: &'static str, success_msg: &'static str, setter: F) -> Arc<dyn CommandT>
+where T: FromStr + ToString + Send + Clone + 'static, <T as FromStr>::Err: Send, F: Fn(&mut ChannelConfig, T) + Send + Sync + Clone + 'static {
+    let cmd = FnCommand::new(
+        move |msg, client, _pool, bot_state| {
+            let invalid_msg = invalid_msg.to_string();
+            let success_msg = success_msg.to_string();
+            let setter = setter.clone();
+
+            let fut = async move {
+                let words: Vec<&str> = words(&msg);
+
+                if words.len() != 2 {
+                    send_message(&msg, client.lock().await.borrow_mut(), &invalid_msg).await?;
+                    return Ok(());
+                }
+
+                let reply = if let Ok(value) = words[1].parse::<T>() {
+                    let mut bot_state = bot_state.write().await;
+                    let config = bot_state.config.get_channel_config_mut(msg.channel());
+                    setter(config, value.clone());
+                    bot_state.config.save_config();
+                    success_msg.replace("{}", &value.to_string())
+                } else {
+                    "Put in a valid number".to_string()
+                };
+
+                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+                Ok(())
+            };
+
+            Box::pin(fut)
+        },
+        description,
+        usage,
+        name,
+        PermissionLevel::Broadcaster,
+    );
+
+    Arc::new(cmd)
+}
+
+pub fn change_name_points() -> Arc<dyn CommandT> {
+    make_points_config_command::<String, _>(
+        "Change Point Name",
+        "Changes name of points",
+        "!change_points <name>",
+        "There was an issue somewhere: Use: !change_points <name>",
+        "Name of points has been updated to {}",
+        |config, value| config.points_config.name = value,
+    )
+}
+
+pub fn change_points_interval() -> Arc<dyn CommandT> {
+    make_points_config_command::<usize, _>(
+        "Points Interval",
+        "Changes interval of when give out points",
+        "!points_interval <duration>",
+        "There was an issue somewhere: Include number!",
+        "Interval of points has been changed to {}",
+        |config, value| config.points_config.interval = value as u64,
+    )
+}
+
+pub fn change_points_per_interval() -> Arc<dyn CommandT> {
+    make_points_config_command::<isize, _>(
+        "Points Per Interval",
+        "Changes how many points you will get per interval",
+        "!points_amount <number>",
+        "There was an issue somewhere: Use: <number>",
+        "Number of points has been changed to {}",
+        |config, value| config.points_config.points_per_time = value as i32,
+    )
+}

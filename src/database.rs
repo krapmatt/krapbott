@@ -49,8 +49,7 @@ pub const COMMAND_TABLE: &str = "CREATE TABLE IF NOT EXISTS commands (
     id INTEGER PRIMARY KEY,
     command TEXT NOT NULL,
     reply TEXT NOT NULL,
-    channel TEXT,
-    UNIQUE(command, channel)
+    channel TEXT
 ) ";
 
 pub const ANNOUNCEMENT_TABLE: &str = "CREATE TABLE IF NOT EXISTS announcements (
@@ -126,7 +125,7 @@ pub async fn initialize_database() -> Result<Arc<SqlitePool>, sqlx::Error> {
 
     // Create the connection pool
     let pool = SqlitePoolOptions::new()
-        .max_connections(10)
+        .max_connections(30)
         .connect(database_url)
         .await?;
 
@@ -254,19 +253,12 @@ pub async fn save_command(
     .await;
 }
 
-pub async fn get_command_response(
-    pool: &SqlitePool,
-    command: String,
-    channel: Option<String>,
-) -> Result<Option<String>, BotError> {
+pub async fn get_command_response(pool: &SqlitePool, command: String, channel: Option<String>) -> Result<Option<String>, BotError> {
     if let Some(channel) = channel {
         if let Ok(Some(row)) = sqlx::query!(
             "SELECT reply FROM commands WHERE command = ? AND channel = ?",
-            command,
-            channel
-        )
-        .fetch_optional(pool)
-        .await
+            command, channel
+        ).fetch_optional(pool).await
         {
             return Ok(Some(row.reply));
         }
@@ -275,9 +267,7 @@ pub async fn get_command_response(
     let global_result = sqlx::query!(
         "SELECT reply FROM commands WHERE command = ? AND channel IS NULL",
         command
-    )
-    .fetch_optional(pool)
-    .await?;
+    ).fetch_optional(pool).await?;
 
     Ok(global_result.map(|row| row.reply))
 }

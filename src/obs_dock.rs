@@ -129,23 +129,33 @@ pub struct QueueUpdate {
 }
 
 pub async fn update_queue_order(cookies: Option<String>, data: UpdateQueueOrderRequest, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+    println!("{:?}", data);
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
         let channel_id = format!("#{}", twitch_name.to_ascii_lowercase());
-        let mut queue_channel = String::new();
-        if let Some(config)  = BotConfig::load_config().get_channel_config(&channel_id) {
-            queue_channel = config.queue_channel.clone()
-        }
+        let queue_channel = BotConfig::load_config()
+            .get_channel_config(&channel_id)
+            .map(|c| c.queue_channel.clone())
+            .ok_or_else(warp::reject)?;
+        let mut tx = pool.begin().await.map_err(|_| warp::reject())?;
+
+        // Step 1: TEMP SHIFT all positions up to avoid collisions
         sqlx::query!(
             "UPDATE queue SET position = position + 10000 WHERE channel_id = ?",
             queue_channel
-        ).execute(&*pool).await.map_err(|_| warp::reject())?;
-        for entry in &data.new_order {
+        ).execute(&mut *tx).await.map_err(|_| warp::reject())?;
+
+        // Step 2: Apply new order with clean sequential positions
+        for (index, entry) in data.new_order.iter().enumerate() {
+            let new_pos = index as i32 + 1;
             sqlx::query!(
                 "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
-                entry.position, entry.twitch_name, queue_channel
-            ).execute(&*pool).await.map_err(|_| warp::reject())?;
+                new_pos, entry.twitch_name, queue_channel
+            ).execute(&mut *tx).await.map_err(|_| warp::reject())?;
         }
-    
+
+        tx.commit().await.map_err(|_| warp::reject())?;
+
+
         return Ok(warp::reply::json(&"Queue order updated"));
     }
     return Err(warp::reject())

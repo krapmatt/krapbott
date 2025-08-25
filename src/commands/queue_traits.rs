@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tmi::Privmsg;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::{bot::BotState, bot_commands::{bungiename, register_user, send_message}, commands::{oldcommands::FnCommand, traits::CommandT, words}, models::{AliasConfig, BotError, PermissionLevel, SharedQueueGroup, TwitchUser}, queue::{self, process_queue_entry}};
+use crate::{bot::BotState, bot_commands::{bungiename, register_user, send_message}, commands::{oldcommands::FnCommand, traits::CommandT, words}, models::{AliasConfig, BotError, BotResult, PermissionLevel, SharedQueueGroup, TwitchUser}, queue::{self, process_queue_entry}};
 
 pub struct JoinCommand;
 
@@ -18,7 +18,7 @@ impl CommandT for JoinCommand {
 
     fn permission(&self) -> PermissionLevel { PermissionLevel::Follower }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let bot_state = bot_state.read().await;
             bot_state.handle_join(&msg, client, &pool, alias_config).await?;
@@ -35,7 +35,7 @@ impl CommandT for NextComamnd {
     fn usage(&self) -> &str { "!next" }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Broadcaster }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let mut bot_state = bot_state.write().await;
             let reply = bot_state.handle_next(msg.channel().to_string(), &pool).await?;
@@ -52,7 +52,7 @@ impl CommandT for QueueSize {
     fn description(&self) -> &str { "Update size of group" }
     fn usage(&self) -> &str { "!queue_size number" }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Moderator }
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let words: Vec<&str> = words(&msg);
             let reply;
@@ -99,7 +99,7 @@ impl CommandT for QueueLength {
     fn usage(&self) -> &str { "!queue_len number" }
     fn description(&self) -> &str { "Change the lenght of queue" }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Moderator }
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, Result<(), BotError>> {
+    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let words: Vec<&str> = words(&msg);
             let reply;
@@ -412,7 +412,8 @@ pub fn bungie_name_command() -> Arc<dyn CommandT> {
             let fut = async move {
                 let mut client = client.lock().await;
                 // If the message is only 11 characters long, assume it's just the command (use self)
-                if msg.text().trim_end().len() == 11 {
+                let words = words(&msg);
+                if words.len() == 1 {
                     bungiename(&msg, &mut client, &pool, msg.sender().name().to_string()).await?;
                 } else {
                     let (_, twitch_name) = msg

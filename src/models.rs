@@ -1,15 +1,15 @@
-use core::fmt;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use thiserror::Error;
 use std::{
-    collections::{HashMap, HashSet}, fs::File, io::{Read, Write}, path::Path, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}
+    collections::{HashMap, HashSet}, fs::File, io::{self, Read, Write}, path::Path, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 use tmi::{
     client::{read::RecvError, write::SendError, ConnectError, ReconnectError}, Badge, Client, MessageParseError
 };
 use tokio::sync::Mutex;
 
-use crate::{giveaway::Giveaway, twitch_api::is_follower};
+use crate::{commands::points_traits::Giveaway, twitch_api::is_follower};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TwitchUser {
@@ -105,77 +105,35 @@ pub async fn has_permission(msg: &tmi::Privmsg<'_>, client: Arc<Mutex<Client>>, 
     }
 }
 
-#[derive(Debug)]
+pub type BotResult<T> = Result<T, BotError>;
+
+#[derive(Debug, Error)]
 pub enum BotError {
-    RequestError(reqwest::Error),
-    JsonError(serde_json::Error),
-    IoError(std::io::Error),
-    SendError(SendError),
-    RecvError(RecvError),
-    MessageParseError(MessageParseError),
-    ReconnectError(ReconnectError),
-    SerenityError(serenity::Error),
-    SqlxError(sqlx::Error),
-    ConnectError(ConnectError),
-    Custom(String)
+    #[error("HTTP request error: {0}")]
+    RequestError(#[from] reqwest::Error),
+    #[error("JSON deserialization error: {0}")]
+    JsonError(#[from] serde_json::Error),
+    #[error("I/O error: {0}")]
+    IoError(#[from] io::Error),
+    #[error("Send error: {0}")]
+    SendError(#[from] SendError),
+    #[error("Receive error: {0}")]
+    RecvError(#[from] RecvError),
+    #[error("Message parse error: {0}")]
+    MessageParseError(#[from] MessageParseError),
+    #[error("Reconnect error: {0}")]
+    ReconnectError(#[from] ReconnectError),
+    #[error("Serenity (Discord) error: {0}")]
+    SerenityError(#[from] serenity::Error),
+    #[error("Database error: {0}")]
+    SqlxError(#[from] sqlx::Error),
+    #[error("Connect error: {0}")]
+    ConnectError(#[from] ConnectError),
+    #[error("{0}")]
+    Custom(String),
 
 }
-impl fmt::Display for BotError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
-    }
-}
-impl From<ConnectError> for BotError {
-    fn from(err: ConnectError) -> Self {
-        BotError::ConnectError(err)
-    }
-}
-impl From<RecvError> for BotError {
-    fn from(err: RecvError) -> Self {
-        BotError::RecvError(err)
-    }
-}
-impl From<SendError> for BotError {
-    fn from(err: SendError) -> Self {
-        BotError::SendError(err)
-    }
-}
-impl From<MessageParseError> for BotError {
-    fn from(err: MessageParseError) -> Self {
-        BotError::MessageParseError(err)
-    }
-}
-impl From<ReconnectError> for BotError {
-    fn from(err: ReconnectError) -> Self {
-        BotError::ReconnectError(err)
-    }
-}
-impl From<serenity::Error> for BotError {
-    fn from(err: serenity::Error) -> BotError {
-        BotError::SerenityError(err)
-    }
-}
-impl From<serde_json::Error> for BotError {
-    fn from(err: serde_json::Error) -> Self {
-        BotError::JsonError(err)
-    }
-}
 
-impl From<std::io::Error> for BotError {
-    fn from(err: std::io::Error) -> Self {
-        BotError::IoError(err)
-    }
-}
-impl From<sqlx::Error> for BotError {
-    fn from(err: sqlx::Error) -> BotError {
-        BotError::SqlxError(err)
-    }
-}
-impl From<reqwest::Error> for BotError {
-    fn from(err: reqwest::Error) -> Self {
-        BotError::RequestError(err)
-    }
-}
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub enum AnnouncementState {
@@ -201,6 +159,19 @@ impl AnnouncementConfig {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct PointsConfig {
+    pub name: String,
+    pub interval: u64,
+    pub points_per_time: i32,
+}
+
+impl PointsConfig {
+    fn new() -> PointsConfig {
+        PointsConfig { name: "Points".to_string(), interval: 600, points_per_time: 10 }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct ChannelConfig {
     pub open: bool,
     pub len: usize,
@@ -213,7 +184,8 @@ pub struct ChannelConfig {
     pub sub_only: bool,
     pub prefix: String,
     pub random_queue: bool,
-    pub giveaway: Giveaway
+    pub giveaway: Giveaway,
+    pub points_config: PointsConfig
 }
 
 impl ChannelConfig {
@@ -282,7 +254,8 @@ impl BotConfig {
                 sub_only: false,
                 prefix: "!".to_string(),
                 random_queue: false,
-                giveaway: Giveaway::new()
+                giveaway: Giveaway::new(),
+                points_config: PointsConfig::new()
             })
     }
 
@@ -334,7 +307,7 @@ impl TemplateManager {
         command: String,
         template: String,
         channel_id: Option<String>,
-    ) -> Result<(), BotError> {
+    ) -> BotResult<()> {
         if let Some(channel) = channel_id {
             sqlx::query!(
                 "INSERT INTO commands_template (package, command, template, channel_id) 
@@ -351,7 +324,7 @@ impl TemplateManager {
         Ok(())
     }
 
-    pub async fn remove_template(&self, command: String, channel_id: Option<String>) -> Result<(), BotError> {
+    pub async fn remove_template(&self, command: String, channel_id: Option<String>) -> BotResult<()> {
         if let Some(channel) = channel_id {
             sqlx::query!(
                 "DELETE FROM commands_template WHERE command = ? AND channel_id = ?",
