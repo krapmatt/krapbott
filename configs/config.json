@@ -1,11 +1,44 @@
 {
   "channels": {
-    "#samoan_317": {
+    "xcindi_": {
+      "open": false,
+      "len": 1,
+      "teamsize": 1,
+      "combined": false,
+      "queue_channel": "xcindi_",
+      "packages": [
+        "Moderation"
+      ],
+      "runs": 0,
+      "announcement_config": {
+        "state": "Paused",
+        "interval": {
+          "secs": 300,
+          "nanos": 0
+        },
+        "last_sent": 1756297115338
+      },
+      "sub_only": false,
+      "prefix": "!",
+      "random_queue": false,
+      "giveaway": {
+        "duration": 3600,
+        "max_tickets": 100,
+        "ticket_cost": 15,
+        "active": false
+      },
+      "points_config": {
+        "name": "Points",
+        "interval": 600,
+        "points_per_time": 10
+      }
+    },
+    "samoan_317": {
       "open": true,
       "len": 203,
       "teamsize": 1,
       "combined": true,
-      "queue_channel": "#krapmatt",
+      "queue_channel": "krapmatt",
       "packages": [
         "Moderation",
         "Queue",
@@ -35,12 +68,12 @@
         "points_per_time": 10
       }
     },
-    "#krapmatt": {
+    "krapmatt": {
       "open": true,
       "len": 203,
       "teamsize": 5,
       "combined": true,
-      "queue_channel": "#krapmatt",
+      "queue_channel": "krapmatt",
       "packages": [
         "moderation",
         "bungie api",

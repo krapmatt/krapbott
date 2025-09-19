@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE queue SET locked_first = TRUE\n         WHERE channel_id = $1 AND group_priority = 1 AND locked_first = FALSE \n         AND twitch_name IN (\n             SELECT twitch_name FROM queue \n             WHERE channel_id = $2 \n             ORDER BY position ASC \n             LIMIT $3\n         )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aca509fa45edc1f070f8f6bc5f39d3015ec4f545f9e857ce6e17cff45c24b507"
+}

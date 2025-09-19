@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO commands_template (package, command, template, channel_id) \n                VALUES ($1, $2, $3, $4) \n                ON CONFLICT(channel_id, command) DO UPDATE SET template = excluded.template",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b9b1781bedb025b7d0636a0b119b0c871dec707796467f571ea7c13ca0763e8e"
+}

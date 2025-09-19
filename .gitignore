@@ -1,9 +1,12 @@
 /target
 .env
 /configs
-/public
 /ssl
 krapbott.exe
 objective_manifest_cache.json
 record_manifest_cache.json
 /logs
+.shuttle*
+Secrets*.toml
+.sqlx*
+/migrations

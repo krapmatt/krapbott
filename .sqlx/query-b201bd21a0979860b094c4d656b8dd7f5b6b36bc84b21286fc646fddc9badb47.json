@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM announcements WHERE name = $1 AND channel = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b201bd21a0979860b094c4d656b8dd7f5b6b36bc84b21286fc646fddc9badb47"
+}

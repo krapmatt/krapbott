@@ -193,7 +193,7 @@ pub async fn get_membershipid(bungie_name: &str, x_api_key: &str) -> Result<Memb
 
     let mut headers = HeaderMap::new();
     headers.insert("X-API-Key", HeaderValue::from_str(x_api_key).unwrap());
-    headers.insert("User-Agent", HeaderValue::from_str("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36").unwrap());
+    //headers.insert("User-Agent", HeaderValue::from_str("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36").unwrap());
 
     let res = reqwest::Client::new()
         .post("https://www.bungie.net/Platform/Destiny2/SearchDestinyPlayerByBungieName/All/")

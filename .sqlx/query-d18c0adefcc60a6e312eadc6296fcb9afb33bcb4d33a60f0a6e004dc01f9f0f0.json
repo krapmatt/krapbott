@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO command_disabled (channel, command) VALUES ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d18c0adefcc60a6e312eadc6296fcb9afb33bcb4d33a60f0a6e004dc01f9f0f0"
+}

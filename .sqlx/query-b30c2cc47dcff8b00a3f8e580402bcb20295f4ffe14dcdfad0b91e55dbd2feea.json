@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE queue SET position = position + 10000 WHERE channel_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b30c2cc47dcff8b00a3f8e580402bcb20295f4ffe14dcdfad0b91e55dbd2feea"
+}

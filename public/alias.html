@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Command Alias Manager</title>
+  <style>
+    /* Base reset */
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #121212 0%, #1f1f1f 100%);
+      color: #e0e0e0;
+      margin: 0;
+      padding: 24px 32px;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    h1 {
+      font-weight: 700;
+      font-size: 2.4rem;
+      margin-bottom: 6px;
+      color: #d16ce6;
+      text-shadow: 0 0 6px rgba(209, 108, 230, 0.6);
+      letter-spacing: 0.05em;
+    }
+
+    p {
+      font-size: 1.05rem;
+      color: #b3b3b3;
+      margin-top: 0;
+      margin-bottom: 28px;
+      max-width: 540px;
+      line-height: 1.45;
+    }
+
+    #status {
+      color: #ff6b6b;
+      font-weight: 600;
+      margin-bottom: 16px;
+      min-height: 22px;
+    }
+
+    .command-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 20px;
+    }
+
+    .command-box {
+      background-color: #2e2e3d;
+      border-radius: 12px;
+      padding: 16px 20px 18px;
+      border: 1px solid #444658;
+      box-shadow: 0 2px 8px rgb(0 0 0 / 0.5);
+      display: flex;
+      flex-direction: column;
+      max-height: 68px; /* collapsed */
+      overflow: hidden;
+      cursor: default;
+      transition:
+        max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 0.3s ease,
+        box-shadow 0.3s ease;
+      user-select: none;
+      position: relative;
+    }
+
+    .command-box:hover {
+      border-color: #a57de0;
+      box-shadow: 0 0 12px 2px rgba(165, 125, 224, 0.4);
+    }
+
+    .command-box.open {
+      max-height: 420px; /* expanded */
+      cursor: default;
+      box-shadow: 0 0 20px 3px rgba(209, 108, 230, 0.7);
+      border-color: #d16ce6;
+    }
+
+    .command-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      user-select: none;
+    }
+
+    .command-name {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: #ddd;
+      transition: color 0.3s ease;
+    }
+
+    .command-name.disabled {
+      color: #777b8a;
+      text-decoration: line-through;
+      font-style: italic;
+    }
+
+    .dropdown-arrow {
+      font-size: 1.3rem;
+      color: #d16ce6;
+      user-select: none;
+      transition: transform 0.25s ease, color 0.3s ease;
+      line-height: 1;
+    }
+
+    .command-box.open .dropdown-arrow {
+      transform: rotate(90deg);
+      color: #ff80d5;
+    }
+
+    .command-details {
+      margin-top: 16px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease 0.1s;
+      font-size: 0.9rem;
+      color: #ccc;
+      line-height: 1.3;
+      overflow: hidden;
+    }
+
+    .command-box.open .command-details {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* Section container for aliases */
+    .alias-section {
+      margin-bottom: 14px;
+    }
+
+    .alias-section strong {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: #d4a6f9;
+      letter-spacing: 0.03em;
+    }
+
+    .alias-tag {
+      display: flex;
+      align-items: center;
+      background: #3a3a4f;
+      border-radius: 6px;
+      padding: 5px 10px;
+      margin-bottom: 8px;
+      user-select: text;
+      box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.4);
+      transition: background-color 0.3s ease;
+    }
+
+    .alias-tag:hover {
+      background: #4e4e6c;
+    }
+
+    .alias-tag span {
+      flex-grow: 1;
+      font-weight: 500;
+      color: #e3d8ff;
+      user-select: text;
+    }
+
+    .alias-tag span.disabled {
+      color: #888a9c;
+      text-decoration: line-through;
+      font-style: italic;
+    }
+
+    /* Buttons */
+    button {
+      font-weight: 600;
+      font-size: 0.85rem;
+      background-color: #a57de0;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      color: #fff;
+      cursor: pointer;
+      user-select: none;
+      box-shadow: 0 2px 6px rgba(165, 125, 224, 0.6);
+      transition:
+        background-color 0.25s ease,
+        box-shadow 0.25s ease,
+        transform 0.1s ease;
+      margin-left: 8px;
+      flex-shrink: 0;
+    }
+
+    button:hover:not(:disabled) {
+      background-color: #d16ce6;
+      box-shadow: 0 4px 14px rgba(209, 108, 230, 0.8);
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      background-color: #555666;
+      cursor: not-allowed;
+      box-shadow: none;
+      color: #bbb;
+    }
+
+    /* Input & add alias container */
+    .add-alias-container {
+      display: flex;
+      align-items: center;
+      margin-top: 8px;
+    }
+
+    input[type="text"] {
+      flex-grow: 1;
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: 1px solid #5c5c73;
+      background-color: #1f1f2f;
+      color: #eee;
+      font-size: 1rem;
+      box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.5);
+      transition:
+        border-color 0.25s ease,
+        background-color 0.25s ease;
+      user-select: text;
+    }
+
+    input[type="text"]:focus {
+      border-color: #d16ce6;
+      outline: none;
+      background-color: #2a1f3a;
+      box-shadow: 0 0 10px 2px rgba(209, 108, 230, 0.5);
+    }
+
+    /* Disable toggle switch styling */
+    .toggle-container {
+      margin-top: 12px;
+      font-weight: 600;
+      color: #d4a6f9;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 0.95rem;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 46px;
+      height: 26px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+      position: absolute;
+      left: 0;
+      top: 0;
+      margin: 0;
+      cursor: pointer;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #444c5a;
+      transition: background-color 0.3s ease;
+      border-radius: 26px;
+      box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.6);
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 3px;
+      bottom: 3px;
+      background-color: #f1f1f1;
+      transition: transform 0.3s ease;
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    }
+
+    .add-alias-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;          /* space between input and button */
+      margin-top: 8px;
+      flex-wrap: nowrap;  /* prevent wrapping */
+      width: 100%;
+      overflow: hidden;   /* add this */
+    }
+
+    .add-alias-container input[type="text"] {
+      flex-grow: 1;
+      min-width: 0;      
+      box-sizing: border-box;
+    }
+
+    .add-alias-container button {
+      flex-shrink: 0;    
+      box-sizing: border-box;
+      white-space: nowrap;
+    }
+
+    .switch input:checked + .slider {
+      background-color: #d16ce6;
+      box-shadow: 0 0 8px #d16ce6;
+    }
+
+    .switch input:checked + .slider:before {
+      transform: translateX(20px);
+    }
+
+    /* Responsive tweaks */
+    @media (max-width: 600px) {
+      body {
+        padding: 16px 18px;
+      }
+
+      .command-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .page-header {
+      position: relative;
+      height: 40px;
+    }
+
+    .back-button {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 10;
+      background-color: #444;
+      color: #eee;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: background-color 0.2s ease;
+    }
+
+    .back-button:hover {
+      background-color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="page-header">
+    <button id="back-button" class="back-button">← Back to Queue</button>
+  </div>
+  <h1>Command Alias Manager</h1>
+  <p>Click a command to view and manage its aliases</p>
+  
+  <div id="status" aria-live="polite"></div>
+
+  <div class="command-grid" id="commandGrid" role="list" aria-label="Command aliases"></div>
+
+  <script>
+    const apiBase = "/api/aliases";
+    document.getElementById('back-button').addEventListener('click', () => {
+      window.location.href = '/queue_dock.html';
+    });
+    async function fetchCommands() {
+      try {
+        const res = await fetch(apiBase, { credentials: "include" });
+        if (!res.ok) throw new Error("Fetch failed: " + res.status);
+        return await res.json();
+      } catch (e) {
+        document.getElementById("status").textContent = "Failed to fetch aliases. Are you logged in?";
+        console.error(e);
+        return [];
+      }
+    }
+
+    async function toggleDefaultCommand(command) {
+      await fetch(apiBase + "/disable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ command }),
+      });
+      await loadGrid();
+    }
+
+    async function removeDefaultAlias(command, alias) {
+      await fetch(apiBase + "/remove-default-alias", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ command, alias }),
+      });
+      await loadGrid();
+    }
+
+    async function restoreDefaultAlias(command, alias) {
+      await fetch(apiBase + "/restore-default-alias", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ command, alias }),
+      });
+      await loadGrid();
+    }
+
+    async function deleteCustomAlias(alias) {
+      await fetch(apiBase, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ alias }),
+      });
+      await loadGrid();
+    }
+
+    async function addCustomAlias(command, alias) {
+      alias = alias.trim().toLowerCase();
+      if (!alias) return alert("Alias cannot be empty");
+      await fetch(apiBase, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ alias, command }),
+      });
+      await loadGrid();
+    }
+
+    function createButton(text, onClick, title) {
+      const btn = document.createElement("button");
+      btn.textContent = text;
+      btn.title = title || "";
+      btn.addEventListener("click", onClick);
+      return btn;
+    }
+
+    async function loadGrid() {
+      // Capture the open command name (if any)
+  const previouslyOpen = document.querySelector(".command-box.open .command-name")?.textContent;
+
+  const commands = await fetchCommands();
+  const grid = document.getElementById("commandGrid");
+  grid.innerHTML = "";
+
+  if (!commands || commands.length === 0) {
+    grid.innerHTML = "<p>No commands found.</p>";
+    return;
+  }
+
+  commands.forEach(({ command, default_aliases, removed_default_aliases, default_disabled, custom_aliases }) => {
+    const box = document.createElement("div");
+    box.className = "command-box";
+
+    const header = document.createElement("div");
+    header.className = "command-header";
+
+    const name = document.createElement("div");
+    name.className = "command-name";
+    name.textContent = command;
+    if (default_disabled) name.classList.add("disabled");
+
+    const arrow = document.createElement("div");
+    arrow.className = "dropdown-arrow";
+    arrow.textContent = "▶";
+
+    header.appendChild(name);
+    header.appendChild(arrow);
+    box.appendChild(header);
+
+    const details = document.createElement("div");
+    details.className = "command-details";
+
+    // Build sections (same as before)
+    const section = (title, content) => {
+      const div = document.createElement("div");
+      div.innerHTML = `<strong>${title}</strong><br/>`;
+      content.forEach(elem => div.appendChild(elem));
+      div.style.marginBottom = "10px";
+      return div;
+    };
+
+    const defaultElems = default_aliases.map(alias => {
+      const wrap = document.createElement("div");
+      wrap.className = "alias-tag";
+      const span = document.createElement("span");
+      span.textContent = alias;
+      wrap.appendChild(span);
+      const btn = createButton("Remove", async () => {
+        if (confirm(`Remove alias "${alias}"?`)) {
+          await removeDefaultAlias(command, alias);
+        }
+      });
+      wrap.appendChild(btn);
+      return wrap;
+    });
+
+    const removedElems = removed_default_aliases.map(alias => {
+      const wrap = document.createElement("div");
+      wrap.className = "alias-tag";
+      const span = document.createElement("span");
+      span.textContent = alias;
+      span.classList.add("disabled");
+      wrap.appendChild(span);
+      const btn = createButton("Restore", async () => {
+        if (confirm(`Restore alias "${alias}"?`)) {
+          await restoreDefaultAlias(command, alias);
+        }
+      });
+      wrap.appendChild(btn);
+      return wrap;
+    });
+
+    const customElems = custom_aliases.map(alias => {
+      const wrap = document.createElement("div");
+      wrap.className = "alias-tag";
+      const span = document.createElement("span");
+      span.textContent = alias;
+      wrap.appendChild(span);
+
+      const btn = createButton("Delete", async () => {
+        if (confirm(`Delete custom alias "${alias}"?`)) {
+          await deleteCustomAlias(alias);
+        }
+      }, "Delete this custom alias");
+      wrap.appendChild(btn);
+
+      return wrap;
+    });
+
+    // Sections container
+    if (defaultElems.length > 0) details.appendChild(section("Default Aliases", defaultElems));
+    if (removedElems.length > 0) details.appendChild(section("Removed Default Aliases", removedElems));
+    if (customElems.length > 0) details.appendChild(section("Custom Aliases", customElems));
+
+    // Add new alias input and button
+    const addAliasContainer = document.createElement("div");
+    addAliasContainer.className = "add-alias-container";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "Add new alias...";
+    input.autocomplete = "off";
+    addAliasContainer.appendChild(input);
+
+    const addBtn = createButton("Add", async () => {
+      const newAlias = input.value.trim();
+      if (!newAlias) {
+        alert("Alias cannot be empty");
+        return;
+      }
+      await addCustomAlias(command, input.value);
+      input.value = "";
+    });
+    addAliasContainer.appendChild(addBtn);
+
+    details.appendChild(addAliasContainer); 
+
+    const toggleContainer = document.createElement("div");
+    toggleContainer.className = "toggle-container";
+
+    const toggleLabel = document.createElement("label");
+    toggleLabel.textContent = default_disabled ? "Enable Command" : "Disable Command";
+    toggleLabel.style.cursor = "pointer";
+
+    const switchLabel = document.createElement("label");
+    switchLabel.className = "switch";
+
+    const toggleInput = document.createElement("input");
+    toggleInput.type = "checkbox";
+    toggleInput.checked = !default_disabled;
+    toggleInput.addEventListener("change", async () => {
+      // When checked, command is enabled (not disabled)
+      await toggleDefaultCommand(command);
+    });
+
+    const slider = document.createElement("span");
+    slider.className = "slider";
+
+    switchLabel.appendChild(toggleInput);
+    switchLabel.appendChild(slider);
+    toggleLabel.appendChild(switchLabel);
+    toggleContainer.appendChild(toggleLabel);
+
+    details.appendChild(toggleContainer);
+
+    // Append details to box
+    box.appendChild(details);
+
+    header.addEventListener("click", () => {
+      const wasOpen = box.classList.contains("open");
+      // Close any other open boxes
+      document.querySelectorAll(".command-box.open").forEach(openBox => {
+        if (openBox !== box) openBox.classList.remove("open");
+      });
+      if (!wasOpen) {
+        box.classList.add("open");
+      } else {
+        box.classList.remove("open");
+      }
+    });
+
+    // Reopen if previously selected
+    if (command === previouslyOpen) {
+      box.classList.add("open");
+    }
+
+    box.appendChild(details);
+    grid.appendChild(box);
+  });
+    }
+
+    window.addEventListener("load", loadGrid);
+  </script>
+</body>
+</html>

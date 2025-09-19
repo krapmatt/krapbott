@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT * FROM command_disabled WHERE channel = $1 AND command = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "channel",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "command",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "600afdd3d2ed0338fb2f45eccf63677c7574d935265b2170e690238a0a40d7dc"
+}

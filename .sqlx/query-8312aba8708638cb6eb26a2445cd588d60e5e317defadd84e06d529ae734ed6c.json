@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT alias, command FROM command_aliases WHERE channel = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "alias",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "command",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8312aba8708638cb6eb26a2445cd588d60e5e317defadd84e06d529ae734ed6c"
+}

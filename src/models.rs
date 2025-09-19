@@ -1,15 +1,13 @@
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use thiserror::Error;
+use tracing::error;
+use twitch_irc::{login::StaticLoginCredentials, message::PrivmsgMessage, transport::tcp::{TCPTransport, TLS}, validate};
 use std::{
     collections::{HashMap, HashSet}, fs::File, io::{self, Read, Write}, path::Path, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}
 };
-use tmi::{
-    client::{read::RecvError, write::SendError, ConnectError, ReconnectError}, Badge, Client, MessageParseError
-};
-use tokio::sync::Mutex;
 
-use crate::{commands::points_traits::Giveaway, twitch_api::is_follower};
+use crate::{bot::TwitchClient, commands::points_traits::Giveaway, twitch_api::is_follower};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TwitchUser {
@@ -57,51 +55,46 @@ pub enum PermissionLevel {
     Broadcaster,
 }
 pub const ADMINS: &[&str] = &["KrapMatt", "ThatJK", "Samoan_317"];
-pub async fn is_broadcaster(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
-    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "broadcaster") || ADMINS.contains(&&*msg.sender().name().to_string()) {
-        return true;
-    } else {
-        _ = client.lock().await.privmsg(msg.channel(), "You are not a broadcaster. You can't use this command").send().await;
-        return false;
-    }
-    
-}
 
-pub fn is_subscriber(msg: &tmi::Privmsg<'_>) -> bool {
-    println!("{:?}", msg.badges().into_iter().collect::<Vec<&Badge<'_>>>());
-    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "subscriber" || badge.as_badge_data().name() == "moderator" ) || ADMINS.contains(&&*msg.sender().name().to_string()) {
+/// Generic permission checker for Twitch roles
+async fn has_perm(msg: &PrivmsgMessage, client: &TwitchClient, allowed_roles: &[&str], error_message: &str) -> bool {
+    let user_name = msg.sender.name.to_lowercase();
+
+    let has_role = msg.badges.iter().any(|badge| allowed_roles.contains(&badge.name.as_str()))
+        || ADMINS.contains(&user_name.as_str());
+
+    if has_role {
         true
     } else {
+        let _ = client.say(msg.channel_login.clone(), error_message.to_string()).await;
         false
     }
 }
 
-pub async fn is_moderator(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
-    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "moderator" || badge.as_badge_data().name() == "broadcaster") || ADMINS.contains(&&*msg.sender().name().to_string()) {
-        return true;
-    } else {
-        _ = client.lock().await.privmsg(msg.channel(), "You are not a moderator/broadcaster. You can't use this command").send().await;
-        return false;
-    }
-    
-}
-pub async fn is_vip(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
-    if msg.badges().into_iter().any(|badge| badge.as_badge_data().name() == "moderator" || badge.as_badge_data().name() == "broadcaster" || badge.as_badge_data().name() == "vip") || ADMINS.contains(&&*msg.sender().name().to_string()) {
-        return true;
-    } else {
-        _ = client.lock().await.privmsg(msg.channel(), "You are not a VIP/Moderator. You can't use this command").send().await;
-        return false;
-    }
-    
+pub async fn is_broadcaster(msg: &PrivmsgMessage, client: &TwitchClient) -> bool {
+    has_perm(msg, client, &["broadcaster"],"You are not a broadcaster. You can't use this command").await
 }
 
-pub async fn has_permission(msg: &tmi::Privmsg<'_>, client: Arc<Mutex<Client>>, level: PermissionLevel) -> bool {
+
+pub async fn is_subscriber(msg: &PrivmsgMessage, client: &TwitchClient) -> bool {
+    has_perm(msg, client, &["moderator", "subscriber"],"You are not a sub. You can't use this command").await
+}
+
+pub async fn is_moderator(msg: &PrivmsgMessage, client: &TwitchClient) -> bool {
+    has_perm(msg, client, &["moderator", "broadcaster"],"You are not a moderator/broadcaster. You can't use this command").await
+}
+
+pub async fn is_vip(msg: &PrivmsgMessage, client: &TwitchClient) -> bool {
+    has_perm(msg, client, &["moderator", "broadcaster", "vip"], "You are not a VIP/Moderator. You can't use this command").await
+}
+
+pub async fn has_permission(msg: &PrivmsgMessage, client: TwitchClient, level: PermissionLevel, oauth_token: &str, client_id: &str) -> bool {
     match level {
         PermissionLevel::User => true,
-        PermissionLevel::Follower => is_follower(msg, Arc::clone(&client)).await,
-        PermissionLevel::Moderator => is_moderator(msg, Arc::clone(&client)).await,
-        PermissionLevel::Broadcaster => is_broadcaster(msg, Arc::clone(&client)).await,
-        PermissionLevel::Vip => is_vip(msg, Arc::clone(&client)).await,
+        PermissionLevel::Follower => is_follower(msg, client, oauth_token, client_id).await,
+        PermissionLevel::Moderator => is_moderator(msg, &client).await,
+        PermissionLevel::Broadcaster => is_broadcaster(msg, &client).await,
+        PermissionLevel::Vip => is_vip(msg, &client).await,
     }
 }
 
@@ -115,25 +108,22 @@ pub enum BotError {
     JsonError(#[from] serde_json::Error),
     #[error("I/O error: {0}")]
     IoError(#[from] io::Error),
-    #[error("Send error: {0}")]
-    SendError(#[from] SendError),
-    #[error("Receive error: {0}")]
-    RecvError(#[from] RecvError),
-    #[error("Message parse error: {0}")]
-    MessageParseError(#[from] MessageParseError),
-    #[error("Reconnect error: {0}")]
-    ReconnectError(#[from] ReconnectError),
-    #[error("Serenity (Discord) error: {0}")]
-    SerenityError(#[from] serenity::Error),
     #[error("Database error: {0}")]
     SqlxError(#[from] sqlx::Error),
-    #[error("Connect error: {0}")]
-    ConnectError(#[from] ConnectError),
+    #[error("TwitchIRC Error: {0}")]
+    TwitchIrc(#[from] twitch_irc::Error<TCPTransport<TLS>, StaticLoginCredentials>),
+    #[error("Validate Error: {0}")]
+    Validate(#[from] validate::Error),
     #[error("{0}")]
     Custom(String),
 
 }
 
+impl From<()> for BotError {
+    fn from(_: ()) -> Self {
+        BotError::Custom("unit error".to_string())
+    }
+}
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub enum AnnouncementState {
@@ -195,6 +185,24 @@ impl ChannelConfig {
         self.queue_channel = channel_id.to_string();
         self.random_queue = false;
     }
+
+    pub fn new(channel: String) -> Self {
+        ChannelConfig { 
+            open: false, 
+            len: 1, 
+            teamsize: 1, 
+            combined: false, 
+            queue_channel: channel,
+            packages: vec!["Moderation".to_string()], 
+            runs: 0, 
+            announcement_config: AnnouncementConfig { state: AnnouncementState::Paused, interval: Duration::from_secs(10000), last_sent: 100 }, 
+            sub_only: false, 
+            prefix: "!".to_string(), 
+            random_queue: false, 
+            giveaway: Giveaway { duration: 100, max_tickets: 100, ticket_cost: 100, active: false }, 
+            points_config: PointsConfig { name: "Points".to_string(), interval: 10000, points_per_time: 0 } 
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -204,35 +212,70 @@ pub struct BotConfig {
 
 impl BotConfig {
     pub fn new() -> Self {
+        let mut hash = HashMap::new();
+        hash.insert("krapmatt".to_string(), ChannelConfig {open: false, len: 0, teamsize: 0, combined: false, queue_channel: "krapmatt".to_string(), packages: vec!["Moderation".to_string()], runs: 0, announcement_config: AnnouncementConfig { state: AnnouncementState::Paused, interval: Duration::from_secs(600), last_sent: 0 }, sub_only: false, prefix: "!".to_string(), random_queue: false, giveaway: Giveaway { duration: 1000, max_tickets: 10, ticket_cost: 10, active: false }, points_config: PointsConfig { name: "Dirt".to_string(), interval: 1000, points_per_time: 15 }});
         BotConfig {
-            channels: HashMap::new(),
+            channels: hash,
         }
     }
 
-    /// Load or create a unified config file for all channels
-    pub fn load_config() -> Self {
-        let config_path = "configs/config.json";
+    /// Load all channel configs from the database
+    pub async fn load_from_db(pool: &PgPool) -> BotResult<Self> {
+        let rows = sqlx::query!("SELECT channel_id, config_json FROM bot_config").fetch_all(pool).await?;
 
-        if Path::new(config_path).exists() {
-            let mut file = File::open(config_path).expect("Failed to open config file.");
-            let mut content = String::new();
-            file.read_to_string(&mut content)
-                .expect("Failed to read config file.");
-            serde_json::from_str(&content).expect("Failed to parse config file.")
-        } else {
-            let new_config = BotConfig::new();
-            new_config.save_config();
-            new_config
+        let mut channels = HashMap::new();
+        for row in rows {
+            let config: ChannelConfig = serde_json::from_value(row.config_json)
+                .map_err(|e| BotError::Custom(format!("Failed to parse config for channel {}: {:?}", row.channel_id, e)))?;
+            channels.insert(row.channel_id.clone(), config);
         }
+
+        Ok(BotConfig { channels })
     }
 
-    /// Save the unified config file
-    pub fn save_config(&self) {
-        let config_path = "configs/config.json";
-        let content = serde_json::to_string_pretty(self).expect("Failed to serialize config.");
-        let mut file = File::create(config_path).expect("Failed to create config file.");
-        file.write_all(content.as_bytes())
-            .expect("Failed to write config file.");
+    pub async fn save_channel(&self, pool: &PgPool, channel_id: &str) -> Result<(), BotError> {
+        if let Some(channel_config) = self.channels.get(channel_id) {
+            let config_json = serde_json::to_value(channel_config)
+                .map_err(|e| BotError::Custom(format!("Failed to serialize config: {:?}", e)))?;
+            sqlx::query!(
+                r#"
+                INSERT INTO bot_config (channel_id, config_json)
+                VALUES ($1, $2)
+                ON CONFLICT (channel_id) DO UPDATE
+                SET config_json = $2
+                "#,
+                channel_id, config_json
+            ).execute(pool).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn save_all(&self, pool: &PgPool) -> BotResult<()> {
+        for (channel_id, channel_config) in &self.channels {
+            let config_json = serde_json::to_value(channel_config)?;
+            
+            sqlx::query!(
+                r#"
+                INSERT INTO bot_config (channel_id, config_json)
+                VALUES ($1, $2)
+                ON CONFLICT (channel_id)
+                DO UPDATE SET config_json = $2
+                "#,
+                channel_id,
+                config_json
+            )
+            .execute(pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn update_channel<F>(&mut self, pool: &PgPool, channel_id: &str, mutator: F) -> BotResult<()> where F: FnOnce(&mut ChannelConfig) {
+        let cfg = self.channels.entry(channel_id.to_string()).or_insert_with(|| ChannelConfig::new(channel_id.to_string()));
+
+        mutator(cfg);
+        self.save_channel(pool, channel_id).await?;
+        Ok(())
     }
 
     pub fn get_channel_config(&self, channel_name: &str) -> Option<&ChannelConfig> {
@@ -259,12 +302,6 @@ impl BotConfig {
             })
     }
 
-    pub fn print_all_configs(&self) {
-        for (channel, config) in &self.channels {
-            println!("Channel: {}\nConfig: {:#?}", channel, config);
-        }
-    }
-
     pub fn is_group_allowed(&self, channel: &str, group_name: &str) -> bool {
         if let Some(channel_config) = self.channels.get(channel) {
             channel_config.packages.contains(&group_name.to_string())
@@ -275,7 +312,7 @@ impl BotConfig {
 }
 
 pub struct TemplateManager {
-    pub pool: Arc<SqlitePool>,
+    pub pool: Arc<PgPool>,
 }
 
 impl TemplateManager {
@@ -287,18 +324,18 @@ impl TemplateManager {
     ) -> Option<String> {
         let result = if let Some(channel) = channel_id {
             let res = sqlx::query!(
-                "SELECT template FROM commands_template WHERE package = ? AND command = ? AND channel_id = ?",
+                "SELECT template FROM commands_template WHERE package = $1 AND command = $2 AND channel_id = $3",
                 package, command, channel
             ).fetch_optional(&*self.pool).await;
             res.ok().flatten().map(|row| row.template)
         } else {
             let res = sqlx::query!(
-                "SELECT template FROM commands_template WHERE package = ? AND command = ? AND channel_id IS NULL",
+                "SELECT template FROM commands_template WHERE package = $1 AND command = $2 AND channel_id IS NULL",
                 package, command
             ).fetch_optional(&*self.pool).await;
             res.ok().flatten().map(|row| row.template)
         };
-        return result;
+        return result?;
     }
 
     pub async fn set_template(
@@ -311,7 +348,7 @@ impl TemplateManager {
         if let Some(channel) = channel_id {
             sqlx::query!(
                 "INSERT INTO commands_template (package, command, template, channel_id) 
-                VALUES (?, ?, ?, ?) 
+                VALUES ($1, $2, $3, $4) 
                 ON CONFLICT(channel_id, command) DO UPDATE SET template = excluded.template",
                 package,
                 command,
@@ -327,7 +364,7 @@ impl TemplateManager {
     pub async fn remove_template(&self, command: String, channel_id: Option<String>) -> BotResult<()> {
         if let Some(channel) = channel_id {
             sqlx::query!(
-                "DELETE FROM commands_template WHERE command = ? AND channel_id = ?",
+                "DELETE FROM commands_template WHERE command = $1 AND channel_id = $2",
                 command,
                 channel
             )
@@ -335,7 +372,7 @@ impl TemplateManager {
             .await?;
         } else {
             sqlx::query!(
-                "DELETE FROM commands_template WHERE command = ? AND channel_id IS NULL",
+                "DELETE FROM commands_template WHERE command = $1 AND channel_id IS NULL",
                 command
             )
             .execute(&*self.pool)

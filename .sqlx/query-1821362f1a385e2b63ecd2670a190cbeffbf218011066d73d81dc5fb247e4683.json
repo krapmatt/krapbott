@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE queue SET position = $1 WHERE channel_id = $2 AND twitch_name = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1821362f1a385e2b63ecd2670a190cbeffbf218011066d73d81dc5fb247e4683"
+}

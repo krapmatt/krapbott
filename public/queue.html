@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Queue</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #1a1a1a;
+            color: #e1e1e1;
+            text-align: center;
+            padding: 20px;
+            margin: 0;
+        }
+
+        /* Queue Container */
+        .queue-container {
+            max-width: 500px;
+            margin: 20px auto;
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(209, 108, 230, 0.3);
+            transition: transform 0.2s ease-in-out;
+        }
+
+        .queue-container:hover {
+            transform: scale(1.02);
+        }
+
+        /* Queue Title */
+        .queue-title {
+            font-size: 26px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #d16ce6;
+            text-shadow: 0 0 5px rgba(255, 102, 204, 0.5);
+        }
+
+        /* Table Styling */
+        table {
+            width: 100%;
+            margin-top: 10px;
+            border-collapse: collapse;
+            background: #1a1a1a;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: center;
+            border-bottom: 2px solid #333;
+        }
+
+        th {
+            background: #cc529f;
+            color: white;
+            font-size: 16px;
+        }
+
+        td {
+            background: #2a2a2a;
+            color: #e1e1e1;
+            font-size: 14px;
+        }
+
+        /* Table Rows */
+        tr:nth-child(even) td {
+            background: #242424;
+        }
+
+        /* Hover effect on table rows */
+        tr:hover td {
+            background: #ff66cc;
+            color: white;
+            transition: 0.3s ease-in-out;
+        }
+
+        /* Copyable Bungie Name */
+        .copyable {
+            cursor: pointer;
+            position: relative;
+        }
+
+        .copyable:hover {
+            background-color: rgba(255, 102, 204, 0.5);
+        }
+
+        /* Feedback Animation */
+        .copied {
+            background-color: #d16ce6 !important;
+            transition: background-color 0.3s ease-in-out;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="queue-container">
+        <div class="queue-title" id="queue-title">Loading Queue...</div>
+        <ul class="queue-list" id="queue-list"></ul>
+        <table>
+            <thead>
+                <tr>
+                    <th>Pos</th>
+                    <th>Twitch</th>
+                    <th>Bungie</th>
+                </tr>
+            </thead>
+            <tbody id="queue-body">
+                <!-- Queue data will be populated here -->
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        async function fetchQueue() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const streamer = urlParams.get("streamer");
+
+            if (!streamer) {
+                document.getElementById("queue-title").innerText = "No streamer specified";
+                return;
+            }
+
+            document.getElementById("queue-title").innerText = streamer.toUpperCase() + "'S QUEUE";
+
+            try {
+                const response = await fetch(`/queue/${streamer}`);  // Make sure this matches your API endpoint
+                const groupedData = await response.json();
+
+                const tbody = document.getElementById("queue-body");  
+                tbody.innerHTML = ""; // Clear previous data
+
+                if (groupedData.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="3">No data found for this channel.</td></tr>`;
+                    return;
+                }
+
+                groupedData.forEach((group, index) => {
+                    // Group Row
+                    const groupRow = document.createElement("tr");
+                    groupRow.innerHTML = `<td colspan="3"><strong>Group ${index + 1}</strong></td>`;
+                    tbody.appendChild(groupRow);
+
+                    // Grouped Entries
+                    group.forEach(entry => {
+                        const row = document.createElement("tr");
+                        row.dataset.twitchName = entry.twitch_name;
+                        row.dataset.position = entry.position;
+                        row.innerHTML = `
+                            <td>${entry.position}</td>
+                            <td>${entry.twitch_name}</td>
+                            <td class="copyable">${entry.bungie_name}</td>
+                        `;
+                        tbody.appendChild(row);
+                    });
+                });
+
+                // Reattach copy event listener
+                attachCopyListeners();
+            } catch (error) {
+                console.error("Failed to fetch queue:", error);
+                document.getElementById("queue-title").innerText = "Error loading queue";
+            }
+        }
+
+        function attachCopyListeners() {
+            document.querySelectorAll('.copyable').forEach(element => {
+                element.addEventListener('click', () => {
+                    const textToCopy = element.textContent.trim();
+
+                    // First, try Clipboard API
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(textToCopy)
+                            .then(() => showCopyFeedback(element))
+                            .catch(() => fallbackExecCommandCopy(textToCopy, element));
+                    } else {
+                        fallbackExecCommandCopy(textToCopy, element);
+                    }
+                });
+            });
+        }
+
+        function fallbackExecCommandCopy(text, element) {
+            const textarea = document.createElement("textarea");
+            textarea.value = text;
+
+            // Hide the textarea off-screen
+            textarea.style.position = "fixed";
+            textarea.style.top = "-9999px";
+            document.body.appendChild(textarea);
+
+            // Select the text in the textarea
+            textarea.select();
+
+            try {
+                const successful = document.execCommand("copy");
+                if (successful) {
+                    showCopyFeedback(element);
+                }
+            } catch (err) {
+                console.error("Fallback copy failed:", err);
+            } finally {
+                document.body.removeChild(textarea);
+            }
+        }
+
+        function showCopyFeedback(element) {
+            element.classList.add("copied");
+            setTimeout(() => {
+                element.classList.remove("copied");
+            }, 600);
+        }
+        // Run the fetch function on load
+        window.onload = fetchQueue;
+
+        // Auto-refresh every 30 seconds
+        setInterval(fetchQueue, 30000);
+    </script>
+</body>
+</html>

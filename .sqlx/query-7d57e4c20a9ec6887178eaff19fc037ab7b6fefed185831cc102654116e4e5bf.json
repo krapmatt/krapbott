@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO giveaway (channel_id, twitch_name, tickets)\n                    VALUES ($1, $2, $3)\n                    ON CONFLICT(twitch_name, channel_id) DO UPDATE SET tickets = giveaway.tickets + $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7d57e4c20a9ec6887178eaff19fc037ab7b6fefed185831cc102654116e4e5bf"
+}

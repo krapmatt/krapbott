@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO command_aliases (channel, alias, command)\n                        VALUES ($1, $2, $3)\n                        ON CONFLICT (channel, alias) DO UPDATE SET command = EXCLUDED.command",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d2a6a0e7d9c536a038c55ad63e5971c68b26615fc6fa55a7887edc88b8241c37"
+}

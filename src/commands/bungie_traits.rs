@@ -1,11 +1,11 @@
-use std::{borrow::BorrowMut, sync::Arc};
+use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use sqlx::SqlitePool;
-use tmi::{Client, Privmsg};
-use tokio::sync::{Mutex, RwLock};
+use sqlx::PgPool;
+use tokio::sync::RwLock;
+use twitch_irc::message::PrivmsgMessage;
 
-use crate::{api::{get_master_challenges, get_membershipid}, bot::BotState, bot_commands::reply_to_message, commands::{normalize_twitch_name, traits::CommandT, words}, database::load_membership, models::{AliasConfig, BotError, BotResult, PermissionLevel}, queue::is_valid_bungie_name};
+use crate::{api::{get_master_challenges, get_membershipid}, bot::{BotState, TwitchClient}, commands::{normalize_twitch_name, traits::CommandT, words}, database::load_membership, models::{AliasConfig, BotResult, PermissionLevel}, queue::is_valid_bungie_name};
 
 pub struct TotalCommand;
 
@@ -23,9 +23,9 @@ impl CommandT for TotalCommand {
         PermissionLevel::User
     }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
+    fn execute(&self, msg: PrivmsgMessage, client: TwitchClient, pool: PgPool, bot_state: Arc<RwLock<BotState>>, _alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
-            bot_state.read().await.total_raid_clears(&msg, client.lock().await.borrow_mut(), &pool).await?;
+            bot_state.read().await.total_raid_clears(&msg, &client, &pool).await?;
             Ok(())
         })
     }
@@ -47,21 +47,20 @@ impl CommandT for MasterChalCommand {
         PermissionLevel::User
     }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
+    fn execute(&self, msg: PrivmsgMessage, client: TwitchClient, pool: PgPool, bot_state: Arc<RwLock<BotState>>, _alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
-            println!("Here");
             let bot_state = bot_state.read().await;
             let words: Vec<&str> = words(&msg);
 
             if words.len() <= 1 {
-                reply_to_message(&msg, client.lock().await.borrow_mut(), "❌ Invalid usage").await?;
+                client.say_in_reply_to(&msg, "❌ Invalid usage".to_string()).await?;
                 return Ok(());
             }
 
             let activity = words[1].to_string();
 
             let membership = if words.len() == 2 {
-                load_membership(&pool, msg.sender().name().to_string()).await
+                load_membership(&pool, msg.sender.name.clone()).await
             } else {
                 let name = words[2..].join(" ");
                 if let Some(bungie_name) = is_valid_bungie_name(&name) {
@@ -74,14 +73,14 @@ impl CommandT for MasterChalCommand {
             let membership = match membership {
                 Some(m) if m.type_m != -1 => m,
                 _ => {
-                    reply_to_message(&msg, client.lock().await.borrow_mut(), "Use a correct bungiename!").await?;
+                    client.say_in_reply_to(&msg, "Use a correct bungiename!".to_string()).await?;
                     return Ok(());
                 }
             };
 
             let chall_vec = get_master_challenges(membership.type_m, membership.id, &bot_state.x_api_key, activity).await?;
 
-            reply_to_message(&msg, client.lock().await.borrow_mut(), &chall_vec.join(" || ")).await?;
+            client.say_in_reply_to(&msg, chall_vec.join(" || ")).await?;
 
             Ok(())
         })

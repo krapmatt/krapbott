@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM command_disabled WHERE channel = $1 AND command = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5bd94a17d74d621ff1db4e078d6a9838be3b8820a0fe59ed7dfd21e92925f511"
+}

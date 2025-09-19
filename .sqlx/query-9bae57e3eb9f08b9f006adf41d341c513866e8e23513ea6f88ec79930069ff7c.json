@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO commands (command, reply, channel) \n        VALUES ($1, $2, $3) \n        ON CONFLICT(command) DO UPDATE SET reply = excluded.reply",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9bae57e3eb9f08b9f006adf41d341c513866e8e23513ea6f88ec79930069ff7c"
+}

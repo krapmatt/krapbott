@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO banlist (membership_id, banned_until, reason) VALUES ($1, NULL, $2) ON CONFLICT(membership_id) DO UPDATE SET reason = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c433a644b08eb683fad9d425c3a9c7a9dda1ba8c0684037974fe3a4dc7f77823"
+}

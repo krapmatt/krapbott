@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM queue WHERE channel_id = $1 AND twitch_name = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "32d060ef56457df05c2a2d22c7aa64a0a77d3dc9d7e30e5981f4160a6df6a43a"
+}

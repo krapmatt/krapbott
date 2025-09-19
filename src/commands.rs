@@ -9,13 +9,14 @@ pub mod bungie_traits;
 
 use crate::bot::CommandMap;
 use crate::bot::DispatcherCache;
+use crate::bot::TwitchClient;
+use crate::commands::bungie_traits::MasterChalCommand;
+use crate::commands::bungie_traits::TotalCommand;
 use crate::commands::announcement::add_announcement_command;
 use crate::commands::announcement::announcement_freq_command;
 use crate::commands::announcement::announcement_state_command;
 use crate::commands::announcement::play_announcement_command;
 use crate::commands::announcement::remove_announcement_command;
-use crate::commands::bungie_traits::MasterChalCommand;
-use crate::commands::bungie_traits::TotalCommand;
 use crate::commands::moderation::addcommand;
 use crate::commands::moderation::addglobalcommand;
 use crate::commands::moderation::addpackage;
@@ -79,12 +80,12 @@ use crate::{
 
 use futures::future::BoxFuture;
 use serde::Deserialize;
-use sqlx::SqlitePool;
+use sqlx::PgPool;
+use twitch_irc::message::PrivmsgMessage;
 
 use std::collections::HashSet;
 use std::vec;
 use std::{collections::HashMap, sync::Arc};
-use tmi::Privmsg;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 
@@ -93,9 +94,9 @@ use tokio::sync::RwLock;
 
 type CommandHandler = Arc<
     dyn Fn(
-            Privmsg<'static>,
-            Arc<Mutex<tmi::Client>>,
-            SqlitePool,
+            PrivmsgMessage,
+            Arc<Mutex<TwitchClient>>,
+            PgPool,
             Arc<RwLock<BotState>>,
             AliasConfig
         ) -> BoxFuture<'static, BotResult<()>>
@@ -244,8 +245,8 @@ lazy_static::lazy_static!{
     };
 }
 
-pub fn words<'a>(msg: &'a Privmsg<'a>) -> Vec<&'a str> {
-    msg.text().split_ascii_whitespace().collect()
+pub fn words<'a>(msg: &'a PrivmsgMessage) -> Vec<&'a str> {
+    msg.message_text.split_ascii_whitespace().collect()
 }
 
 pub fn normalize_twitch_name(s: &str) -> &str {
@@ -256,27 +257,35 @@ pub struct CommandOverride {
     command_name: String
 }
 
-pub async fn update_dispatcher_if_needed(channel: &str, config: &BotConfig, pool: &SqlitePool, dispatcher_cache: Arc<RwLock<DispatcherCache>>) -> BotResult<()> {
+pub async fn update_dispatcher_if_needed(channel: &str, config: &BotConfig, pool: &PgPool, dispatcher_cache: Arc<RwLock<DispatcherCache>>) -> BotResult<()> {
+    println!("Here7,5");
     let alias_config = fetch_aliases_from_db(channel, pool).await?;
     let new_dispatcher = create_dispatcher(config, channel, &alias_config);
+    println!("Here8");
+    {
+        let mut cache = dispatcher_cache.write().await;
+        let old_dispatcher = cache.get(channel);
+        println!("Here9");
+        match old_dispatcher {
+            Some(existing) => {
+                let existing_keys: HashSet<_> = existing.keys().collect();
+                let new_keys: HashSet<_> = new_dispatcher.keys().collect();
+                if existing_keys == new_keys {
+                    return Ok(()); // early exit, lock dropped here
+                }
+            }
+            None => {
+                println!("Dispatcher created for {channel}");
+            }
+        };
 
-    let mut cache = dispatcher_cache.write().await;
-    let old_dispatcher = cache.get(channel);
-    match old_dispatcher {
-        Some(existing) => {
-            
-            let existing_keys: HashSet<_> = existing.keys().collect();
-            let new_keys: HashSet<_> = new_dispatcher.keys().collect();
-            if existing_keys == new_keys {
-                return Ok(());
-            } 
-        }
-        None => { println!("Dispatcher created for {channel}"); },
-    };
-
-    println!("Dispatcher updated for channel: {}: {:?}", channel, new_dispatcher.keys());
-    cache.insert(channel.to_string(), new_dispatcher);
-    
+        println!(
+            "Dispatcher updated for channel: {}: {:?}",
+            channel,
+            new_dispatcher.keys()
+        );
+        cache.insert(channel.to_string(), new_dispatcher);
+    }
 
     Ok(())
 }
@@ -330,12 +339,12 @@ pub fn parse_template(template: &str, variables: &HashMap<String, String>) -> St
     }
     result
 }
-pub fn generate_variables(msg: &Privmsg<'_>) -> HashMap<String, String> {
+pub fn generate_variables(msg: &PrivmsgMessage) -> HashMap<String, String> {
     let mut variables = HashMap::new();
-    variables.insert("sender".to_string(), msg.sender().name().to_string());
-    variables.insert("channel".to_string(), msg.channel().to_string());
+    variables.insert("sender".to_string(), msg.sender.name.clone());
+    variables.insert("channel".to_string(), msg.channel_login.clone());
     variables.insert("receiver".to_string(), {
-        let words: Vec<&str> = msg.text().split_ascii_whitespace().collect();
+        let words: Vec<&str> = words(msg);
         if words.len() > 1 {
             let mut twitch_name = words[1].to_string();
             if twitch_name.starts_with("@") {

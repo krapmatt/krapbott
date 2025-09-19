@@ -317,7 +317,10 @@
                 notification.style.display = "none";
             }, 5000);
         }
-        const baseURL = window.location.origin;
+        const baseURL =
+        window.location.hostname.includes("shuttle.app")
+            ? "" // same origin on Shuttle (https://krapbott-xxx.shuttle.app)
+            : "http://127.0.0.1:8000"; // local dev
         async function updateQueueToggleButton() {
             try {
                 const response = await fetch(`${baseURL}/queue/state`);
@@ -335,13 +338,33 @@
         }
         async function fetchQueueForChannel() {
             try {
-                const response = await fetch(`${baseURL}/queue`, {
-                    method: 'GET',
-                    credentials: 'same-origin', // Ensure cookies are sent
+                const response = await fetch("/queue", {
+                    method: "GET",
+                    credentials: "include" // important so cookies go with the request
                 });
-        
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+
                 const groupedData = await response.json();
-                const runCounterResponse = await fetch(`${baseURL}/run-counter/`, {
+                console.log("Queue API response:", groupedData);
+
+                if (groupedData.error === "Not logged in") {
+                    window.location.href = "https://id.twitch.tv/oauth2/authorize?client_id=mtcgb9falyzs4n3j7x3rqr51ho9gxr&redirect_uri=https://krapbott-rajo.shuttle.app/auth/callback&response_type=code"; // redirect to your login page
+                    return;
+                }
+
+                if (!Array.isArray(groupedData.queue)) {
+                    showNotification("Unexpected response from server.");
+                    return;
+                }
+
+                const queue = groupedData.queue;
+                if (queue.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="3">No data found for this channel.</td></tr>`;
+                }
+                const runCounterResponse = await fetch(`${baseURL}/queue/run-counter`, {
                     method: 'GET',
                     credentials: 'same-origin',
                 });
@@ -352,12 +375,12 @@
                 const tbody = document.getElementById("queue-body");
                 tbody.innerHTML = "";
 
-                if (groupedData.length === 0) {
+                if (queue.length === 0) {
                     tbody.innerHTML = `<tr><td colspan="3">No data found for this channel.</td></tr>`;
                     return;
                 }
         
-                groupedData.forEach((group, index) => {
+                queue.forEach((group, index) => {
                     const groupRow = document.createElement("tr");
                     groupRow.classList.add("group-row");
                     groupRow.innerHTML = `<td colspan="4"><strong>Group ${index + 1}</strong></td>`;
@@ -428,7 +451,7 @@
                     button.addEventListener('click', async () => {
                         const twitchName = button.getAttribute('data-twitch');
                         try {
-                            const removeResponse = await fetch(`${baseURL}/remove`, {
+                            const removeResponse = await fetch(`${baseURL}/queue/remove`, {
                                 method: 'POST',
                                 headers: {
                                     'Content-Type': 'application/json',
@@ -448,6 +471,7 @@
                     });
                 });
             } catch (error) {
+                console.error("Failed to fetch queue:", error);
                 showNotification("Failed to fetch queue data. Please check the channel name and try again.");
             }
         }
@@ -486,13 +510,13 @@
         });
         
         document.getElementById("login").addEventListener("click", function() {
-            window.location.href = "https://id.twitch.tv/oauth2/authorize?client_id=mtcgb9falyzs4n3j7x3rqr51ho9gxr&redirect_uri=https://krapmatt.bounceme.net/auth/callback&response_type=code";
+            window.location.href = "https://id.twitch.tv/oauth2/authorize?client_id=mtcgb9falyzs4n3j7x3rqr51ho9gxr&redirect_uri=https://krapbott-rajo.shuttle.app/auth/callback&response_type=code";
         });
 
         function viewerQueue() {
             const profileName = document.getElementById('login-text')
             
-            window.location.href = `https://krapmatt.bounceme.net/queue.html?streamer=${profileName.textContent}`;
+            window.location.href = `/queue.html?streamer=${profileName.textContent}`;
         }
         function aliasSite() {
             window.location.href = '/alias.html';
@@ -500,7 +524,7 @@
 
         document.getElementById("next-button").addEventListener("click", async function() {
             try {
-                const response = await fetch(`${baseURL}/next`, {
+                const response = await fetch(`${baseURL}/queue/next`, {
                     method: "POST",
                     credentials: "same-origin",
                 });
@@ -579,7 +603,7 @@
         async function updateQueueOrder(newQueueOrder) {
             try {
                 console.log(newQueueOrder);
-                const response = await fetch(`${baseURL}/reorder`, {
+                const response = await fetch(`${baseURL}/queue/reorder`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -601,23 +625,25 @@
         });
         
         async function checkLoginStatus() {
-            const response = await fetch("https://krapmatt.bounceme.net/auth/session", {
-                method: "GET",
-                credentials: "same-origin"
-            });
+            try {
+                const response = await fetch("/auth/session", { credentials: "include" });
 
-            if (response.ok) {
-                const data = await response.json();
-                if (data.logged_in) {
-                    document.getElementById('login').style.display = 'none';
-                    const profileImg = document.getElementById('login-status');
-                    profileImg.src = data.profile_pp || '';
-                    profileImg.style.display = 'block';
-                    const profileName = document.getElementById('login-text')
-                    profileName.textContent = data.username;
-                } else {
-                    document.getElementById('login').style.display = 'block';
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.logged_in) {
+                        document.getElementById('login').style.display = 'none';
+                        const profileImg = document.getElementById('login-status');
+                        profileImg.src = data.profile_pp || '';
+                        profileImg.style.display = 'block';
+                        document.getElementById('login-text').textContent = data.username;
+                        return;
+                    }
                 }
+                // Show login if not logged in or fetch failed
+                document.getElementById('login').style.display = 'block';
+            } catch (err) {
+                console.error("Login check failed:", err);
+                document.getElementById('login').style.display = 'block';
             }
         }
 

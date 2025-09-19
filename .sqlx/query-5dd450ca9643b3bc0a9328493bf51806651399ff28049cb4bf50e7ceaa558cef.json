@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO currency (twitch_name, points, channel) VALUES ($1, $2, $3) \n                    ON CONFLICT(twitch_name, channel) DO UPDATE SET points = currency.points + $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5dd450ca9643b3bc0a9328493bf51806651399ff28049cb4bf50e7ceaa558cef"
+}

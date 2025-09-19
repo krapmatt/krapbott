@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_name, bungie_name FROM queue WHERE channel_id = $1 ORDER BY position ASC, locked_first DESC, group_priority ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "bungie_name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "a37f9eec2602afb4f49a7b21d322ed658892cc434c1e631b39b5c6672a90f4c4"
+}

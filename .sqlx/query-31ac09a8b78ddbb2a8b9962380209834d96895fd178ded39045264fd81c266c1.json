@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO bot_config (channel_id, config_json)\n                VALUES ($1, $2)\n                ON CONFLICT (channel_id) DO UPDATE\n                SET config_json = $2\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "31ac09a8b78ddbb2a8b9962380209834d96895fd178ded39045264fd81c266c1"
+}

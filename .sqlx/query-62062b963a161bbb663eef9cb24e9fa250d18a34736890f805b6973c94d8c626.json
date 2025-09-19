@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT users.twitch_name, users.profile_pp, sessions.expires_at \n                 FROM sessions \n                 JOIN users ON users.id = sessions.twitch_id \n                 WHERE sessions.session_token = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "profile_pp",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "expires_at",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "62062b963a161bbb663eef9cb24e9fa250d18a34736890f805b6973c94d8c626"
+}

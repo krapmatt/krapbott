@@ -1,14 +1,16 @@
+use chrono::{Datelike, Duration, NaiveDateTime, Utc};
 use futures::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{query, SqlitePool};
+use shuttle_warp::warp::{self, filters::reply::header, reject::Rejection, reply::Reply, Filter};
+use sqlx::{query, types::time::{self, PrimitiveDateTime}, PgPool};
 use uuid::Uuid;
 use std::{collections::{HashMap, HashSet}, sync::Arc};
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use warp::{http::StatusCode, reject::Rejection, reply::{json, Reply}, Filter};
-
+use shuttle_warp::warp::http::StatusCode;
+use crate::{bot, warp::reply::json};
 use crate::{bot::BotState, commands::{update_dispatcher_if_needed, COMMAND_GROUPS}, models::BotConfig};
 
 #[derive(Serialize, Clone, Debug)]
@@ -48,62 +50,74 @@ pub async fn connect_to_obs() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn get_queue_handler(cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn get_queue_handler(cookies: Option<String>, pool: Arc<PgPool>, bot_state: Arc<RwLock<BotState>>) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let channel_id = format!("#{}", twitch_name.to_ascii_lowercase());
-        let mut config = BotConfig::load_config();
-        let config = config.get_channel_config_mut(&channel_id);
+        let config = &bot_state.read().await.config;
+        let config = config.get_channel_config(&twitch_name).unwrap();
         let queue_channel = &config.queue_channel;
 
         let queue = sqlx::query_as!(
             QueueEntry,
-            "SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
+            "SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = $1 ORDER BY position ASC",
             queue_channel
         ).fetch_all(&*pool).await.map_err(|_| warp::reject::reject())?;
 
-        if queue.is_empty() {
-            return Ok(warp::reply::json(&queue));
-        }
-        let grouped_queue: Vec<Vec<QueueEntry>> = queue
-            .chunks(config.teamsize)
-            .map(|chunk| chunk.to_vec())
-            .collect();
-        return Ok(warp::reply::json(&grouped_queue));
+        let grouped_queue: Vec<Vec<QueueEntry>> = if queue.is_empty() {
+            vec![]
+        } else {
+            queue.chunks(config.teamsize).map(|chunk| chunk.to_vec()).collect()
+        };
+        return Ok(warp::reply::with_header(
+                warp::reply::json(&serde_json::json!({
+                    "logged_in": true,
+                    "queue": grouped_queue
+                })),
+                warp::http::header::CACHE_CONTROL,
+                "no-store",
+            ));
         
     }
-    Ok(warp::reply::json(&serde_json::json!({ "error": "Not logged in" })))
+    Ok(warp::reply::with_header(
+        warp::reply::json(&serde_json::json!({
+            "logged_in": false,
+            "queue": []
+        })),
+        warp::http::header::CACHE_CONTROL,
+        "no-store",
+    ))
 }
 
-pub async fn remove_from_queue_handler(cookies: Option<String>, body: serde_json::Value, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn remove_from_queue_handler(cookies: Option<String>, body: serde_json::Value, pool: Arc<PgPool>) -> Result<impl warp::Reply, warp::Rejection> {
     let twitch_name = body["twitch_name"].as_str().ok_or_else(|| warp::reject())?;
 
     if let Some(name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let channel_id = format!("#{}", name.to_ascii_lowercase());
+        let channel_id = format!("{}", name.to_ascii_lowercase());
         let mut queue_channel = String::new();
-        if let Some(config)  = BotConfig::load_config().get_channel_config(&channel_id) {
+        if let Ok(config)  = BotConfig::load_from_db(&pool).await {
+            let config = config.get_channel_config(&channel_id).unwrap();
             queue_channel = config.queue_channel.clone()
         }
         let position = sqlx::query!(
-            "SELECT position FROM queue WHERE twitch_name = ? AND channel_id = ?",
+            "SELECT position FROM queue WHERE twitch_name = $1 AND channel_id = $2",
             twitch_name, queue_channel
         ).fetch_optional(&*pool).await.map_err(|_| warp::reject())?;
     
         if position.is_some() {
             // Remove the user from queue
             sqlx::query!(
-                "DELETE FROM queue WHERE twitch_name = ? AND channel_id = ?",
+                "DELETE FROM queue WHERE twitch_name = $1 AND channel_id = $2",
                 twitch_name, queue_channel
             ).execute(&*pool).await.map_err(|_| warp::reject())?;
     
             let queue_entries = sqlx::query!(
-                "SELECT twitch_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
+                "SELECT twitch_name FROM queue WHERE channel_id = $1 ORDER BY position ASC",
                 queue_channel
             ).fetch_all(&*pool).await.map_err(|_| warp::reject())?;
     
             let mut new_position = 1;
             for entry in queue_entries {
                 sqlx::query!(
-                    "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
+                    "UPDATE queue SET position = $1 WHERE twitch_name = $2 AND channel_id = $3",
                     new_position, entry.twitch_name, queue_channel
                 ).execute(&*pool).await.map_err(|_| warp::reject())?;
                 new_position += 1;
@@ -128,11 +142,11 @@ pub struct QueueUpdate {
     pub position: i64,
 }
 
-pub async fn update_queue_order(cookies: Option<String>, data: UpdateQueueOrderRequest, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn update_queue_order(cookies: Option<String>, data: UpdateQueueOrderRequest, pool: Arc<PgPool>, bot_state: Arc<RwLock<BotState>>) -> Result<impl warp::Reply, warp::Rejection> {
     println!("{:?}", data);
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let channel_id = format!("#{}", twitch_name.to_ascii_lowercase());
-        let queue_channel = BotConfig::load_config()
+        let channel_id = twitch_name.to_ascii_lowercase();
+        let queue_channel = bot_state.read().await.config
             .get_channel_config(&channel_id)
             .map(|c| c.queue_channel.clone())
             .ok_or_else(warp::reject)?;
@@ -140,7 +154,7 @@ pub async fn update_queue_order(cookies: Option<String>, data: UpdateQueueOrderR
 
         // Step 1: TEMP SHIFT all positions up to avoid collisions
         sqlx::query!(
-            "UPDATE queue SET position = position + 10000 WHERE channel_id = ?",
+            "UPDATE queue SET position = position + 10000 WHERE channel_id = $1",
             queue_channel
         ).execute(&mut *tx).await.map_err(|_| warp::reject())?;
 
@@ -148,7 +162,7 @@ pub async fn update_queue_order(cookies: Option<String>, data: UpdateQueueOrderR
         for (index, entry) in data.new_order.iter().enumerate() {
             let new_pos = index as i32 + 1;
             sqlx::query!(
-                "UPDATE queue SET position = ? WHERE twitch_name = ? AND channel_id = ?",
+                "UPDATE queue SET position = $1 WHERE twitch_name = $2 AND channel_id = $3",
                 new_pos, entry.twitch_name, queue_channel
             ).execute(&mut *tx).await.map_err(|_| warp::reject())?;
         }
@@ -161,7 +175,7 @@ pub async fn update_queue_order(cookies: Option<String>, data: UpdateQueueOrderR
     return Err(warp::reject())
 }
 
-pub async fn next_queue_handler(cookies: Option<String>, sender: Arc<UnboundedSender<(String, String)>>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn next_queue_handler(cookies: Option<String>, sender: Arc<UnboundedSender<(String, String)>>, pool: Arc<PgPool>) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
         if let Err(err) = sender.send((twitch_name, "next".to_string())) {
             eprintln!("Failed to send message: {:?}", err);
@@ -181,10 +195,10 @@ pub async fn next_queue_handler(cookies: Option<String>, sender: Arc<UnboundedSe
     ));
 }
 
-pub async fn get_run_counter_handler(cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn get_run_counter_handler(cookies: Option<String>, pool: Arc<PgPool>, bot_state: Arc<RwLock<BotState>>) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let channel_id = format!("#{}", twitch_name.to_ascii_lowercase());
-        let config = BotConfig::load_config();
+        let channel_id = twitch_name.to_ascii_lowercase();
+        let config = &bot_state.write().await.config;
         if let Some(channel_config) = config.get_channel_config(&channel_id) {
             if let Some(config) = config.get_channel_config(&channel_config.queue_channel) {
                 let runs = config.runs;
@@ -195,21 +209,20 @@ pub async fn get_run_counter_handler(cookies: Option<String>, pool: Arc<SqlitePo
     Err(warp::reject())
     
 }
-pub async fn get_queue_state_handler(cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
-    if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let config = BotConfig::load_config();
-        let channel_id = format!("#{}", twitch_name.to_ascii_lowercase());
-        let config = config.get_channel_config(&channel_id).unwrap();
+pub async fn get_queue_state_handler(cookies: Option<String>, pool: Arc<PgPool>, bot_state: Arc<RwLock<BotState>>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Some(channel_id) = get_twitch_name_from_cookie(cookies, &*pool).await {
+        let config = &bot_state.read().await.config;
+        let config = config.get_channel_config(&channel_id.to_ascii_lowercase()).unwrap();
         return Ok(warp::reply::json(
         &serde_json::json!({ "is_open": config.open }),
         ));
     }
     Err(warp::reject())
 }
-pub async fn toggle_queue_handler(toggle_action: String, cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn toggle_queue_handler(toggle_action: String, cookies: Option<String>, pool: Arc<PgPool>, bot_state: Arc<RwLock<BotState>>) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let mut channel_name = format!("#{}", twitch_name.to_ascii_lowercase());
-        let mut config = BotConfig::load_config();
+        let mut channel_name = twitch_name.to_ascii_lowercase();
+        let mut config = bot_state.write().await.config.clone();
         if let Some(name) = config.get_channel_config(&channel_name) {
             channel_name = name.queue_channel.clone();
         }
@@ -231,7 +244,7 @@ pub async fn toggle_queue_handler(toggle_action: String, cookies: Option<String>
                 None
             }
         }).collect::<Vec<_>>();
-        config.save_config();
+        let _ = config.save_all(&pool).await;
         
         return Ok(warp::reply::json(
             &serde_json::json!({
@@ -246,7 +259,7 @@ pub async fn toggle_queue_handler(toggle_action: String, cookies: Option<String>
 
 const TWITCH_CLIENT_ID: &str = "mtcgb9falyzs4n3j7x3rqr51ho9gxr";
 const TWITCH_CLIENT_SECRET: &str = "jqky6ivqcn83kx6u1nlkx29hsgirjw";
-const TWITCH_REDIRECT_URI: &str = "https://krapmatt.bounceme.net/auth/callback";
+const TWITCH_REDIRECT_URI: &str = "https://krapbott-rajo.shuttle.app/auth/callback";
 
 #[derive(Debug, Deserialize)]
 pub struct AuthCallbackQuery {
@@ -272,7 +285,7 @@ struct TokenRequest<'a> {
 }
 
 /// Exchanges the code for an access token and fetches Twitch user info
-pub async fn twitch_callback(query: AuthCallbackQuery, pool: Arc<SqlitePool>) -> Result<impl Reply, Rejection> {
+pub async fn twitch_callback(query: AuthCallbackQuery, pool: Arc<PgPool>) -> Result<impl Reply, Rejection> {
     let client = Client::new();
     let token_request = TokenRequest {
         client_id: &TWITCH_CLIENT_ID,
@@ -290,11 +303,20 @@ pub async fn twitch_callback(query: AuthCallbackQuery, pool: Arc<SqlitePool>) ->
             eprintln!("Token request failed: {:?}", e);
             warp::reject::not_found()
         })?;
-    
-        let token_data: TwitchTokenResponse = token_response.json().await.map_err(|e| {
-            eprintln!("Token request failed: {:?}", e);
+        
+        let token_text = token_response.text().await.map_err(|e| {
+            eprintln!("Failed to read Twitch token response: {:?}", e);
             warp::reject::not_found()
         })?;
+
+        let token_data: TwitchTokenResponse = match serde_json::from_str(&token_text) {
+            Ok(data) => data,
+            Err(err) => {
+                eprintln!("Failed to parse Twitch token response: {}\nResponse: {}", err, token_text);
+                return Err(warp::reject::not_found());
+            }
+        };
+        
         let twitch_user = get_user_info(&token_data.access_token).await.map_err(|e| {
             eprintln!("Token request failed: {:?}", e);
             warp::reject::not_found()
@@ -302,13 +324,14 @@ pub async fn twitch_callback(query: AuthCallbackQuery, pool: Arc<SqlitePool>) ->
 
         if let Err(e) = save_user_tokens(&twitch_user, &token_data, pool.clone()).await {
             eprintln!("Failed to save tokens: {:?}", e);
+            return Err(warp::reject::not_found());
         }
 
         let session_token = Uuid::new_v4().to_string();
-        let expires_at = chrono::Utc::now().timestamp() + 604800;
+        let expires_at = Utc::now().timestamp() + 604800;
 
         sqlx::query!(
-            "INSERT INTO sessions (session_token, twitch_id, expires_at) VALUES (?, ?, ?)",
+            "INSERT INTO sessions (session_token, twitch_id, expires_at) VALUES ($1, $2, $3)",
             session_token, twitch_user.id, expires_at
         ).execute(&*pool).await.map_err(|e| {
             eprintln!("Failed to store session: {:?}", e);
@@ -324,6 +347,8 @@ pub async fn twitch_callback(query: AuthCallbackQuery, pool: Arc<SqlitePool>) ->
 
         Ok(warp::reply::with_status(res, warp::http::StatusCode::FOUND))
 }
+
+
 
 #[derive(Debug, Deserialize)]
 struct TwitchUser {
@@ -350,9 +375,8 @@ async fn get_user_info(access_token: &str) -> Result<TwitchUser, reqwest::Error>
     })
 }
 
-async fn save_user_tokens(user: &TwitchUser, tokens: &TwitchTokenResponse, pool: Arc<SqlitePool>) -> Result<(), sqlx::Error> {
-    let expires_at = chrono::Utc::now().timestamp() + tokens.expires_in;
-
+async fn save_user_tokens(user: &TwitchUser, tokens: &TwitchTokenResponse, pool: Arc<PgPool>) -> Result<(), sqlx::Error> {
+    let expires_at = Utc::now().timestamp() + tokens.expires_in as i64;
     sqlx::query!(
         "INSERT INTO users (id, twitch_name, access_token, refresh_token, expires_at, profile_pp) 
          VALUES ($1, $2, $3, $4, $5, $6)
@@ -364,7 +388,7 @@ async fn save_user_tokens(user: &TwitchUser, tokens: &TwitchTokenResponse, pool:
     Ok(())
 }
 
-pub async fn check_session(cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl Reply, Rejection> {
+pub async fn check_session(cookies: Option<String>, pool: Arc<PgPool>) -> Result<impl Reply, Rejection> {
     if let Some(cookies) = cookies {
         // Extract session ID (Twitch user ID)
         if let Some(session_token) = cookies
@@ -376,7 +400,7 @@ pub async fn check_session(cookies: Option<String>, pool: Arc<SqlitePool>) -> Re
                 "SELECT users.twitch_name, users.profile_pp, sessions.expires_at 
                  FROM sessions 
                  JOIN users ON users.id = sessions.twitch_id 
-                 WHERE sessions.session_token = ?1",
+                 WHERE sessions.session_token = $1",
                 session_token
             ).fetch_optional(&*pool).await.map_err(|e| {
                 eprintln!("DB Error: {:?}", e);
@@ -399,7 +423,7 @@ pub async fn check_session(cookies: Option<String>, pool: Arc<SqlitePool>) -> Re
     Ok(warp::reply::json(&serde_json::json!({ "logged_in": false })))
 }
 
-pub async fn check_authorization(cookie: Option<String>, pool: Arc<SqlitePool>) -> Result<String, Rejection> {
+pub async fn check_authorization(cookie: Option<String>, pool: Arc<PgPool>, bot_state: Arc<RwLock<BotState>>) -> Result<String, Rejection> {
     if let Some(cookies) = cookie {
         if let Some(session_token) = cookies
             .split(';')
@@ -410,19 +434,19 @@ pub async fn check_authorization(cookie: Option<String>, pool: Arc<SqlitePool>) 
                 "SELECT users.twitch_name, sessions.expires_at 
                  FROM sessions 
                  JOIN users ON users.id = sessions.twitch_id 
-                 WHERE sessions.session_token = ?1",
+                 WHERE sessions.session_token = $1",
                 session_token
             ).fetch_optional(&*pool).await.map_err(|_| warp::reject::not_found())?;
 
             if let Some(session) = session {
                 let expire= chrono::Utc::now().timestamp() + 604800;
                 let _ = sqlx::query!(
-                    "UPDATE sessions SET expires_at = ?1 WHERE session_token = ?2",
+                    "UPDATE sessions SET expires_at = $1 WHERE session_token = $2",
                     expire, session_token
                 ).execute(&*pool).await;
                 if session.expires_at > chrono::Utc::now().timestamp() {
-                    let name = format!("#{}", session.twitch_name.unwrap());
-                    let config = BotConfig::load_config();
+                    let name = session.twitch_name.unwrap().to_ascii_lowercase();
+                    let config = &bot_state.read().await.config;
                     if config.channels.contains_key(&name) {
                         return Ok(name);
                     }
@@ -434,9 +458,10 @@ pub async fn check_authorization(cookie: Option<String>, pool: Arc<SqlitePool>) 
     Err(warp::reject::custom(NotAuthorizedError))
 }
 
-pub fn with_authorization(pool: Arc<SqlitePool>) -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
+pub fn with_authorization(pool: Arc<PgPool>, bot_state: Arc<RwLock<BotState>>) -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
     warp::header::optional("cookie")
         .and(warp::any().map(move || pool.clone()))
+        .and(warp::any().map(move || bot_state.clone()))
         .and_then(check_authorization)
 }
 
@@ -446,14 +471,14 @@ struct NotAuthorizedError;
 
 impl warp::reject::Reject for NotAuthorizedError {}
 
-pub async fn get_public_queue(streamer: String, pool: Arc<SqlitePool>) -> Result<impl Reply, warp::Rejection> {
-    let channel_id = format!("#{}", streamer.to_ascii_lowercase());
-    let mut config = BotConfig::load_config();
-    let config = config.get_channel_config_mut(&channel_id);
+pub async fn get_public_queue(streamer: String, pool: Arc<PgPool>, bot_state: Arc<RwLock<BotState>>) -> Result<impl Reply, warp::Rejection> {
+    let channel_id = streamer.to_ascii_lowercase();
+    let config = &bot_state.read().await.config;
+    let config = config.get_channel_config(&channel_id).unwrap();
     let queue_channel = &config.queue_channel;
     let queue = sqlx::query_as!(
         QueueEntry,
-        "SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = ? ORDER BY position ASC",
+        "SELECT position, twitch_name, bungie_name FROM queue WHERE channel_id = $1 ORDER BY position ASC",
         queue_channel
     ).fetch_all(&*pool).await.map_err(|_| warp::reject::reject())?;
 
@@ -467,7 +492,7 @@ pub async fn get_public_queue(streamer: String, pool: Arc<SqlitePool>) -> Result
     Ok(warp::reply::json(&grouped_queue))
 }
 
-async fn get_twitch_name_from_cookie(cookies: Option<String>, pool: &SqlitePool) -> Option<String> {
+async fn get_twitch_name_from_cookie(cookies: Option<String>, pool: &PgPool) -> Option<String> {
     let cookie = cookies?;
     let session_token = cookie.split(';').find(|c| c.trim().starts_with("session="))?.trim().strip_prefix("session=")?;
 
@@ -475,7 +500,7 @@ async fn get_twitch_name_from_cookie(cookies: Option<String>, pool: &SqlitePool)
         "SELECT users.twitch_name, sessions.expires_at 
          FROM sessions 
          JOIN users ON users.id = sessions.twitch_id 
-         WHERE sessions.session_token = ?",
+         WHERE sessions.session_token = $1",
         session_token
     ).fetch_optional(pool).await.ok()??;
 
@@ -486,11 +511,11 @@ async fn get_twitch_name_from_cookie(cookies: Option<String>, pool: &SqlitePool)
     }
 }
 
-pub async fn get_aliases_handler(pool: Arc<SqlitePool>, cookies: Option<String>) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn get_aliases_handler(pool: Arc<PgPool>, cookies: Option<String>) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let channel = format!("#{twitch_name}").to_ascii_lowercase();
+        let channel = format!("{twitch_name}").to_ascii_lowercase();
         let rows = sqlx::query!(
-            "SELECT alias, command FROM command_aliases WHERE channel = ?",
+            "SELECT alias, command FROM command_aliases WHERE channel = $1",
             channel
         ).fetch_all(&*pool).await.map_err(|_| warp::reject::not_found())?;
 
@@ -511,14 +536,17 @@ pub struct AliasUpdate {
     command: String,
 }
 
-pub async fn set_alias_handler(pool: Arc<SqlitePool>, cookies: Option<String>, bot_state: Arc<RwLock<BotState>>, body: AliasUpdate) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn set_alias_handler(pool: Arc<PgPool>, cookies: Option<String>, bot_state: Arc<RwLock<BotState>>, body: AliasUpdate) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let channel = format!("#{twitch_name}").to_ascii_lowercase();
+        let channel = format!("{twitch_name}").to_ascii_lowercase();
         let alias = body.alias.to_ascii_lowercase();
         let command = body.command.to_ascii_lowercase();
-        println!("{alias} {command} {:?}", body);
+
         sqlx::query!(
-            "INSERT OR REPLACE INTO command_aliases (channel, alias, command) VALUES (?, ?, ?)",
+            "INSERT INTO command_aliases (channel, alias, command) 
+             VALUES ($1, $2, $3)
+             ON CONFLICT (channel, alias) 
+             DO UPDATE SET command = EXCLUDED.command",
             channel, alias, command
         ).execute(&*pool).await.map_err(|_| warp::reject::reject())?;
         let bot_state = bot_state.write().await;
@@ -534,12 +562,12 @@ pub struct AliasDelete {
     alias: String,
 }
 
-pub async fn delete_alias_handler(pool: Arc<SqlitePool>, cookies: Option<String>, bot_state: Arc<RwLock<BotState>>, body: AliasDelete) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn delete_alias_handler(pool: Arc<PgPool>, cookies: Option<String>, bot_state: Arc<RwLock<BotState>>, body: AliasDelete) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let channel = format!("#{twitch_name}").to_ascii_lowercase();
+        let channel = format!("{twitch_name}").to_ascii_lowercase();
         let alias = body.alias.to_ascii_lowercase();
         sqlx::query!(
-            "DELETE FROM command_aliases WHERE channel = ? AND alias = ?",
+            "DELETE FROM command_aliases WHERE channel = $1 AND alias = $2",
             channel, alias
         ).execute(&*pool).await.map_err(|_| warp::reject::reject())?;
         let bot_state = bot_state.write().await;
@@ -559,24 +587,24 @@ pub struct CommandAliasView {
     pub custom_aliases: Vec<String>,
 }
 
-pub async fn get_all_command_aliases(cookies: Option<String>, pool: Arc<SqlitePool>) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn get_all_command_aliases(cookies: Option<String>, pool: Arc<PgPool>) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let channel = format!("#{twitch_name}").to_ascii_lowercase();
+        let channel = format!("{twitch_name}").to_ascii_lowercase();
         // Get default alias removals
         let removed_aliases: HashSet<String> = query!(
-            "SELECT alias FROM command_alias_removals WHERE channel = ?",
+            "SELECT alias FROM command_alias_removals WHERE channel = $1",
             channel
         ).fetch_all(&*pool).await.map_err(|_| warp::reject::reject())?.into_iter().map(|row| row.alias.to_lowercase()).collect();
 
         // Get disabled commands
         let disabled_commands: HashSet<String> = query!(
-            "SELECT command FROM command_disabled WHERE channel = ?",
+            "SELECT command FROM command_disabled WHERE channel = $1",
             channel
         ).fetch_all(&*pool).await.map_err(|_| warp::reject::reject())?.into_iter().map(|row| row.command.to_lowercase()).collect();
 
         // Get custom aliases
         let custom_aliases: Vec<(String, String)> = query!(
-            "SELECT alias, command FROM command_aliases WHERE channel = ?",
+            "SELECT alias, command FROM command_aliases WHERE channel = $1",
             channel
         ).fetch_all(&*pool).await.map_err(|_| warp::reject::reject())?.into_iter().map(|row| (row.command.to_lowercase(), row.alias.to_lowercase())).collect();
 
@@ -623,24 +651,24 @@ pub struct DisableToggleRequest {
     command: String,
 }
 
-pub async fn toggle_default_command_handler(pool: Arc<SqlitePool>, cookies: Option<String>, bot_state: Arc<RwLock<BotState>>, body: DisableToggleRequest) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn toggle_default_command_handler(pool: Arc<PgPool>, cookies: Option<String>, bot_state: Arc<RwLock<BotState>>, body: DisableToggleRequest) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let channel = format!("#{twitch_name}").to_ascii_lowercase();
+        let channel = format!("{twitch_name}").to_ascii_lowercase();
         let command = body.command.to_ascii_lowercase();
 
         let existing = sqlx::query!(
-            "SELECT * FROM command_disabled WHERE channel = ? AND command = ?",
+            "SELECT * FROM command_disabled WHERE channel = $1 AND command = $2",
             channel, command
         ).fetch_optional(&*pool).await.map_err(|_| warp::reject())?;
 
         if existing.is_some() {
             sqlx::query!(
-                "DELETE FROM command_disabled WHERE channel = ? AND command = ?",
+                "DELETE FROM command_disabled WHERE channel = $1 AND command = $2",
                 channel, command
             ).execute(&*pool).await.map_err(|_| warp::reject())?;
         } else {
             sqlx::query!(
-                "INSERT INTO command_disabled (channel, command) VALUES (?, ?)",
+                "INSERT INTO command_disabled (channel, command) VALUES ($1, $2)",
                 channel, command
             ).execute(&*pool).await.map_err(|_| warp::reject())?;
         }
@@ -659,13 +687,15 @@ pub struct DefaultAliasRemoval {
     alias: String,
 }
 
-pub async fn remove_default_alias_handler(pool: Arc<SqlitePool>, cookies: Option<String>, bot_state: Arc<RwLock<BotState>>, body: DefaultAliasRemoval) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn remove_default_alias_handler(pool: Arc<PgPool>, cookies: Option<String>, bot_state: Arc<RwLock<BotState>>, body: DefaultAliasRemoval) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let channel = format!("#{twitch_name}").to_ascii_lowercase();
+        let channel = format!("{twitch_name}").to_ascii_lowercase();
         let alias = body.alias.to_ascii_lowercase();
 
         sqlx::query!(
-            "INSERT OR IGNORE INTO command_alias_removals (channel, alias) VALUES (?, ?)",
+            "INSERT INTO command_alias_removals (channel, alias) 
+             VALUES ($1, $2)
+             ON CONFLICT (channel, alias) DO NOTHING",
             channel,alias
         ).execute(&*pool).await.map_err(|_| warp::reject())?;
         let bot_state = bot_state.write().await;
@@ -679,13 +709,13 @@ pub async fn remove_default_alias_handler(pool: Arc<SqlitePool>, cookies: Option
     }
 }
 
-pub async fn restore_default_alias_handler(pool: Arc<SqlitePool>, cookies: Option<String>, bot_state: Arc<RwLock<BotState>>, body: DefaultAliasRemoval,) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn restore_default_alias_handler(pool: Arc<PgPool>, cookies: Option<String>, bot_state: Arc<RwLock<BotState>>, body: DefaultAliasRemoval,) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(twitch_name) = get_twitch_name_from_cookie(cookies, &*pool).await {
-        let channel = format!("#{twitch_name}").to_ascii_lowercase();
+        let channel = format!("{twitch_name}").to_ascii_lowercase();
         let alias = body.alias.to_ascii_lowercase();
 
         sqlx::query!(
-            "DELETE FROM command_alias_removals WHERE channel = ? AND alias = ?",
+            "DELETE FROM command_alias_removals WHERE channel = $1 AND alias = $2",
             channel, alias
         ).execute(&*pool).await.map_err(|_| warp::reject())?;
         let bot_state = bot_state.write().await;

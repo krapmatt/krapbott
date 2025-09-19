@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT announcement FROM announcements \n                                WHERE state = 'active' AND channel = $1 \n                                ORDER BY RANDOM() LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "announcement",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6198e4033bc45e5861ae7b209a2a2d221f561faf06d217972cf67c2ce071a2a7"
+}

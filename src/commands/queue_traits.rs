@@ -1,12 +1,11 @@
-use std::{borrow::BorrowMut, collections::HashSet, sync::Arc};
-
+use std::{collections::HashSet, sync::Arc};
 use futures::future::BoxFuture;
-use sqlx::SqlitePool;
-use tmi::Privmsg;
-use tokio::sync::{Mutex, RwLock};
+use sqlx::PgPool;
+use tokio::sync::RwLock;
+use twitch_irc::message::PrivmsgMessage;
 
-use crate::{bot::BotState, bot_commands::{bungiename, register_user, send_message}, commands::{oldcommands::FnCommand, traits::CommandT, words}, models::{AliasConfig, BotError, BotResult, PermissionLevel, SharedQueueGroup, TwitchUser}, queue::{self, process_queue_entry}};
-
+use crate::{bot::{BotState, TwitchClient}, bot_commands::{bungiename, register_user}, commands::{oldcommands::FnCommand, traits::CommandT, words}, models::{AliasConfig, BotResult, PermissionLevel, SharedQueueGroup, TwitchUser}, queue::{self, process_queue_entry}};
+ 
 pub struct JoinCommand;
 
 impl CommandT for JoinCommand {
@@ -18,10 +17,10 @@ impl CommandT for JoinCommand {
 
     fn permission(&self) -> PermissionLevel { PermissionLevel::Follower }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
+    fn execute(&self, msg: PrivmsgMessage, client: TwitchClient, pool: PgPool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let bot_state = bot_state.read().await;
-            bot_state.handle_join(&msg, client, &pool, alias_config).await?;
+            bot_state.handle_join(msg, client, &pool, alias_config).await?;
             Ok(())
         })
     }
@@ -35,11 +34,11 @@ impl CommandT for NextComamnd {
     fn usage(&self) -> &str { "!next" }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Broadcaster }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
+    fn execute(&self, msg: PrivmsgMessage, client: TwitchClient, pool: PgPool, bot_state: Arc<RwLock<BotState>>, _alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let mut bot_state = bot_state.write().await;
-            let reply = bot_state.handle_next(msg.channel().to_string(), &pool).await?;
-            send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+            let reply = bot_state.handle_next(msg.channel_login.clone(), &pool).await?;
+            client.say(msg.channel_login, reply).await?;
             Ok(())
         })
     }
@@ -52,30 +51,29 @@ impl CommandT for QueueSize {
     fn description(&self) -> &str { "Update size of group" }
     fn usage(&self) -> &str { "!queue_size number" }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Moderator }
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
+    fn execute(&self, msg: PrivmsgMessage, client: TwitchClient, pool: PgPool, bot_state: Arc<RwLock<BotState>>, _alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let words: Vec<&str> = words(&msg);
             let reply;
             if words.len() == 2 {
                 if let Ok(size) = words[1].parse::<usize>() {
-                    let bot_state_guard = bot_state.write().await;
-                    let mut config = bot_state_guard.config.clone();
+                    let mut state = bot_state.write().await;
+                    
 
-                    if let Some(cfg) = config.channels.get(msg.channel()) {
+                    if let Some(cfg) = state.config.get_channel_config(&msg.channel_login) {
                         if cfg.combined {
-                            let group = bot_state_guard.streaming_group(msg.channel());
+                            let group = state.streaming_group(&msg.channel_login);
                             for chan in group {
-                                if let Some(cfg) = config.channels.get_mut(&chan) {
+                                state.config.update_channel(&pool, &chan, |cfg| {
                                     cfg.teamsize = size;
-                                }
+                                }).await?;
                             }
                         } else {
-                            if let Some(cfg) = config.channels.get_mut(msg.channel()) {
+                            state.config.update_channel(&pool, &msg.channel_login, |cfg| {
                                 cfg.teamsize = size;
-                            }
+                            }).await?;
                         }
 
-                        config.save_config();
                         reply = format!("Queue fireteam size updated to {}.", size);
                     } else {
                         reply = "Channel configuration not found.".to_string();
@@ -86,7 +84,7 @@ impl CommandT for QueueSize {
             } else {
                 reply = "Incorrect command format. Use: !queue_size <number>".to_string();
             }
-            send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+            client.say(msg.channel_login, reply).await?;
             Ok(())
         })    
     }
@@ -99,30 +97,28 @@ impl CommandT for QueueLength {
     fn usage(&self) -> &str { "!queue_len number" }
     fn description(&self) -> &str { "Change the lenght of queue" }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Moderator }
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
+    fn execute(&self, msg: PrivmsgMessage, client: TwitchClient, pool: PgPool, bot_state: Arc<RwLock<BotState>>, _alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let words: Vec<&str> = words(&msg);
             let reply;
             if words.len() == 2 {
                 if let Ok(len) = words[1].parse::<usize>() {
-                    let bot_state_guard = bot_state.write().await;
-                    let mut config = bot_state_guard.config.clone();
+                    let mut state = bot_state.write().await;
 
-                    if let Some(cfg) = config.channels.get(msg.channel()) {
+                    if let Some(cfg) = state.config.get_channel_config(&msg.channel_login) {
                         if cfg.combined {
-                            let group = bot_state_guard.streaming_group(msg.channel());
+                            let group = state.streaming_group(&msg.channel_login);
                             for chan in group {
-                                if let Some(cfg) = config.channels.get_mut(&chan) {
+                                state.config.update_channel(&pool, &chan, |cfg| {
                                     cfg.len = len;
-                                }
+                                }).await?;
                             }
                         } else {
-                            if let Some(cfg) = config.channels.get_mut(msg.channel()) {
+                            state.config.update_channel(&pool, &msg.channel_login, |cfg| {
                                 cfg.len = len;
-                            }
+                            }).await?;
                         }
 
-                        config.save_config();
                         reply = format!("Queue length updated to {}.", len);
                     } else {
                         reply = "Channel configuration not found.".to_string();
@@ -133,7 +129,7 @@ impl CommandT for QueueLength {
             } else {
                 reply = "Incorrect command format. Use: !queue_len <number>".to_string();
             }
-            send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+            client.say(msg.channel_login,reply).await?;
             Ok(())
         })    
     }
@@ -151,12 +147,12 @@ pub fn addplayertoqueue() -> Arc<dyn CommandT>  {
                     bungie_name: words[2..].join(" ").to_string(),
                 };
                 let bot_state = bot_state.read().await;
-                let config = bot_state.config.get_channel_config(msg.channel()).unwrap();
+                let config = bot_state.config.get_channel_config(&msg.channel_login).unwrap();
                 let queue_len = config.len;
                 let queue_channel = &config.queue_channel;
                 let raffle = config.random_queue;
 
-                process_queue_entry(&msg, client.lock().await.borrow_mut(), queue_len, &pool, user, queue_channel, queue::Queue::ForceJoin, raffle).await?;
+                process_queue_entry(msg, client, queue_len, &pool, user, queue_channel, queue::Queue::ForceJoin, raffle).await?;
                 Ok(())
             })
         },
@@ -170,33 +166,34 @@ pub fn addplayertoqueue() -> Arc<dyn CommandT>  {
 //Both for open and close queue
 pub fn toggle_queue(open: bool, name: &'static str, desc: &'static str, usage: &'static str) -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        move |msg, client, _, bot_state| {
+        move |msg, client, pool, bot_state| {
             Box::pin(async move {
                 let text = if open { "open" } else { "closed" };
                 let emoji = if open { "✅" } else { "❌" };
 
-                let bot_state = bot_state.write().await.to_owned();
-                let mut config = bot_state.config;
+                let mut state = bot_state.write().await;
+                let queue_channel = state.config.get_channel_config(&msg.channel_login).map(|cfg| cfg.queue_channel.clone()).unwrap_or_else(|| msg.channel_login.clone());
 
-                let mut queue_channel = String::new();
-                if let Some(channel_config) = config.get_channel_config(msg.channel()) {
-                    queue_channel = channel_config.queue_channel.clone();
+                let affected_channels: Vec<String> = state
+                    .config
+                    .channels
+                    .keys()
+                    .filter(|ch| {
+                        state.config
+                            .get_channel_config(ch)
+                            .map(|cfg| cfg.queue_channel == queue_channel)
+                            .unwrap_or(false)
+                    }).cloned().collect();
+
+                for channel in &affected_channels {
+                    state.config.update_channel(&pool, channel, |cfg| {
+                        cfg.open = open;
+                    }).await?;
                 }
-
-                let affected_channels = config.channels.iter_mut().filter_map(|(ch, chan_config)| {
-                    if chan_config.queue_channel == queue_channel {
-                        chan_config.open = open;
-                        Some(ch.to_string())
-                    } else {
-                        None
-                    }
-                }).collect::<Vec<_>>();
-
-                config.save_config();
 
                 for channel in affected_channels {
                     let reply = format!("{emoji} The queue is {text}!");
-                    client.lock().await.privmsg(&channel, &reply).send().await?;
+                    client.say(channel, reply).await?;
                 }
 
                 Ok(())
@@ -214,7 +211,7 @@ pub fn list() -> Arc<dyn CommandT> {
         |msg, client, pool, bot_state| {
             Box::pin(async move {
                 let bot_state = bot_state.read().await;
-                bot_state.handle_queue(&msg, client, &pool).await?;
+                bot_state.handle_queue(msg, client, &pool).await?;
                 Ok(())
             })
         },
@@ -227,10 +224,10 @@ pub fn list() -> Arc<dyn CommandT> {
 
 pub fn random() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg, client, _pool, bot_state| {
+        |msg, client, pool, bot_state| {
             Box::pin(async move {
                 let mut bot_state = bot_state.write().await;
-                bot_state.random(&msg, client).await?;
+                bot_state.random(msg, client, &pool).await?;
                 Ok(())
             })
         },
@@ -246,11 +243,10 @@ pub fn clear() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, _bot_state| {
             Box::pin(async move {
-                let channel = msg.channel().to_owned();
+                let channel = msg.channel_login;
                 // Clear the queue for the given channel
-                sqlx::query!("DELETE FROM queue WHERE channel_id = ?", channel).execute(&pool).await?;
-                let mut client = client.lock().await;
-                send_message(&msg, client.borrow_mut(), "Queue has been cleared").await?;
+                sqlx::query!("DELETE FROM queue WHERE channel_id = $1", channel).execute(&pool).await?;
+                client.say(channel, "Queue has been cleared".to_string()).await?;
                 Ok(())
             })
         },
@@ -266,7 +262,7 @@ pub fn remove() -> Arc<dyn CommandT> {
         |msg, client, pool, bot_state| {
             Box::pin(async move {
                 let bot_state = bot_state.read().await;
-                bot_state.handle_remove(&msg, client, &pool).await?;
+                bot_state.handle_remove(msg, client, &pool).await?;
                 Ok(())
             })
         },
@@ -282,7 +278,7 @@ pub fn pos() -> Arc<dyn CommandT> {
         |msg, client, pool, bot_state| {
             Box::pin(async move {
                 let bot_state = bot_state.read().await;
-                bot_state.handle_pos(&msg, client, &pool).await?;
+                bot_state.handle_pos(msg, client, &pool).await?;
                 Ok(())
             })
         },
@@ -297,7 +293,7 @@ pub fn move_user() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, bot_state| {
             Box::pin(async move {
-                bot_state.read().await.move_groups(&msg, client, &pool).await?;
+                bot_state.read().await.move_groups(msg, client, &pool).await?;
                 Ok(())
             })
         },
@@ -313,7 +309,7 @@ pub fn leave() -> Arc<dyn CommandT> {
         |msg, client, pool, bot_state| {
             Box::pin(async move {
                 let bot_state = bot_state.read().await;
-                bot_state.handle_leave(&msg, client, &pool).await?;
+                bot_state.handle_leave(msg, client, &pool).await?;
                 Ok(())
             })
         },
@@ -328,7 +324,7 @@ pub fn prio() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, bot_state| {
             Box::pin(async move {
-                bot_state.read().await.prio(&msg, client, &pool).await?;
+                bot_state.read().await.prio(msg, client, &pool).await?;
                 Ok(())
             })
         },
@@ -343,7 +339,7 @@ pub fn deprio() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, bot_state| {
             Box::pin(async move {
-                bot_state.read().await.deprio(&msg, client, &pool).await?;
+                bot_state.read().await.deprio(msg, client, &pool).await?;
                 Ok(())
             })
         },
@@ -356,15 +352,15 @@ pub fn deprio() -> Arc<dyn CommandT> {
 
 pub fn register_command() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg, client, pool, _bot_state| {
+        |msg, client, pool, bot_state| {
             let fut = async move {
-                let reply = if let Some((_, bungie_name)) = msg.text().split_once(' ') {
-                    register_user(&pool, &msg.sender().name(), bungie_name).await?
+                let reply = if let Some((_, bungie_name)) = msg.message_text.split_once(' ') {
+                    register_user(&pool, &msg.sender.name, bungie_name, bot_state).await?
                 } else {
                     "Invalid command format! Use: !register bungiename#1234".to_string()
                 };
 
-                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+                client.say(msg.channel_login, reply).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -378,9 +374,9 @@ pub fn register_command() -> Arc<dyn CommandT> {
 
 pub fn mod_register_command() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg, client, pool, _bot_state| {
+        |msg, client, pool, bot_state| {
             let fut = async move {
-                let words: Vec<&str> = msg.text().split_whitespace().collect();
+                let words: Vec<&str> = words(&msg);
                 let reply = if words.len() >= 3 {
                     let mut twitch_name = words[1].to_string();
                     let bungie_name = &words[2..].join(" ");
@@ -389,12 +385,12 @@ pub fn mod_register_command() -> Arc<dyn CommandT> {
                         twitch_name.remove(0);
                     }
 
-                    register_user(&pool, &twitch_name, bungie_name).await?
+                    register_user(&pool, &twitch_name, bungie_name, bot_state).await?
                 } else {
                     "You are a mod... || Use: !mod_register twitchname bungiename".to_string()
                 };
 
-                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+                client.say(msg.channel_login, reply).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -410,25 +406,22 @@ pub fn bungie_name_command() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, _bot_state| {
             let fut = async move {
-                let mut client = client.lock().await;
                 // If the message is only 11 characters long, assume it's just the command (use self)
                 let words = words(&msg);
-                if words.len() == 1 {
-                    bungiename(&msg, &mut client, &pool, msg.sender().name().to_string()).await?;
+                let name = if words.len() == 1 {
+                    msg.sender.name.clone()
                 } else {
                     let (_, twitch_name) = msg
-                        .text()
-                        .split_once(' ')
-                        .expect("How did it panic, what happened? // Always is something here");
+                        .message_text.split_once(' ').expect("How did it panic, what happened? // Always is something here");
 
                     let mut twitch_name = twitch_name.to_string();
                     if twitch_name.starts_with('@') {
                         twitch_name.remove(0);
                     }
 
-                    bungiename(&msg, &mut client, &pool, twitch_name).await?;
-                }
-
+                    twitch_name
+                };
+                bungiename(msg, client, &pool, name).await?;
                 Ok(())
             };
 
@@ -443,10 +436,10 @@ pub fn bungie_name_command() -> Arc<dyn CommandT> {
 
 pub fn toggle_combined() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg, client, _pool, bot_state| {
+        |msg, client, pool, bot_state| {
             Box::pin(async move {
                 let mut bot_state = bot_state.write().await;
-                bot_state.toggle_combined_queue(&msg, client).await?;
+                bot_state.toggle_combined_queue(msg, client, &pool).await?;
                 Ok(()) 
             })
         },
@@ -459,17 +452,17 @@ pub fn toggle_combined() -> Arc<dyn CommandT> {
 
 pub fn streaming_together() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, _pool, bot_state| {
+        |msg, client, _pool, bot_state| {
             Box::pin(async move {
                 let vec_msg: Vec<&str> = words(&msg);
                 if vec_msg.len() < 3 {
-                    send_message(&msg, client.lock().await.borrow_mut(), "Usage: !streaming_together @main_channel @other_channel1 @other_channel2 ...").await?;
+                    client.say(msg.channel_login, "Usage: !streaming_together @main_channel @other_channel1 @other_channel2 ...".to_string()).await?;
                     return Ok(());
                 }
-                let main_channel = format!("#{}", vec_msg[1].strip_prefix('@').unwrap_or(&vec_msg[1]).to_ascii_lowercase());
+                let main_channel = format!("{}", vec_msg[1].strip_prefix('@').unwrap_or(&vec_msg[1]).to_ascii_lowercase());
                 
                 let other_channels: HashSet<String> = vec_msg[2..].iter().map(|channel| {
-                    format!("#{}", channel.strip_prefix('@').unwrap_or(channel).to_ascii_lowercase())
+                    channel.strip_prefix('@').unwrap_or(channel).to_ascii_lowercase()
                 }).collect();
 
                 let mut bot_state = bot_state.write().await;
@@ -489,10 +482,10 @@ pub fn streaming_together() -> Arc<dyn CommandT> {
                     bot_state.channel_to_main.insert(member.clone(), main_channel.clone());
                 }
                 // Also map main channel to itself
-                bot_state.channel_to_main.insert(format!("#{}", main_channel.clone()), main_channel.clone());
+                bot_state.channel_to_main.insert(format!("{}", main_channel.clone()), main_channel.clone());
 
                 drop(bot_state);
-                send_message(&msg, client.lock().await.borrow_mut(), &format!("Streaming together groups set: main channel '{main_channel}' with others {:?}", other_channels)).await?;
+                client.say(msg.channel_login, format!("Streaming together groups set: main channel '{main_channel}' with others {:?}", other_channels)).await?;
 
                 Ok(())
 

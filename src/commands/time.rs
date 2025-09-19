@@ -1,13 +1,13 @@
-use std::{borrow::BorrowMut, sync::Arc};
-
+use std::sync::Arc;
 use chrono::Utc;
 use chrono_tz::{Tz, CET, US::Pacific};
 use futures::future::BoxFuture;
-use sqlx::SqlitePool;
-use tmi::{Client, Privmsg};
-use tokio::sync::{Mutex, RwLock};
 
-use crate::{bot::BotState, bot_commands::send_message, commands::traits::CommandT, models::{AliasConfig, BotError, BotResult, PermissionLevel}};
+use sqlx::PgPool;
+use tokio::sync::RwLock;
+use twitch_irc::message::PrivmsgMessage;
+
+use crate::{bot::{BotState, TwitchClient}, commands::traits::CommandT, models::{AliasConfig, BotResult, PermissionLevel}};
 
 struct TimeCommand {
     name: String,
@@ -23,7 +23,7 @@ impl CommandT for TimeCommand {
     fn usage(&self) -> &str { &self.usage }
     fn permission(&self) -> PermissionLevel { self.permission }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<Client>>, _db: SqlitePool, _state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
+    fn execute(&self, msg: PrivmsgMessage, client: TwitchClient, _db: PgPool, _state: Arc<RwLock<BotState>>, _alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         let timezone = self.timezone;
         let name = self.name.clone();
 
@@ -32,7 +32,7 @@ impl CommandT for TimeCommand {
             let time_str = now.time().format("%-I:%M %p").to_string();
 
             let reply = format!("{} time: {}", name, time_str);
-            send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+            client.say(msg.channel_login, reply).await?;
             Ok(())
         })
     }

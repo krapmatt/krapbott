@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT twitch_name, priority_runs_left, locked_first \n         FROM queue \n         WHERE channel_id = $1 \n         ORDER BY position ASC \n         LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "twitch_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "priority_runs_left",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "locked_first",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "b516b5ab183203636e462a1587d8d41ebaca2fab3ef56fc4c0e15ab6e80eaf2d"
+}

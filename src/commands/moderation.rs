@@ -1,17 +1,17 @@
-use std::{borrow::BorrowMut, sync::Arc};
+use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use sqlx::SqlitePool;
-use tmi::{Client, Privmsg};
-use tokio::sync::{Mutex, RwLock};
+use sqlx::PgPool;
+use tokio::sync::RwLock;
+use twitch_irc::message::PrivmsgMessage;
 
-use crate::{bot::BotState, bot_commands::{self, mod_action_user_from_queue, modify_command, reply_to_message, send_message, unban_player_from_queue}, commands::{oldcommands::FnCommand, traits::CommandT, update_dispatcher_if_needed, words, COMMAND_GROUPS}, models::{AliasConfig, BotError, BotResult, CommandAction, Package, PermissionLevel, TemplateManager}};
+use crate::{bot::{BotState, TwitchClient}, bot_commands::{self, add_remove_package, mod_action_user_from_queue, modify_command, unban_player_from_queue}, commands::{oldcommands::FnCommand, traits::CommandT, update_dispatcher_if_needed, words, COMMAND_GROUPS}, models::{AliasConfig, BotConfig, BotResult, ChannelConfig, CommandAction, Package, PermissionLevel, TemplateManager}};
 
 pub fn mod_unban() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, _bot_state| {
             Box::pin(async move {
-                unban_player_from_queue(&msg, client, &pool).await?;
+                unban_player_from_queue(msg, client, &pool).await?;
                 Ok(())
             })
         },
@@ -26,7 +26,7 @@ pub fn mod_ban() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, _bot_state| {
             Box::pin(async move {
-                mod_action_user_from_queue(&msg, client, &pool, bot_commands::ModAction::Ban).await?;
+                mod_action_user_from_queue(msg, client, &pool, bot_commands::ModAction::Ban).await?;
                 Ok(())
             })
         },
@@ -41,7 +41,7 @@ pub fn mod_timeout() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, _bot_state| {
             Box::pin(async move {
-                mod_action_user_from_queue(&msg, client, &pool, bot_commands::ModAction::Timeout).await?;
+                mod_action_user_from_queue(msg, client, &pool, bot_commands::ModAction::Timeout).await?;
                 Ok(())
             })
         },
@@ -57,14 +57,18 @@ pub fn mod_config() -> Arc<dyn CommandT> {
         |msg, client, _pool, bot_state| {
             Box::pin(async move {
                 let bot_state = bot_state.read().await;
-                let config = match bot_state.config.get_channel_config(msg.channel()) {
+                let config = match bot_state.config.get_channel_config(&msg.channel_login) {
                     Some(cfg) => cfg,
                     None => return Ok(()),
                 };
 
                 let queue_reply = format!(
                     "Queue -> Open: {} || Length: {} || Fireteam size: {} || Combined: {} & Queue channel: {}",
-                    config.open, config.len, config.teamsize, config.combined, config.queue_channel
+                    config.open, 
+                    config.len, 
+                    config.teamsize, 
+                    config.combined, 
+                    config.queue_channel
                 );
 
                 let package_reply = format!("Packages: {}", config.packages.join(", "));
@@ -78,7 +82,7 @@ pub fn mod_config() -> Arc<dyn CommandT> {
                 drop(bot_state);
 
                 for reply in [queue_reply, package_reply, giveaway_reply] {
-                    reply_to_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+                    client.say(msg.channel_login.clone(), reply).await?;
                 }
 
                 Ok(())
@@ -93,20 +97,37 @@ pub fn mod_config() -> Arc<dyn CommandT> {
 
 pub fn connect() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg, client, _pool, bot_state| {
+        |msg, client, pool, bot_state| {
             Box::pin(async move {
-                if let Some((_, channel)) = msg.text().split_once(' ') {
-                    let channel = format!("#{}", channel.trim_start_matches('@').to_ascii_lowercase());
+                if let Some((_, channel)) = msg.message_text.split_once(' ') {
+                    let channel = channel.strip_prefix("@").unwrap_or(channel);
 
                     {
-                        let mut bot_state = bot_state.write().await;
-                        bot_state.config.get_channel_config_mut(&channel);
-                        bot_state.config.save_config();
+                        let mut state = bot_state.write().await;
+
+                        // Ensure the channel config exists or initialize it
+                        state.config.update_channel(&pool, channel, |cfg| {
+                            let new_cfg = ChannelConfig::new(channel.to_string());
+
+                            cfg.announcement_config = new_cfg.announcement_config;
+                            cfg.combined = new_cfg.combined;
+                            cfg.giveaway = new_cfg.giveaway;
+                            cfg.len = new_cfg.len;
+                            cfg.open = new_cfg.open;
+                            cfg.packages = new_cfg.packages;
+                            cfg.points_config = new_cfg.points_config;
+                            cfg.prefix = new_cfg.prefix;
+                            cfg.queue_channel = new_cfg.queue_channel;
+                            cfg.random_queue = new_cfg.random_queue;
+                            cfg.runs = new_cfg.runs;
+                            cfg.sub_only = new_cfg.sub_only;
+                            cfg.teamsize = new_cfg.teamsize;        
+                        }).await?;
                     }
 
-                    send_message(&msg, client.lock().await.borrow_mut(), &format!("I will connect to channel {} in 60 seconds", channel)).await?;
+                    client.say(msg.channel_login, format!("I will connect to channel {} in 60 seconds", channel)).await?;
                 } else {
-                    send_message(&msg, client.lock().await.borrow_mut(), "You didn't write the channel to connect to").await?;
+                    client.say(msg.channel_login, "You didn't write the channel to connect to".to_string()).await?;
                 }
                 Ok(())
             })
@@ -118,19 +139,20 @@ pub fn connect() -> Arc<dyn CommandT> {
     ))
 }
 
+//TODO! - add a way to reset streaming together only for the one channel not all!!!!
 pub fn mod_reset() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg, client, _pool, bot_state| {
+        |msg, client, pool, bot_state| {
             let fut = async move {
                 let mut bot_state = bot_state.write().await;
                 bot_state.streaming_together.clear();
 
-                let config = bot_state.config.get_channel_config_mut(&msg.channel());
-                config.reset(&msg.channel());
+                let config = bot_state.config.get_channel_config_mut(&msg.channel_login);
+                config.reset(&msg.channel_login);
 
-                bot_state.config.save_config();
+                bot_state.config.save_all(&pool).await?;
 
-                send_message(&msg, client.lock().await.borrow_mut(), "Config has been reset!").await?;
+                client.say(msg.channel_login, "Config has been reset!".to_string()).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -147,7 +169,7 @@ pub fn addpackage() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, bot_state| {
             let fut = async move {
-                bot_state.write().await.add_remove_package(&msg, client, Package::Add, &pool).await?;
+                add_remove_package(bot_state, msg, client, Package::Add, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -163,7 +185,7 @@ pub fn removepackage() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, bot_state| {
             let fut = async move {
-                bot_state.write().await.add_remove_package(&msg, client, Package::Remove, &pool).await?;
+                add_remove_package(Arc::clone(&bot_state), msg, client, Package::Remove, &pool).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -177,11 +199,11 @@ pub fn removepackage() -> Arc<dyn CommandT> {
 
 pub fn list_of_packages() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg: Privmsg<'static>, client: Arc<Mutex<Client>>, _pool: SqlitePool, bot_state: Arc<RwLock<BotState>>| {
+        |msg, client, _pool, bot_state| {
             Box::pin(async move {
                 let bot_state = bot_state.read().await;
                 let config =
-                    if let Some(config) = bot_state.config.get_channel_config(msg.channel()) {
+                    if let Some(config) = bot_state.config.get_channel_config(&msg.channel_login) {
                         config
                     } else {
                         return Ok(());
@@ -204,7 +226,7 @@ pub fn list_of_packages() -> Arc<dyn CommandT> {
                     )
                 };
 
-                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+                client.say(msg.channel_login, reply).await?;
                 Ok(())
             })
         },
@@ -217,14 +239,14 @@ pub fn list_of_packages() -> Arc<dyn CommandT> {
 
 pub fn set_template() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, _bot_state: Arc<RwLock<BotState>>| {
+        |msg, client, pool, _bot_state| {
             Box::pin(async move {
                 let template_manager = TemplateManager {
                     pool: pool.clone().into(),
                 };
-                let args: Vec<&str> = msg.text().splitn(4, ' ').collect();
+                let args: Vec<&str> = msg.message_text.splitn(4, ' ').collect();
                 if args.len() < 4 {
-                    send_message(&msg, client.lock().await.borrow_mut(), "Usage: !set_template <package> <command> <template>").await?;
+                    client.say(msg.channel_login, "Usage: !set_template <package> <command> <template>".to_string()).await?;
                     return Ok(());
                 }
 
@@ -232,11 +254,9 @@ pub fn set_template() -> Arc<dyn CommandT> {
                 let command = args[2].to_string();
                 let template = args[3].to_string();
 
-                template_manager
-                    .set_template(package, command, template, Some(msg.channel().to_string()))
-                    .await?;
+                template_manager.set_template(package, command, template, Some(format!("#{}", msg.channel_login))).await?;
 
-                send_message(&msg, client.lock().await.borrow_mut(), "Template updated successfully!").await?;
+                client.say(msg.channel_login, "Template updated successfully!".to_string()).await?;
                 Ok(())
             })
         },
@@ -249,21 +269,21 @@ pub fn set_template() -> Arc<dyn CommandT> {
 
 pub fn delete_template() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg: Privmsg<'static>, client: Arc<Mutex<Client>>, pool: SqlitePool, _bot_state: Arc<RwLock<BotState>>| {
+        |msg, client, pool, _bot_state| {
             Box::pin(async move {
                 let template_manager = TemplateManager {
                     pool: pool.clone().into(),
                 };
-                let args: Vec<&str> = msg.text().splitn(2, ' ').collect();
+                let args: Vec<&str> = msg.message_text.splitn(2, ' ').collect();
                 if args.len() < 2 {
-                    send_message(&msg, client.lock().await.borrow_mut(), "Usage: !remove_template <command>").await?;
+                    client.say(msg.channel_login, "Usage: !remove_template <command>".to_string()).await?;
                     return Ok(());
                 }
 
                 let command = args[1].to_string();
 
-                template_manager.remove_template(command, Some(msg.channel().to_string())).await?;
-                send_message(&msg, client.lock().await.borrow_mut(), "Template updated successfully!").await?;
+                template_manager.remove_template(command, Some(format!("#{}", msg.channel_login))).await?;
+                client.say(msg.channel_login, "Template updated successfully!".to_string()).await?;
                 Ok(())
             })
         },
@@ -280,11 +300,11 @@ pub struct ModifyCommand {
     usage: String,
     name: String,
     action: CommandAction,
-    channel_extractor: Box<dyn Fn(&Privmsg<'_>) -> Option<String> + Send + Sync>,
+    channel_extractor: Box<dyn Fn(&PrivmsgMessage) -> Option<String> + Send + Sync>,
 }
 
 impl ModifyCommand {
-    pub fn new(permission: PermissionLevel, description: impl Into<String>, usage: impl Into<String>, name: impl Into<String>, action: CommandAction, channel_extractor: impl Fn(&Privmsg<'_>) -> Option<String> + Send + Sync + 'static) -> Self {
+    pub fn new(permission: PermissionLevel, description: impl Into<String>, usage: impl Into<String>, name: impl Into<String>, action: CommandAction, channel_extractor: impl Fn(&PrivmsgMessage) -> Option<String> + Send + Sync + 'static) -> Self {
         Self {
             permission,
             description: description.into(),
@@ -308,11 +328,11 @@ impl CommandT for ModifyCommand {
         self.permission
     }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, _state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
+    fn execute(&self, msg: PrivmsgMessage, client: TwitchClient, pool: PgPool, _state: Arc<RwLock<BotState>>, _alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         let action = self.action;
         let channel = (self.channel_extractor)(&msg);
         Box::pin(async move {
-            modify_command(&msg, client, &pool, action, channel).await?;
+            modify_command(msg, client, &pool, action, channel).await?;
             Ok(())
         })
     }
@@ -336,7 +356,7 @@ pub fn removecommand() -> Arc<dyn CommandT> {
         "!remove_command nameOfCommand",
         "Remove Command",
         CommandAction::Remove,
-        |msg| Some(msg.channel().to_string()),
+        |msg| Some(msg.channel_id.clone()),
     ))
 }
 
@@ -347,7 +367,7 @@ pub fn addcommand() -> Arc<dyn CommandT> {
         "!addcommand nameOfCommand reply",
         "Add Command",
         CommandAction::Add,
-        |msg| Some(msg.channel().to_string()),
+        |msg| Some(msg.channel_id.clone()),
     ))
 }
 
@@ -359,19 +379,19 @@ impl CommandT for AliasCommand {
     fn description(&self) -> &str { "Add or remove a custom alias for a command." }
     fn permission(&self) -> PermissionLevel { PermissionLevel::Moderator }
 
-    fn execute(&self, msg: Privmsg<'static>, client: Arc<Mutex<tmi::Client>>, pool: SqlitePool, bot_state: Arc<RwLock<BotState>>, alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
+    fn execute(&self, msg: PrivmsgMessage, client: TwitchClient, pool: PgPool, bot_state: Arc<RwLock<BotState>>, _alias_config: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let words: Vec<&str> = words(&msg);
             let reply;
 
             if words.len() < 3 {
                 reply = "Usage: !alias add <alias> <command> OR !alias remove <alias>".to_string();
-                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+                client.say(msg.channel_login, reply).await?;
                 return Ok(());
             }
 
             let action = words[1].to_lowercase();
-            let channel = msg.channel();
+            let channel = &msg.channel_login;
 
             match action.as_str() {
                 "add" if words.len() == 4 => {
@@ -379,13 +399,11 @@ impl CommandT for AliasCommand {
                     let command = words[3].to_lowercase();
 
                     sqlx::query!(
-                        "INSERT OR REPLACE INTO command_aliases (channel, alias, command) VALUES (?, ?, ?)",
-                        channel,
-                        alias,
-                        command
-                    )
-                    .execute(&pool)
-                    .await?;
+                        "INSERT INTO command_aliases (channel, alias, command)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (channel, alias) DO UPDATE SET command = EXCLUDED.command",
+                        channel, alias, command
+                    ).execute(&pool).await?;
 
                     update_dispatcher_if_needed(channel, &bot_state.read().await.config, &pool, bot_state.read().await.dispatchers.clone()).await?;
 
@@ -395,12 +413,9 @@ impl CommandT for AliasCommand {
                     let alias = words[2].to_lowercase();
 
                     sqlx::query!(
-                        "DELETE FROM command_aliases WHERE channel = ? AND alias = ?",
-                        channel,
-                        alias
-                    )
-                    .execute(&pool)
-                    .await?;
+                        "DELETE FROM command_aliases WHERE channel = $1 AND alias = $2",
+                        channel, alias
+                    ).execute(&pool).await?;
 
                     update_dispatcher_if_needed(channel, &bot_state.read().await.config, &pool, bot_state.read().await.dispatchers.clone()).await?;
 
@@ -411,7 +426,7 @@ impl CommandT for AliasCommand {
                 }
             }
 
-            send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+            client.say(msg.channel_login, reply).await?;
             Ok(())
         })
     }

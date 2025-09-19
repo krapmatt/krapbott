@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
-use dotenvy::{dotenv, var};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use twitch_irc::message::PrivmsgMessage;
 
-use crate::{bot_commands::reply_to_message, models::BotError};
+use crate::{bot::TwitchClient, models::BotError};
 
 //Ban Bots
 #[derive(Serialize)]
@@ -51,12 +49,12 @@ pub async fn fetch_lurkers(broadcaster_id: &str, token: &str, client_id: &str) -
 
 
 // Best viewers on u.to/paq8IA
-pub async fn ban_bots(msg: &tmi::Privmsg<'_>, oauth_token: &str, client_id: String) {
-    let url = format!("https://api.twitch.tv/helix/moderation/bans?broadcaster_id={}&moderator_id=1091219021", msg.channel_id());
+pub async fn ban_bots(msg: &PrivmsgMessage, oauth_token: &str, client_id: String) {
+    let url = format!("https://api.twitch.tv/helix/moderation/bans?broadcaster_id={}&moderator_id=1091219021", msg.channel_id);
     
     let ban_request = BanRequest {
         data: BanData {
-            user_id: msg.sender().id().to_string(),
+            user_id: msg.sender.id.clone(),
         },
     };
     let res = reqwest::Client::new()
@@ -87,15 +85,11 @@ pub async fn is_channel_live(channel_id: &str, token: &str, client_id: &str) -> 
         .send()
         .await?;
     let json: serde_json::Value = response.json().await?;
-    println!("{:?}", json);
     Ok(json["data"].as_array().map_or(false, |data| !data.is_empty()))
 }
 
-pub async fn get_twitch_user_id(username: &str) -> Result<String, BotError> {
+pub async fn get_twitch_user_id(username: &str, oauth_token: &str, client_id: &str) -> Result<String, BotError> {
     let url = format!("https://api.twitch.tv/helix/users?login={}", username);
-
-    let oauth_token = var("TWITCH_OAUTH_TOKEN_BOTT").expect("No oauth token");
-    let client_id = var("TWITCH_CLIENT_ID_BOT").expect("No bot id");
 
     let client = reqwest::Client::new();
     let res = client
@@ -115,12 +109,8 @@ pub async fn get_twitch_user_id(username: &str) -> Result<String, BotError> {
 }
 
 //Not actually checking follow status
-pub async fn is_follower(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<tmi::Client>>) -> bool {
-    dotenv().ok();
-    let oauth_token = var("TWITCH_OAUTH_TOKEN_BOTT").expect("No oauth token");
-    let client_id = var("TWITCH_CLIENT_ID_BOT").expect("No bot id");
-
-    let url = format!("https://api.twitch.tv/helix/channels/followers?broadcaster_id={}&user_id={}", msg.channel_id(), msg.sender().id());
+pub async fn is_follower(msg: &PrivmsgMessage, client: TwitchClient, oauth_token: &str, client_id: &str) -> bool {
+    let url = format!("https://api.twitch.tv/helix/channels/followers?broadcaster_id={}&user_id={}", msg.channel_id, msg.sender.id);
     let res = reqwest::Client::new()
         .get(&url)
         .header("Client-Id", client_id)
@@ -129,16 +119,14 @@ pub async fn is_follower(msg: &tmi::Privmsg<'_>, client: Arc<tokio::sync::Mutex<
         .await.expect("Bad reqwest");
     //.
     if let Ok(a) = res.text().await  { 
-        if a.contains("user_id") || msg.channel_id() == msg.sender().id() {
+        if a.contains("user_id") || msg.channel_id == msg.sender.id {
             true
         } else {
-            let mut client = client.lock().await;
-            let _ = reply_to_message(msg, &mut client, "You are not a follower!").await;
+            client.say_in_reply_to(msg, "You are not a follower!".to_string()).await;
             false
         }
     } else {
-        let mut client = client.lock().await;
-        let _ = reply_to_message(msg, &mut client, "Error occured! Tell Matt").await;
+        client.say_in_reply_to(msg, "Error! Tell Matt".to_string()).await;
         true
     }
 }

@@ -1,12 +1,12 @@
-use std::{borrow::BorrowMut, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use crate::{bot_commands::send_message, commands::{oldcommands::FnCommand, traits::CommandT, words}, models::{AnnouncementState, PermissionLevel}};
+use crate::{commands::{oldcommands::FnCommand, traits::CommandT, words}, models::{AnnouncementState, PermissionLevel}};
 pub fn add_announcement_command() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, _bot_state| {
             let fut = async move {
-                let channel = msg.channel_id().to_string();
-                let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
+                let channel = msg.channel_id.clone();
+                let msg_vec: Vec<&str> = words(&msg);
 
                 let reply = if msg_vec.len() >= 4 {
                     let state = msg_vec[1].to_lowercase();
@@ -15,7 +15,7 @@ pub fn add_announcement_command() -> Arc<dyn CommandT> {
 
                     sqlx::query!(
                         "INSERT INTO announcements (name, announcement, channel, state)
-                         VALUES (?, ?, ?, ?)
+                         VALUES ($1, $2, $3, $4)
                          ON CONFLICT(name, channel)
                          DO UPDATE SET announcement = excluded.announcement",
                         name, announcement, channel, state
@@ -26,7 +26,7 @@ pub fn add_announcement_command() -> Arc<dyn CommandT> {
                     "❌ Invalid usage // Use: <state: Active/ActivityName> <name> <Message>".to_string()
                 };
 
-                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+                client.say(msg.channel_login, reply).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -42,21 +42,16 @@ pub fn remove_announcement_command() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
         |msg, client, pool, _bot_state| {
             let fut = async move {
-                let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
-                let channel_id = msg.channel_id().to_string();
-
+                let msg_vec: Vec<&str> = words(&msg);
                 let reply = if msg_vec.len() <= 1 {
                     "❌ Invalid usage".to_string()
                 } else if msg_vec.len() == 2 {
                     let name = msg_vec[1].to_string();
 
                     let result = sqlx::query!(
-                        "DELETE FROM announcements WHERE name = ? AND channel = ?",
-                        name,
-                        channel_id
-                    )
-                    .execute(&pool)
-                    .await?;
+                        "DELETE FROM announcements WHERE name = $1 AND channel = $2",
+                        name, msg.channel_id
+                    ).execute(&pool).await?;
 
                     if result.rows_affected() > 0 {
                         "✅ Announcement has been removed!".to_string()
@@ -67,7 +62,7 @@ pub fn remove_announcement_command() -> Arc<dyn CommandT> {
                     "❌ Invalid usage".to_string()
                 };
 
-                send_message(&msg, client.lock().await.borrow_mut(), &reply).await?;
+                client.say(msg.channel_login, reply).await?;
                 Ok(())
             };
             Box::pin(fut)
@@ -87,22 +82,17 @@ pub fn play_announcement_command() -> Arc<dyn CommandT> {
                 if msg_vec.len() != 2 {
                     return Ok(());
                 }
-
-                let channel_id = msg.channel_id().to_string();
                 let name = msg_vec[1].to_string();
-
+                let channel_id = msg.channel_id;
                 let result = sqlx::query!(
-                    "SELECT announcement FROM announcements WHERE name = ? AND channel = ?",
-                    name,
-                    channel_id
-                )
-                .fetch_optional(&pool)
-                .await?;
+                    "SELECT announcement FROM announcements WHERE name = $1 AND channel = $2",
+                    name, channel_id
+                ).fetch_optional(&pool).await?;
 
                 if let Some(row) = result {
                     let announ = row.announcement;
                     let bot_state = bot_state.read().await;
-                    crate::twitch_api::announcement(msg.channel_id(), "1091219021", &bot_state.oauth_token_bot, bot_state.bot_id.clone(), announ).await?;
+                    crate::twitch_api::announcement(&channel_id, "1091219021", &bot_state.oauth_token_bot, bot_state.bot_id.clone(), announ).await?;
                 }
                 Ok(())
             };
@@ -117,21 +107,16 @@ pub fn play_announcement_command() -> Arc<dyn CommandT> {
 
 pub fn announcement_freq_command() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg, client, _pool, bot_state| {
+        |msg, client, pool, bot_state| {
             let fut = async move {
                 let msg_vec: Vec<&str> = words(&msg);
-
                 if msg_vec.len() == 2 {
                     let mut bot_state = bot_state.write().await;
                     if let Ok(seconds) = msg_vec[1].parse::<u64>() {
-                        bot_state
-                            .config
-                            .get_channel_config_mut(msg.channel())
-                            .announcement_config
-                            .interval = Duration::from_secs(seconds);
-                        bot_state.config.save_config();
+                        bot_state.config.get_channel_config_mut(&msg.channel_login).announcement_config.interval = Duration::from_secs(seconds);
+                        bot_state.config.save_all(&pool).await?;
 
-                        send_message(&msg, client.lock().await.borrow_mut(), "✅ Frequency has been updated.").await?;
+                        client.say(msg.channel_login, "✅ Frequency has been updated.".to_string()).await?;
                     }
                 }
 
@@ -148,10 +133,9 @@ pub fn announcement_freq_command() -> Arc<dyn CommandT> {
 
 pub fn announcement_state_command() -> Arc<dyn CommandT> {
     Arc::new(FnCommand::new(
-        |msg, client, _pool, bot_state| {
+        |msg, client, pool, bot_state| {
             let fut = async move {
-                let msg_vec: Vec<&str> = msg.text().split_ascii_whitespace().collect();
-
+                let msg_vec: Vec<&str> = words(&msg);
                 if msg_vec.len() == 2 {
                     let mut bot_state = bot_state.write().await;
                     let state_input = msg_vec[1].to_lowercase();
@@ -162,10 +146,10 @@ pub fn announcement_state_command() -> Arc<dyn CommandT> {
                         custom => AnnouncementState::Custom(custom.to_string()),
                     };
 
-                    bot_state.config.get_channel_config_mut(msg.channel()).announcement_config.state = state.clone();
-                    bot_state.config.save_config();
+                    bot_state.config.get_channel_config_mut(&msg.channel_login).announcement_config.state = state.clone();
+                    bot_state.config.save_all(&pool).await?;
 
-                    send_message(&msg, client.lock().await.borrow_mut(), &format!("✅ Announcement state set to: {:?}", state)).await?;
+                    client.say(msg.channel_login, format!("✅ Announcement state set to: {:?}", state)).await?;
                 }
                 Ok(())
             };

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT reply FROM commands WHERE command = $1 AND channel = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "reply",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "109dacbab75912cdf48fc1e131c30d6cc9e663be34e090b348fbcb5b62a4714e"
+}

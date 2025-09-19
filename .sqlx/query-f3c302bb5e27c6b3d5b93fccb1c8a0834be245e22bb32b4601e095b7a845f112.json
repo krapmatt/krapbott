@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE queue SET position = $1, group_priority = 1, priority_runs_left = COALESCE($2, priority_runs_left), locked_first = FALSE\n                WHERE twitch_name = $3 AND channel_id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f3c302bb5e27c6b3d5b93fccb1c8a0834be245e22bb32b4601e095b7a845f112"
+}
