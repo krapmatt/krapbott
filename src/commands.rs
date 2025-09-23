@@ -258,14 +258,12 @@ pub struct CommandOverride {
 }
 
 pub async fn update_dispatcher_if_needed(channel: &str, config: &BotConfig, pool: &PgPool, dispatcher_cache: Arc<RwLock<DispatcherCache>>) -> BotResult<()> {
-    println!("Here7,5");
     let alias_config = fetch_aliases_from_db(channel, pool).await?;
     let new_dispatcher = create_dispatcher(config, channel, &alias_config);
-    println!("Here8");
+
     {
         let mut cache = dispatcher_cache.write().await;
         let old_dispatcher = cache.get(channel);
-        println!("Here9");
         match old_dispatcher {
             Some(existing) => {
                 let existing_keys: HashSet<_> = existing.keys().collect();

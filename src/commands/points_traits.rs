@@ -416,7 +416,7 @@ where T: FromStr + ToString + Send + Sync + Clone + 'static, <T as FromStr>::Err
             let fut = async move {
                 let words: Vec<&str> = words(&msg);
 
-                if words.len() != 2 {
+                if words.len() <= 2 {
                     client.say(msg.channel_login, invalid_msg).await?;
                     return Ok(());
                 }

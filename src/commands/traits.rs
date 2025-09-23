@@ -16,14 +16,32 @@ pub trait CommandT: Send + Sync {
     fn execute(&self, msg: PrivmsgMessage, client: TwitchClient, pool: PgPool, bot_state: Arc<RwLock<BotState>>, alias: Arc<AliasConfig>) -> BoxFuture<'static, BotResult<()>>;
 }
 
-/*pub async fn with_client<F, Fut>(client: TwitchClient, f: F) -> BotResult<()>
-where
-    F: FnOnce(&mut tmi::Client) -> Fut,
-    Fut: Future<Output = BotResult<()>>,
-{
-    let mut locked = client.lock().await;
-    f(&mut locked.borrow_mut()).await
-}*/
+impl dyn CommandT {
+    pub fn usage_with_aliases(&self, alias_config: &AliasConfig) -> String {
+        let mut aliases = alias_config.get_aliases(self.name());
+        
+        // Always include the primary command name if it’s not removed
+        if !alias_config.get_removed_aliases(self.name()) {
+            aliases.push(self.name().to_string());
+        }
+
+        // Remove duplicates + disabled commands
+        aliases.retain(|alias| !alias_config.disabled_commands.contains(alias));
+
+        if aliases.is_empty() {
+            return format!("Usage: {}", self.usage());
+        }
+
+        // Join all aliases
+        let alias_list = aliases
+            .iter()
+            .map(|a| format!("!{}", a))
+            .collect::<Vec<_>>()
+            .join(" / ");
+
+        format!("Usage: {} → {}", alias_list, self.usage())
+    }
+}
 
 /*pub struct RateLimiter {
     // Could be per-channel, global, or per-user

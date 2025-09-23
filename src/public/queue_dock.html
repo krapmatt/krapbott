@@ -337,6 +337,8 @@
             }
         }
         async function fetchQueueForChannel() {
+            const tbody = document.getElementById("queue-body");
+            tbody.innerHTML = "";
             try {
                 const response = await fetch("/queue", {
                     method: "GET",
@@ -359,7 +361,7 @@
                     showNotification("Unexpected response from server.");
                     return;
                 }
-
+                
                 const queue = groupedData.queue;
                 if (queue.length === 0) {
                     tbody.innerHTML = `<tr><td colspan="3">No data found for this channel.</td></tr>`;
