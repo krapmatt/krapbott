@@ -374,8 +374,6 @@
 
                 // Update the run counter display
                 document.getElementById("run-counter").textContent = run_counter;
-                const tbody = document.getElementById("queue-body");
-                tbody.innerHTML = "";
 
                 if (queue.length === 0) {
                     tbody.innerHTML = `<tr><td colspan="3">No data found for this channel.</td></tr>`;

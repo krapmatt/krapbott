@@ -225,23 +225,34 @@ impl CommandT for ChangePointsCommand {
                 "SELECT points FROM currency WHERE channel = $1 AND LOWER(twitch_name) = LOWER($2)",
                 channel, twitch_user
             ).fetch_optional(&pool).await?;
-
+            let config = &bot_state.read().await.config;
+            let config = config.get_channel_config(&msg.channel_login).unwrap();
             if let Some(row) = result {
                 let new_points = match mode {
                     ChangeMode::Add => row.points + points as i32,
                     ChangeMode::Remove => row.points - points as i32,
                 };
-                let config = &bot_state.read().await.config;
-                let config = config.get_channel_config(&msg.channel_login).unwrap();
+
                 sqlx::query!(
-                    "INSERT INTO currency (twitch_name, points, channel) VALUES ($1, $2, $3) 
+                    "INSERT INTO currency (twitch_name, points, channel)
+                    VALUES ($1, $2, $3)
                     ON CONFLICT(twitch_name, channel) DO UPDATE SET points = $2",
                     twitch_user, new_points, channel
                 ).execute(&pool).await?;
-
+                
                 client.say(msg.channel_login, format!("{twitch_user} now has {new_points} {}", config.points_config.name)).await?;
             } else {
-                client.say(msg.channel_login, "User not found in the database".to_string()).await?;
+                if matches!(mode, ChangeMode::Add) {
+                    sqlx::query!(
+                        "INSERT INTO currency (twitch_name, points, channel)
+                        VALUES ($1, $2, $3)",
+                        twitch_user, points as i32, channel
+                    ).execute(&pool).await?;
+
+                    client.say(msg.channel_login, format!("{twitch_user} now has {points} {}", config.points_config.name)).await?;
+                } else {
+                    client.say(msg.channel_login, "User not found in the database".to_string()).await?;
+                }
             }
             Ok(())
         })
@@ -416,7 +427,7 @@ where T: FromStr + ToString + Send + Sync + Clone + 'static, <T as FromStr>::Err
             let fut = async move {
                 let words: Vec<&str> = words(&msg);
 
-                if words.len() <= 2 {
+                if words.len() != 2 {
                     client.say(msg.channel_login, invalid_msg).await?;
                     return Ok(());
                 }

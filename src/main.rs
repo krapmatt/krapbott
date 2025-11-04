@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tokio::{sync::{mpsc, RwLock}};
 use crate::{bot::BotState, obs_dock::{delete_alias_handler, get_aliases_handler, get_all_command_aliases, remove_default_alias_handler, restore_default_alias_handler, set_alias_handler, toggle_default_command_handler}};
 use include_dir::{include_dir, Dir};
-static PUBLIC_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/public");
+static PUBLIC_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/public");
 
 #[shuttle_runtime::main]
 async fn main(#[shuttle_shared_db::Postgres] pool: sqlx::PgPool, #[shuttle_runtime::Secrets] secrets: SecretStore) -> shuttle_warp::ShuttleWarp<(impl Reply,)> {

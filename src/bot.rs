@@ -58,7 +58,7 @@ impl BotState {
         let nickname = secrets.get("TWITCH_BOT_NICK").expect("No bot name");
         let bot_id = secrets.get("TWITCH_CLIENT_ID_BOT").expect("msg");
         let x_api_key = secrets.get("XAPIKEY").expect("No bungie api key");
-
+        info!("{}", oauth_token_bot);
         BotState {
             oauth_token_bot: oauth_token_bot,
             nickname: nickname,
@@ -240,17 +240,35 @@ pub async fn bot_task(channel: String, state: Arc<RwLock<BotState>>, pool: Arc<P
     }
     
     {
-        let bot_state = state.write().await;
-        let channel_clone = channel.clone();
-        let config = bot_state.config.get_channel_config(&channel).unwrap();
-        if config.packages.contains(&"points".to_string()) {
-            let mut loops = bot_state.active_point_loops.write().await;
+        let (should_have_points, loops_arc, oauth_token_bot, bot_id_clone) = {
+            let bot_state = state.read().await;
+            let config = bot_state.config.get_channel_config(&channel).unwrap();
+
+            let should = config
+                .packages
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case("points")); // tolerate case differences
+
+            // clone the Arc so we can lock it without holding `state`.
+            let loops_arc = bot_state.active_point_loops.clone();
+
+            // clone oauth & bot id so we don't need to take another lock later
+            let oauth_token_bot = bot_state.oauth_token_bot.clone();
+            let bot_id_clone = bot_state.bot_id.clone();
+
+            (should, loops_arc, oauth_token_bot, bot_id_clone)
+        };
+        
+        if should_have_points {
+            let mut loops = loops_arc.write().await;
             if !loops.contains_key(&channel) {
                 let pool_clone = pool.clone();
-                let state_clone = state.clone();
+            let channel_for_task = channel.clone();
+            let id_for_task = id.clone(); // id was computed earlier in bot_task
+            let oauth_for_task = oauth_token_bot;
+            let bot_id_for_task = bot_id_clone;
                 let handle = tokio::spawn(async move {
-                    let state = state_clone.read().await;
-                    if let Err(e) = grant_points_task(&id, pool_clone, &channel_clone, &state.oauth_token_bot, &state.bot_id).await {
+                    if let Err(e) = grant_points_task(&id_for_task, pool_clone, &channel_for_task, &oauth_for_task, &bot_id_for_task).await {
                         error!("Points loop crashed for {}: {}", &channel_clone, e);
                     }
                 });
@@ -260,7 +278,7 @@ pub async fn bot_task(channel: String, state: Arc<RwLock<BotState>>, pool: Arc<P
     }
 
     loop {
-        info!("(Re)connecting client for {}", channel);
+        info!("(Re)connecting client for {}", &channel);
         let (mut incoming, client) = {
             let creds = {
                 let s = state.read().await;
@@ -348,7 +366,7 @@ pub async fn handle_obs_message(channel_id: String, command: String, pool: Arc<P
 async fn handle_privmsg(msg: PrivmsgMessage, bot_state: Arc<RwLock<BotState>>, pool: PgPool, client: TwitchClient) -> BotResult<()> {
     let channel = msg.channel_login.clone();
     let msg_clone = msg.clone();
-    
+    info!("Here");
     if msg_clone.message_text.starts_with("!pos")
         && (msg_clone.sender.login.to_ascii_lowercase() == "thatjk" || msg_clone.channel_login == "samoan_317")
     {
@@ -383,6 +401,7 @@ async fn handle_privmsg(msg: PrivmsgMessage, bot_state: Arc<RwLock<BotState>>, p
                         let s = bot_state.read().await;
                         (s.oauth_token_bot.clone(), s.bot_id.clone())
                     };
+                    info!("Here");
                     if has_permission(&msg, client.clone(), cmd.permission(), &oauth_token, &bot_id).await {
                         let aliases = fetch_aliases_from_db(&channel, &pool).await?;
                         cmd.execute(msg.clone(), client.clone(), pool.clone(), Arc::clone(&bot_state), Arc::new(aliases)).await?;
@@ -497,13 +516,13 @@ pub async fn grant_points_task(broadcaster_id: &str, pool: Arc<PgPool>, name: &s
         if is_channel_live(name, &oauth_token, &bot_id).await? {
             let bot_config = BotConfig::load_from_db(&pool).await?;
             let config = bot_config.get_channel_config(name).unwrap();
-
+            info!("{}", name);
             let points = config.points_config.points_per_time;
             let mut viewers = active_viewers.lock().await.clone(); // Get chatters
 
             // Fetch Lurkers from Twitch API
             let lurkers = fetch_lurkers(broadcaster_id, &oauth_token, &bot_id).await;
-
+            info!("{:?}", lurkers);
             // Combine chatters and lurkers
             viewers.extend(lurkers);
 
