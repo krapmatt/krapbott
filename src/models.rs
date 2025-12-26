@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use thiserror::Error;
-use tracing::error;
+use tracing::{error, info};
 use twitch_irc::{login::StaticLoginCredentials, message::PrivmsgMessage, transport::tcp::{TCPTransport, TLS}, validate};
 use std::{
     collections::{HashMap, HashSet}, fs::File, io::{self, Read, Write}, path::Path, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}
@@ -59,7 +59,7 @@ pub const ADMINS: &[&str] = &["KrapMatt", "ThatJK", "Samoan_317"];
 /// Generic permission checker for Twitch roles
 async fn has_perm(msg: &PrivmsgMessage, client: &TwitchClient, allowed_roles: &[&str], error_message: &str) -> bool {
     let user_name = msg.sender.name.to_lowercase();
-
+    info!("badges: {:?}", msg.badges);
     let has_role = msg.badges.iter().any(|badge| allowed_roles.contains(&badge.name.as_str()))
         || ADMINS.contains(&user_name.as_str());
 
@@ -81,7 +81,7 @@ pub async fn is_subscriber(msg: &PrivmsgMessage, client: &TwitchClient) -> bool 
 }
 
 pub async fn is_moderator(msg: &PrivmsgMessage, client: &TwitchClient) -> bool {
-    has_perm(msg, client, &["moderator", "broadcaster"],"You are not a moderator/broadcaster. You can't use this command").await
+    has_perm(msg, client, &["moderator", "broadcaster", "lead_moderator"],"You are not a moderator/broadcaster. You can't use this command").await
 }
 
 pub async fn is_vip(msg: &PrivmsgMessage, client: &TwitchClient) -> bool {
