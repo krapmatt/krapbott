@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                        UPDATE krapbott_v2.queue\n                        SET position = $1,\n                            group_priority = 1,\n                            priority_runs_left = $2,\n                            locked_first = FALSE\n                        WHERE display_name = $3 AND channel_id = $4\n                        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4c76dcbebf1ea5973a85953a715819c34db01118aee34d6e36655aabd04ec3c8"
+}

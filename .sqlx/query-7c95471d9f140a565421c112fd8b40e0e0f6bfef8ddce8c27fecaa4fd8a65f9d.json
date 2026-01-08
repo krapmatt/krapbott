@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    WITH RankedQueue AS (\n                        SELECT user_id,\n                               ROW_NUMBER() OVER (ORDER BY position) AS pos\n                        FROM krapbott_v2.queue\n                        WHERE channel_id = $1\n                    )\n                    SELECT pos FROM RankedQueue WHERE user_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pos",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7c95471d9f140a565421c112fd8b40e0e0f6bfef8ddce8c27fecaa4fd8a65f9d"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH shuffled AS (\n            SELECT position, user_id, bungie_name, \n                   ROW_NUMBER() OVER () AS new_position\n            FROM (SELECT * FROM krapbott_v2.queue WHERE channel_id = $1 ORDER BY RANDOM())\n        )\n        UPDATE krapbott_v2.queue\n        SET position = (SELECT new_position FROM shuffled WHERE shuffled.position = krapbott_v2.queue.position)\n        WHERE channel_id = $1;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a4c52e7b68e3c8b7d84def9195b721a22f79abfdd5192302bcfe7b17cc45797f"
+}

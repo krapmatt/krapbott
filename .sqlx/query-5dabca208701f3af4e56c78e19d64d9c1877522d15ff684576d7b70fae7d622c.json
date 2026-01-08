@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        CREATE UNIQUE INDEX IF NOT EXISTS sessions_unique_user\n        ON krapbott_v2.sessions (platform, platform_user_id);\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "5dabca208701f3af4e56c78e19d64d9c1877522d15ff684576d7b70fae7d622c"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                            WITH ranked AS (\n                                SELECT user_id,\n                                       ROW_NUMBER() OVER (ORDER BY position) AS new_pos\n                                FROM krapbott_v2.queue\n                                WHERE channel_id = $1\n                            )\n                            UPDATE krapbott_v2.queue q\n                            SET position = r.new_pos\n                            FROM ranked r\n                            WHERE q.user_id = r.user_id\n                              AND q.channel_id = $1\n                            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "98866360da686e1c62485d8fc1ac8bcdf776df8db5f7bf64a037a7f1ee5e749b"
+}

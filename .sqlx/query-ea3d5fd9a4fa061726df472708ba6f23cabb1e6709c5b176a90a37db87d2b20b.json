@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO krapbott_v2.sessions\n        (session_id, platform, platform_user_id, login)\n        VALUES ($1, 'twitch', $2, $3)\n        ON CONFLICT (platform, platform_user_id)\n        DO UPDATE SET\n            session_id = EXCLUDED.session_id,\n            created_at = NOW()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ea3d5fd9a4fa061726df472708ba6f23cabb1e6709c5b176a90a37db87d2b20b"
+}

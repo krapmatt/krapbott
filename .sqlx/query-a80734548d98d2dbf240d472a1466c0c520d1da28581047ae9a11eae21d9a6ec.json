@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        CREATE INDEX IF NOT EXISTS idx_queue_channel\n        ON krapbott_v2.queue (channel_id);\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "a80734548d98d2dbf240d472a1466c0c520d1da28581047ae9a11eae21d9a6ec"
+}

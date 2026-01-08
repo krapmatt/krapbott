@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT user_id, bungie_name, priority_runs_left, locked_first \n         FROM krapbott_v2.queue \n         WHERE channel_id = $1 \n         ORDER BY position ASC \n         LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "bungie_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "priority_runs_left",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "locked_first",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "df171a49ac90d7e3abd369100a4ff936d9a6fe4d64d5604d2d48f05c118eaffc"
+}

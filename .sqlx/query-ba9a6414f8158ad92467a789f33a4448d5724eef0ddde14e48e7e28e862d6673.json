@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT command FROM krapbott_v2.command_disabled WHERE channel = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "command",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ba9a6414f8158ad92467a789f33a4448d5724eef0ddde14e48e7e28e862d6673"
+}

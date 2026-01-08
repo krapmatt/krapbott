@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT membership_id, membership_type\n        FROM krapbott_v2.streamusers\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "membership_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "membership_type",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "06018c3c9774035e5e482b4c3e2977ebfd998166b436626fb512cee8eba2a59f"
+}
