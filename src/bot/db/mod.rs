@@ -2,14 +2,12 @@ use core::fmt;
 use std::{error::Error, str::FromStr};
 
 use serde::{Deserialize, Serialize};
-use serde_json::from_str;
 use sqlx::{Decode, Encode, PgPool, Postgres, Type, encode::IsNull, postgres::{PgArgumentBuffer, PgTypeInfo, PgValueRef}};
 
-use crate::bot::{chat_event::chat_event::Platform, db::{aliases::{COMMAND_ALIASES, COMMAND_ALIASES_REMOVALS, COMMAND_DISABLED}, config::CONFIG_TABLE, points::CURRENCY_TABLE, queue::{BAN_TABLE, QUEUE_TABLE}, users::USERS_TABLE}};
+use crate::bot::{chat_event::chat_event::Platform};
 
 pub mod users;
 pub mod queue;
-pub mod points;
 pub mod aliases;
 pub mod bungie;
 pub mod config;
@@ -79,7 +77,7 @@ impl<'q> sqlx::Encode<'q, Postgres> for Platform {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct UserId(String);
 
 impl UserId {

@@ -9,6 +9,7 @@ use crate::bot::db::queue::add_to_queue;
 use crate::bot::db::queue::is_banned_from_queue;
 use crate::bot::db::queue::user_exists_in_queue;
 use crate::bot::db::queue::update_queue;
+use crate::bot::replies::Replies;
 use crate::bot::state::def::BotError;
 use crate::bot::web::sse::SseEvent;
 use crate::bot::{chat_event::chat_event::ChatEvent, commands::commands::BotResult, db::{ChannelId, UserId, bungie::is_bungiename, users::get_queue_user_by_id}, state::def::AppState};
@@ -68,6 +69,12 @@ impl AppState {
             None => return Ok(None),
         };
 
+        if let Some(following) =  event.follower {
+            if !following {
+                return Ok(Some("You are not following the channel 😭".to_string()))
+            }
+        }
+
         let channel_id = ChannelId::new(event.platform, &event.channel);
 
         let (queue_owner, open, queue_len, random_queue) = {
@@ -85,13 +92,13 @@ impl AppState {
             (
                 owner,
                 cfg.open,
-                cfg.len,
+                cfg.size,
                 cfg.random_queue
             )
         };  
         
         if !open {
-            return Ok(Some("Queue is currently closed.".to_string()));
+            return Ok(Some(Replies::join_closed(&user.name.display)));
         }
 
         let user_id = UserId::new(user.identity.platform, user.identity.platform_user_id.clone());
@@ -117,15 +124,7 @@ impl AppState {
             }
 
             (Some(provided), None) => {
-                if is_valid_bungie_name(&provided).is_some()
-                    && is_bungiename(
-                        pool,
-                        &user,
-                        &provided,
-                        &self.secrets.x_api_key,
-                    )
-                    .await
-                {
+                if is_valid_bungie_name(&provided).is_some() && is_bungiename(pool, &user, &provided, &self.secrets.x_api_key).await {
                     Some(provided)
                 } else {
                     None
@@ -139,19 +138,17 @@ impl AppState {
         let bungie_name = match bungie_name {
             Some(name) => name,
             None => {
-                return Ok(Some(
-                    "Please provide a valid Bungie name (Name#1234).".into(),
-                ))
+                return Ok(Some(Replies::join_invalid_bungie(&user.name.display)));
             }
         };
 
         match is_banned_from_queue(pool, &user_id).await? {
             BanStatus::NotBanned => {}
             BanStatus::Permanent { reason } => {
-                return Ok(Some(format!("You are banned: {:?}", reason)))
+                return Ok(Some(Replies::join_banned(&user.name.display, reason.as_deref())));
             }
             BanStatus::Timed { reason, .. } => {
-                return Ok(Some(format!("You are temporarily banned: {:?}", reason)))
+                return Ok(Some(Replies::join_timed_out(&user.name.display)));
             }
         }
 
@@ -161,21 +158,21 @@ impl AppState {
             display_name: user.name.display.clone(),
         };
 
-        let reply = process_queue_entry(pool, event, queue_len, entry, &queue_owner, Queue::Join,random_queue).await?;
+        let reply = process_queue_entry(pool, queue_len, entry, &queue_owner, Queue::Join,random_queue).await?;
 
         Ok(Some(reply))
     }
 }
+#[derive(Debug)]
 pub struct QueueEntry {
     pub user_id: UserId,
     pub bungie_name: String,
     pub display_name: String,
 }
-pub async fn process_queue_entry(pool: &PgPool, event: ChatEvent, queue_len: usize, user: QueueEntry, channel_id: &ChannelId, queue_join: Queue, raffle: bool) -> BotResult<String> {
-    let user_id = UserId::new(event.user.as_ref().unwrap().identity.platform.clone(), event.user.as_ref().unwrap().identity.platform_user_id.clone());
-    let reply = if user_exists_in_queue(&pool, &user_id, channel_id).await? {
+pub async fn process_queue_entry(pool: &PgPool, queue_len: usize, user: QueueEntry, channel_id: &ChannelId, queue_join: Queue, raffle: bool) -> BotResult<String> {
+    let reply = if user_exists_in_queue(&pool, &user.user_id, channel_id).await? {
         update_queue(&pool, &user, channel_id).await?;
-        format!("{} updated their Bungie name to {}", user.display_name, user.bungie_name)
+        format!("✅ {} has updated their bungie name to {}", user.display_name, user.bungie_name)
     } else {
         add_to_queue(queue_len, &pool, &user, channel_id, queue_join, raffle).await?
     };
@@ -225,10 +222,9 @@ pub async fn randomize_queue(channel: &ChannelId, pool: &PgPool, teamsize: i64) 
     
 
     tx.commit().await?;
-    let selected_team = next_group.iter().map(|q| format!("{} ({})", q.display_name, q.bungie_name)).collect::<Vec<String>>().join(", ");
-        // 🔹 Announce the random selection
-    let announcement = format!("🎲 Winner of the raffle!: {}", selected_team);
-    Ok(announcement)
+    let selected_team = next_group.iter().map(|q| format!("{}", q.display_name)).collect::<Vec<String>>().join(", ");
+        // Announce the random selection
+    Ok(Replies::raffle_won(&selected_team))
 }
 
 pub async fn next_handler(channel: &ChannelId, pool: &PgPool, teamsize: i64) -> BotResult<String> {
@@ -316,9 +312,9 @@ pub async fn next_handler(channel: &ChannelId, pool: &PgPool, teamsize: i64) -> 
     tx.commit().await?;
 
     Ok(if result.is_empty() {
-        "Queue is empty".to_string()
+        Replies::queue_empty(channel.channel())
     } else {
-        format!("Next Group: {}", result.join(", "))
+        Replies::next_group(&result.join(", "))
     })
 }
 
@@ -334,9 +330,9 @@ pub async fn toggle_queue(pool: &PgPool, state: &AppState, caller: &ChannelId, o
     }
 
     Ok(if open {
-        "Queue opened ✅".into()
+        Replies::queue_opened()
     } else {
-        "Queue closed 🚫".into()
+        Replies::queue_closed()
     })
 }
 
@@ -371,40 +367,52 @@ pub async fn run_next(
     Ok(result)
 }
 
-pub async fn remove_from_queue(pool: &PgPool, owner: &ChannelId, user_id: &UserId) -> BotResult<()> {
-    let mut tx = pool.begin().await?;
-
-    let pos = sqlx::query_scalar!(
+pub async fn remove_from_queue(pool: &PgPool, owner: &ChannelId, user_id: &UserId, state: Arc<AppState>) -> BotResult<()> {
+    let position = sqlx::query_scalar!(
         r#"
-        SELECT position FROM krapbott_v2.queue
-        WHERE display_name = $1 AND channel_id = $2
+        SELECT position
+        FROM krapbott_v2.queue
+        WHERE user_id = $1 AND channel_id = $2
         "#,
-        user_id.as_str(), owner.as_str()
-    ).fetch_optional(&mut *tx).await?;
+        user_id.as_str(),
+        owner.as_str()
+    )
+    .fetch_optional(pool)
+    .await?;
 
-    let Some(position) = pos else {
-        tx.rollback().await?;
+    let Some(position) = position else {
         return Ok(()); // user not in queue
     };
 
-    sqlx::query!(
+    // Delete user
+    let res = sqlx::query!(
         r#"
         DELETE FROM krapbott_v2.queue
-        WHERE display_name = $1 AND channel_id = $2
+        WHERE user_id = $1 AND channel_id = $2
         "#,
-        user_id.as_str(), owner.as_str()
-    ).execute(&mut *tx).await?;
+        user_id.as_str(),
+        owner.as_str()
+    )
+    .execute(pool)
+    .await?;
 
+    tracing::info!("Deleted rows: {}", res.rows_affected());
+
+    // Shift positions
     sqlx::query!(
         r#"
         UPDATE krapbott_v2.queue
         SET position = position - 1
         WHERE channel_id = $1 AND position > $2
         "#,
-        owner.as_str(), position
-    ).execute(&mut *tx).await?;
+        owner.as_str(),
+        position
+    )
+    .execute(pool)
+    .await?;
 
-    tx.commit().await?;
+    // Notify OBS
+    let _ = &state.sse_bus.send(SseEvent::QueueUpdated { channel: owner.clone() });
     Ok(())
 }
 
@@ -445,3 +453,36 @@ pub async fn set_queue_open(pool: &PgPool, state: Arc<AppState>, owner: &Channel
     Ok(())
 }
 
+pub async fn set_queue_len(pool: &PgPool, state: Arc<AppState>, owner: &ChannelId, len: usize) -> BotResult<()> {
+    {
+        let mut cfg = state.config.write().await;
+
+        let channel_cfg = cfg
+            .channels
+            .get_mut(owner)
+            .ok_or(BotError::ConfigMissing(owner.clone()))?;
+
+        channel_cfg.size = len;
+        save_channel_config(pool, owner, &cfg).await?;
+
+    }
+
+    Ok(())
+}
+
+pub async fn set_queue_size(pool: &PgPool, state: Arc<AppState>, owner: &ChannelId, size: usize) -> BotResult<()> {
+    {
+        let mut cfg = state.config.write().await;
+
+        let channel_cfg = cfg
+            .channels
+            .get_mut(owner)
+            .ok_or(BotError::ConfigMissing(owner.clone()))?;
+
+        channel_cfg.teamsize = size;
+        save_channel_config(pool, owner, &cfg).await?;
+
+    }
+
+    Ok(())
+}

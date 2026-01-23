@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM krapbott_v2.queue\n        WHERE user_id = $1 AND channel_id = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "78b96130f1fc287b6dd5da6d3acd72107b56b4342a3f52813f5ebd18de7cb347"
+}

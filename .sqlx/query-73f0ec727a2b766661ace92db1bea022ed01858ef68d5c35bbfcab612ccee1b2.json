@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT position, display_name, bungie_name\n        FROM krapbott_v2.queue\n        WHERE channel_id = $1\n        ORDER BY position ASC\n        ",
+  "query": "\n        SELECT position, display_name, bungie_name, user_id\n        FROM krapbott_v2.queue\n        WHERE channel_id = $1\n        ORDER BY position ASC\n        ",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,11 @@
         "ordinal": 2,
         "name": "bungie_name",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "user_id",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -27,8 +32,9 @@
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "65b2d0c8f16ebb2475f6e6ec070c959289baeb7d73e21e4359a861b271597efa"
+  "hash": "73f0ec727a2b766661ace92db1bea022ed01858ef68d5c35bbfcab612ccee1b2"
 }

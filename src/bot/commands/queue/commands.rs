@@ -4,7 +4,7 @@ use futures::future::BoxFuture;
 use once_cell::sync::Lazy;
 use sqlx::PgPool;
 
-use crate::{api::twitch_api::resolve_twitch_user_id, bot::{chat_event::chat_event::{ChatEvent, Platform}, commands::{CommandGroup, CommandRegistration, commands::{BotResult, CommandT, FnCommand, parse_channel_id}, queue::logic::{QueueEntry, QueueKey, is_valid_bungie_name, next_handler, process_queue_entry, randomize_queue, resolve_queue_owner, toggle_queue}}, db::{ChannelId, UserId, config::save_channel_config}, handler::handler::{ChatClient, UnifiedChatClient}, permissions::permissions::PermissionLevel, state::def::{AppState, BotError}, web::sse::SseEvent}, cmd};
+use crate::{api::twitch_api::resolve_twitch_user_id, bot::{chat_event::chat_event::{ChatEvent, Platform}, commands::{CommandGroup, CommandRegistration, commands::{BotResult, CommandT, FnCommand, parse_channel_id}, queue::logic::{QueueEntry, QueueKey, next_handler, process_queue_entry, randomize_queue, resolve_queue_owner, toggle_queue}}, db::{ChannelId, UserId, bungie::register_bungie_name, config::save_channel_config}, handler::handler::{ChatClient, UnifiedChatClient}, permissions::permissions::PermissionLevel, replies::Replies, state::{def::{AppState, BotError}, state::get_twitch_access_token}, web::sse::SseEvent}, cmd};
 
 pub static QUEUE_COMMANDS: Lazy<Arc<CommandGroup>> = Lazy::new(|| {
     Arc::new(CommandGroup {
@@ -13,8 +13,8 @@ pub static QUEUE_COMMANDS: Lazy<Arc<CommandGroup>> = Lazy::new(|| {
             cmd!(Arc::new(JoinCommand), "j", "q", "queue"),
             cmd!(Arc::new(NextCommand), "next"),
             cmd!(Arc::new(ForceAddCommand), "add"),
-            cmd!(Arc::new(QueueSize), "queue_len", "len"),
-            cmd!(Arc::new(QueueLength), "queue_size", "size"),
+            cmd!(Arc::new(QueueLength), "queue_len", "len"),
+            cmd!(Arc::new(QueueSize), "queue_size", "size"),
             cmd!(list(), "list"),
             cmd!(random(), "random"),
             cmd!(toggle_queue_command(true), "open", "open_queue"),
@@ -44,7 +44,7 @@ impl CommandT for JoinCommand {
             let reply = state.handle_join(event.clone(), &pool).await?;
             if let Some(msg) = reply {
                 client.send_message(&ChannelId::new(event.platform, &event.channel), &msg).await?;
-                &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) })?;
+                let _ = &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) })?;
             }
             Ok(())
         })
@@ -62,16 +62,15 @@ impl CommandT for ForceAddCommand {
     fn execute(&self, event: ChatEvent, pool: PgPool, state: Arc<AppState>, client: Arc<UnifiedChatClient>) -> BoxFuture<'static, BotResult<()>> {
         Box::pin(async move {
             let words: Vec<&str> = event.message.split_whitespace().collect();
-            let mut reply = if words.len() < 3 {
-                "Usage: !add @name BungieName#1234"
-            } else {
-                "User added to the queue."
-            };
+            if words.len() < 3 {
+                return Err(BotError::Chat("Usage: !add @name BungieName#1234".to_string()))
+            } 
 
             let name = words[1].strip_prefix("@").unwrap_or(words[1]).to_string();
             let bungie_name = words[2..].join(" ");
             let entry = if event.platform == Platform::Twitch {
-                let (platform_id, display_name) = resolve_twitch_user_id(&name, &state.secrets).await?;
+                let token = get_twitch_access_token(&state).await?;
+                let (platform_id, display_name) = resolve_twitch_user_id(&name, &state.secrets, &token).await?;
                 let user_id = UserId::new(Platform::Twitch, platform_id);
                 QueueEntry {
                     user_id,
@@ -81,30 +80,23 @@ impl CommandT for ForceAddCommand {
             } else {
                 return Err(BotError::Custom("Missing Platform".to_string()))
             };
-            reply = if is_valid_bungie_name(&bungie_name).is_none() {
-                "Please provide a valid Bungie name (Name#1234)."
-            } else {
-                "User added to the queue."
-            };
 
-            
-
-            let channel_id = ChannelId::new(event.platform, &event.channel);
+            let channel_id = resolve_queue_owner(&state, &ChannelId::new(event.platform, event.channel)).await?;
 
             let cfg = {
                 let s = state.config.read().await;
                 match s.get_channel_config(&channel_id) {
                     Some(c) => c.clone(),
                     None => {
-                        client.send_message(&channel_id, "Channel configuration not found.").await?;
-                        return Ok(());
+                        return Err(BotError::Chat("‼️Channel Configuration missing ‼️".to_string()));
                     }
                 }
             };
             
-            let reply = process_queue_entry(&pool, event, cfg.len, entry, &channel_id, crate::bot::commands::queue::logic::Queue::ForceJoin, cfg.random_queue).await?;
-            &state.sse_bus.send(SseEvent::QueueUpdated { channel: channel_id.clone() })?;
+            let reply = process_queue_entry(&pool, cfg.size, entry, &channel_id, crate::bot::commands::queue::logic::Queue::ForceJoin, cfg.random_queue).await?;
             client.send_message(&channel_id, &reply).await?;
+            &state.sse_bus.send(SseEvent::QueueUpdated { channel: channel_id.clone() })?;
+            
             Ok(())
         })
     }
@@ -141,7 +133,7 @@ impl CommandT for NextCommand {
             }
 
             client.send_message(&caller, &result).await?;
-            &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) })?;
+            let _ = &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) })?;
             Ok(())
         })
     }
@@ -159,16 +151,16 @@ impl CommandT for QueueSize {
             let caller = ChannelId::new(event.platform, &event.channel);
             let owner = resolve_queue_owner(&state, &caller).await?;
 
-            let new_len: usize = event.message.split_whitespace().nth(1).ok_or_else(|| BotError::Custom("Usage: !len <n>".to_string()))?
-            .parse().map_err(|_| BotError::Custom("Invalid Number".to_string()))?;
+            let new_size: usize = event.message.split_whitespace().nth(1).ok_or_else(|| BotError::Chat("Usage: !size <n>".to_string()))?
+            .parse().map_err(|_| BotError::Chat("Invalid Number".to_string()))?;
             {
                 let mut cfg = state.config.write().await;
-                cfg.get_channel_config_mut(owner.clone()).len = new_len;
+                cfg.get_channel_config_mut(owner.clone()).teamsize = new_size;
                 save_channel_config(&pool, &owner, &cfg).await?;
             }
 
             
-            client.send_message(&caller, &format!("Queue size updated to {}.", new_len)).await?;
+            client.send_message(&caller, &Replies::queue_size(&new_size.to_string())).await?;
             Ok(())
         })    
     }
@@ -186,16 +178,16 @@ impl CommandT for QueueLength {
             let caller = ChannelId::new(event.platform, &event.channel);
             let owner = resolve_queue_owner(&state, &caller).await?;
 
-            let new_size: usize = event.message.split_whitespace().nth(1).ok_or_else(|| BotError::Custom("Usage: !size <n>".to_string()))?
-            .parse().map_err(|_| BotError::Custom("Invalid Number".to_string()))?;
+            let new_len: usize = event.message.split_whitespace().nth(1).ok_or_else(|| BotError::Chat("Usage: !len <n>".to_string()))?
+            .parse().map_err(|_| BotError::Chat("Invalid Number".to_string()))?;
             {
                 let mut cfg = state.config.write().await;
-                cfg.get_channel_config_mut(owner.clone()).teamsize = new_size;
+                cfg.get_channel_config_mut(owner.clone()).size = new_len;
                 save_channel_config(&pool, &owner, &cfg).await?;
             }
 
             
-            client.send_message(&caller, &format!("Team size updated to {}.", new_size)).await?;
+            client.send_message(&caller, &Replies::queue_length(&new_len.to_string())).await?;
 
             Ok(())
         })    
@@ -251,8 +243,7 @@ pub fn list() -> Arc<dyn CommandT> {
                 .await?;
 
                 if queue_entries.is_empty() {
-                    client.send_message(&caller, "Queue is empty!").await?;
-                    return Ok(());
+                    return Err(BotError::Chat("❌❌❌The queue is empty❌❌❌".to_string()));
                 }
 
                 let queue_msg: Vec<String> = queue_entries
@@ -349,7 +340,7 @@ pub fn pos() -> Arc<dyn CommandT> {
                         c.teamsize as i64,
                         c.random_queue,
                         c.open,
-                        c.len as i64
+                        c.size as i64
                     )
                 };
                 let user_id = UserId::new(user.identity.platform, user.identity.platform_user_id.clone());
@@ -376,13 +367,7 @@ pub fn pos() -> Arc<dyn CommandT> {
                     match pos {
                         Some(index) => {
                             let group = (index - 1) / teamsize + 1;
-                            if group == 1 {
-                                format!("You are at position {}/{} and in LIVE group! DinoDance", index, max_count)
-                            } else if group == 2 {
-                                format!("You are at position {}/{} and in NEXT group! GoldPLZ", index, max_count)
-                            } else {
-                                format!("You are at position {}/{} (Group {})!", index, max_count, group)
-                            }
+                            Replies::pos_reply(group, &index.to_string(), &max_count.to_string(), &user.name.display)
                         }
                         None => {
                             if !open {
@@ -632,7 +617,7 @@ pub fn leave_command() -> Arc<dyn CommandT> {
                 };
 
                 client.send_message(&caller, &reply).await?;
-                &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) });
+                let _ = &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) });
                 Ok(())
             })
         },
@@ -722,7 +707,7 @@ pub fn move_command() -> Arc<dyn CommandT> {
                 tx.commit().await?;
 
                 client.send_message(&caller, &format!("User {} has been moved to the next group.", target)).await?;
-                &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) });
+                let _ = &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) });
                 Ok(())
             })
         },
@@ -774,14 +759,14 @@ pub fn remove_command() -> Arc<dyn CommandT> {
                         owner.as_str()
                     ).execute(&mut *tx).await?;
 
-                    format!("{} has been removed from the queue.", target)
+                    Replies::queue_removed(target)
                 } else {
                     format!("User {} not found in the queue. FailFish", target)
                 };
 
                 tx.commit().await?;
                 client.send_message(&caller, &reply).await?;
-                &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) });
+                let _ = &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) });
                 Ok(())
             })
         },
@@ -874,10 +859,10 @@ pub fn prio_command() -> Arc<dyn CommandT> {
                 tx.commit().await?;
 
                 let reply = match runs {
-                    Some(r) => format!("{} has been promoted to priority for {} runs", target, r),
-                    None => format!("{} has been pushed to the second group", target),
+                    Some(r) => Replies::priod_for__queue(target, &r.to_string()),
+                    None => Replies::prio_queue(target)
                 };
-                &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) });
+                let _ = &state.sse_bus.send(SseEvent::QueueUpdated { channel: ChannelId::new(event.platform, &event.channel) });
                 client.send_message(&caller, &reply).await?;
                 Ok(())
             })
@@ -885,6 +870,77 @@ pub fn prio_command() -> Arc<dyn CommandT> {
         "Give priority or move to second group",
         "!prio <user> [runs]",
         "prio",
+        PermissionLevel::Moderator,
+    ))
+}
+
+pub fn register_command() -> Arc<dyn CommandT> {
+    Arc::new(FnCommand::new(
+        |event, pool, state, client| {
+            Box::pin(async move {
+                let user = event.user.as_ref()
+                    .ok_or_else(|| BotError::Custom("Missing user".into()))?;
+
+                let bungie_name = event
+                    .message
+                    .split_whitespace()
+                    .nth(1)
+                    .ok_or_else(|| {
+                        BotError::Custom("Usage: !register BungieName#1234".into())
+                    })?;
+
+                let reply = register_bungie_name(&pool, user.identity.platform, &user.identity.platform_user_id, &user.name.login, &user.name.display, bungie_name, &state.secrets.x_api_key).await?;
+
+                let channel = ChannelId::new(event.platform, &event.channel);
+                client.send_message(&channel, &reply).await?;
+
+                Ok(())
+            })
+        },
+        "Register your Bungie name",
+        "!register <bungie#0000>",
+        "register",
+        PermissionLevel::Everyone,
+    ))
+}
+
+pub fn mod_register_command() -> Arc<dyn CommandT> {
+    Arc::new(FnCommand::new(
+        |event, pool, state, client| {
+            Box::pin(async move {
+                let args: Vec<&str> = event.message.split_whitespace().collect();
+                if args.len() < 3 {
+                    return Err(BotError::Custom(
+                        "Usage: !mod_register <user> <bungie#0000>".into()
+                    ));
+                }
+
+                let target_name = args[1].trim_start_matches('@');
+                let bungie_name = args[2];
+
+                let (platform_user_id, display_name) = match event.platform {
+                    Platform::Twitch => {
+                        let token = get_twitch_access_token(&state).await?;
+                        resolve_twitch_user_id(target_name, &state.secrets, &token).await?
+                    }
+                    _ => {
+                        return Err(BotError::Custom(
+                            "mod_register not supported on this platform yet".into()
+                        ));
+                    }
+                };
+
+                let reply = register_bungie_name(&pool, event.platform, &platform_user_id, target_name, &display_name, bungie_name, &state.secrets.x_api_key).await?;
+
+                let channel = ChannelId::new(event.platform, &event.channel);
+                client.send_message(&channel, &reply).await?;
+
+                Ok(())
+            })
+        },
+        "Register a user’s Bungie name",
+        "!mod_register <user> <bungie#0000>",
+        "mod_register",
         PermissionLevel::Moderator,
     ))
 }

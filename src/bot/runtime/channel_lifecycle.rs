@@ -6,16 +6,12 @@ use crate::bot::{commands::{CommandRegistry, commands::BotResult}, db::{ChannelI
 
 pub async fn start_channel(channel_id: ChannelId, state: Arc<AppState>, pool: &PgPool) -> BotResult<()> {
     let aliases = fetch_aliases_from_db(&channel_id, pool).await?;
-    {
-        let mut cfg = state.runtime.alias_config.write().await;
-        *cfg = aliases;
 
-    }
     // Build dispatcher
     let dispatcher =
-        build_dispatcher_for_channel(&channel_id, state.clone(), &state.registry).await?;
+        build_dispatcher_for_channel(&channel_id, state.clone(), &state.registry, aliases.clone()).await?;
 
-    let mut runtime = ChannelRuntime::new(dispatcher);
+    let mut runtime = ChannelRuntime::new(dispatcher, aliases);
 
     // (Later) attach per-channel tasks here
     // Example:

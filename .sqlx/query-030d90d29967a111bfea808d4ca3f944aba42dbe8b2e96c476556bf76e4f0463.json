@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO krapbott_v2.command_aliases (channel, alias, command)\n        VALUES ($1, $2, $3)\n        ON CONFLICT (channel, alias)\n        DO UPDATE SET command = EXCLUDED.command\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "030d90d29967a111bfea808d4ca3f944aba42dbe8b2e96c476556bf76e4f0463"
+}

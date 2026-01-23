@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM krapbott_v2.command_aliases WHERE channel = $1 AND alias = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "182c44350e25956008fad3eab47793d404cceb60e146652e7b2c4bd28b4c1711"
+}

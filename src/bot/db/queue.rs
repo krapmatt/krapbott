@@ -1,7 +1,6 @@
-use chrono::{DateTime, Utc};
 use sqlx::{PgPool, types::time::OffsetDateTime};
 
-use crate::bot::{chat_event::chat_event::Platform, commands::{commands::BotResult, queue::logic::{Queue, QueueEntry}}, db::{ChannelId, UserId, bungie::get_membership_id_by_user_id}, state::def::ObsQueueEntry};
+use crate::bot::{commands::{commands::BotResult, queue::logic::{Queue, QueueEntry}}, db::{ChannelId, UserId, bungie::get_membership_id_by_user_id}, replies::Replies, state::def::ObsQueueEntry};
 
 pub const QUEUE_TABLE: &str = r#"
     CREATE TABLE IF NOT EXISTS krapbott_v2.queue (
@@ -107,7 +106,7 @@ pub async fn add_to_queue(queue_len: usize, pool: &PgPool, user: &QueueEntry, ch
 
     match result {
         Ok(_) => Ok(if !raffle {
-            format!("✅ {} entered the queue at position #{next_position}", user.display_name)
+            Replies::join_added(&user.display_name, &next_position.to_string())
         } else {
             format!("✅ {} entered the raffle", user.display_name)
         }),
@@ -148,7 +147,7 @@ pub async fn update_queue(pool: &PgPool, user: &QueueEntry, channel_id: &Channel
 pub async fn fetch_queue_for_owner(pool: &PgPool, owner: &ChannelId, teamsize: usize) -> BotResult<Vec<ObsQueueEntry>> {
     let rows = sqlx::query!(
         r#"
-        SELECT position, display_name, bungie_name
+        SELECT position, display_name, bungie_name, user_id
         FROM krapbott_v2.queue
         WHERE channel_id = $1
         ORDER BY position ASC
@@ -162,5 +161,6 @@ pub async fn fetch_queue_for_owner(pool: &PgPool, owner: &ChannelId, teamsize: u
             position: r.position,
             display_name: r.display_name,
             bungie_name: r.bungie_name,
+            user_id: r.user_id
         }).collect())
 }

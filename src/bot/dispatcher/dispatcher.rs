@@ -1,24 +1,20 @@
 use sqlx::PgPool;
-use tokio::sync::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-
 use crate::bot::chat_event::chat_event::ChatEvent;
 use crate::bot::commands::CommandMap;
 use crate::bot::commands::CommandRegistry;
 use crate::bot::commands::commands::BotResult;
-use crate::bot::commands::commands::CommandT;
 use crate::bot::db::ChannelId;
 use crate::bot::db::aliases::fetch_aliases_from_db;
 use crate::bot::handler::handler::ChatClient;
-use crate::bot::handler::handler::UnifiedChatClient;
 use crate::bot::permissions::permissions::has_permission;
-use crate::bot::platforms::twitch::twitch::build_twitch_client;
 use crate::bot::runtime::channel_runtime::ChannelRuntime;
 use crate::bot::state::def::AliasConfig;
 use crate::bot::state::def::AppState;
 use crate::bot::state::def::BotError;
 use crate::bot::state::def::ChannelConfig;
+use crate::bot::state::state::get_twitch_access_token;
 
 
 
@@ -44,8 +40,18 @@ pub async fn dispatch_message(commands: CommandMap, state: Arc<AppState>, event:
     let cmd_name = event.message.trim_start_matches(&prefix).split_whitespace().next().unwrap_or("");
     let client = state.chat_client.clone();
     if let Some(cmd) = commands.get(cmd_name) {
-        if has_permission(event, cmd.permission(), &state.secrets).await {
-            cmd.execute(event.clone(), pool, state, client).await?;
+        let token = get_twitch_access_token(&state).await?;
+        if has_permission(event, cmd.permission(), &state.secrets, &token).await {
+            if let Err(err) = cmd.execute(event.clone(), pool, state.clone(), client.clone()).await {
+                match err {
+                    BotError::Chat(msg) => {
+                        client.send_message(&channel_id, &msg).await?;
+                    }
+                    other => {
+                        tracing::error!("Error: {:?}", other)
+                    }
+                }
+            }
         } else {
             client.send_message(&channel_id, &format!("You need to be {} to use this command", cmd.permission())).await?;
         }
@@ -93,14 +99,37 @@ impl CommandRegistry {
     }
 }
 
-pub async fn build_dispatcher_for_channel(channel_id: &ChannelId, state: Arc<AppState>, registry: &CommandRegistry) -> BotResult<CommandMap> {
-    let (alias, config) = {
+pub async fn build_dispatcher_for_channel(channel_id: &ChannelId, state: Arc<AppState>, registry: &CommandRegistry, aliases: AliasConfig) -> BotResult<CommandMap> {
+    let config = {
         let cfg = state.config.read().await;
-        let alias = state.runtime.alias_config.read().await;
-        (
-            alias.clone(),
-            cfg.channels.get(channel_id).cloned().ok_or_else(|| BotError::Custom("Config Missing".to_string()))?)
+        cfg.channels.get(channel_id).cloned().ok_or_else(|| BotError::Custom("Config Missing".to_string()))?
     };
 
-    Ok(registry.build_for_channel(channel_id, &config, alias).await)
+    Ok(registry.build_for_channel(channel_id, &config, aliases).await)
+}
+
+pub async fn refresh_channel_dispatcher(channel: &ChannelId, state: Arc<AppState>, pool: &PgPool) -> BotResult<()> {
+    let alias_cfg = fetch_aliases_from_db(channel, pool).await?;
+
+    {
+        
+        let config = {
+            let cfg = state.config.read().await;
+            cfg.get_channel_config(&channel).cloned().ok_or_else(|| BotError::ConfigMissing(channel.clone()))?
+        };
+        let registry = state.registry.clone();
+        let dispatcher = registry.build_for_channel(channel, &config, alias_cfg.clone()).await;
+        let mut runtime = state.runtime.dispatchers.write().await;
+        runtime.insert(
+            channel.clone(),
+            ChannelRuntime {
+                dispatcher,
+                tasks: Vec::new(),
+                alias_config: alias_cfg,
+            },
+        );
+    }
+    let _ = state.sse_bus.send(crate::bot::web::sse::SseEvent::AliasesUpdated { channel: channel.to_owned() });
+
+    Ok(())
 }

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                            INSERT INTO krapbott_v2.command_alias_removals (channel, alias)\n                            VALUES ($1, $2)\n                            ON CONFLICT DO NOTHING\n                            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5ddb280b185020749601466ddd49b43e90188fa8acc5e2e76464492024a6c298"
+}

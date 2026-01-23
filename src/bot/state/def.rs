@@ -1,8 +1,7 @@
-use std::{collections::{HashMap, HashSet}, fmt, io, sync::Arc};
-use dashmap::DashMap;
+use std::{collections::{HashMap, HashSet}, io, sync::Arc, time::Instant};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{sync::{Mutex, RwLock, broadcast::error::SendError}, task::JoinHandle};
+use tokio::{sync::{RwLock, broadcast::error::SendError}};
 use twitch_irc::{login::StaticLoginCredentials, transport::tcp::{TCPTransport, TLS}, validate};
 
 use crate::bot::{commands::{CommandRegistry, queue::logic::QueueKey}, db::ChannelId, dispatcher::dispatcher::DispatcherCache, handler::handler::UnifiedChatClient, web::sse::{SseBus, SseEvent}};
@@ -14,18 +13,23 @@ pub struct AppState {
     pub chat_client: Arc<UnifiedChatClient>,
     pub registry: Arc<CommandRegistry>,
     pub sse_bus: SseBus,
+    pub twitch_auth: Arc<RwLock<TwitchAppToken>>,
+}
+
+pub struct TwitchAppToken {
+    pub access_token: String,
+    pub expires_at: Instant
 }
 
 pub struct BotSecrets {
-    pub oauth_token_bot: String,
     pub bot_id: String,
     pub x_api_key: String,
     pub client_secret: String,
+    pub user_access_token: String,
 }
 
 pub struct BotRuntime {
     pub dispatchers: RwLock<DispatcherCache>,
-    pub alias_config: RwLock<AliasConfig>
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -39,7 +43,7 @@ pub struct ChannelConfig {
     #[serde(default)]
     pub open: bool,
     #[serde(default)]
-    pub len: usize,
+    pub size: usize,
     #[serde(default)]
     pub teamsize: usize,
     pub queue_target: QueueKey,
@@ -54,27 +58,10 @@ pub struct ChannelConfig {
     //Nastavení příkazu
     #[serde(default = "default_prefix")]
     pub prefix: String,
-    pub giveaway: Giveaway,
-    pub points_config: PointsConfig,
 }
 
 fn default_prefix() -> String {
     "!".into()
-}
-#[derive(Deserialize, Serialize, Clone, Debug)]
-pub struct PointsConfig {
-    pub name: String,
-    pub interval: u64,
-    pub points_per_time: i32,
-}
-
-
-#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
-pub struct Giveaway {
-    pub duration: usize,
-    pub max_tickets: usize,
-    pub ticket_cost: usize,
-    pub active: bool
 }
 
 #[derive(Debug, Error)]
@@ -96,6 +83,8 @@ pub enum BotError {
     #[error("Send Error: {0}")]
     SendError(#[from] SendError<SseEvent>),
     #[error("{0}")]
+    Chat(String),
+    #[error("{0}")]
     Custom(String),
 
 }
@@ -112,5 +101,6 @@ pub struct ObsQueueEntry {
     pub position: i32,
     pub display_name: String,
     pub bungie_name: String,
+    pub user_id: String
 }
 

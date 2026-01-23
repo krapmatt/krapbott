@@ -52,48 +52,6 @@ pub fn mod_timeout() -> Arc<dyn CommandT> {
     ))
 }
 
-pub fn mod_config() -> Arc<dyn CommandT> {
-    Arc::new(FnCommand::new(
-        |msg, client, _pool, bot_state| {
-            Box::pin(async move {
-                let bot_state = bot_state.read().await;
-                let config = match bot_state.config.get_channel_config(&msg.channel_login) {
-                    Some(cfg) => cfg,
-                    None => return Ok(()),
-                };
-
-                let queue_reply = format!(
-                    "Queue -> Open: {} || Length: {} || Fireteam size: {} || Combined: {} & Queue channel: {}",
-                    config.open, 
-                    config.len, 
-                    config.teamsize, 
-                    config.combined, 
-                    config.queue_channel
-                );
-
-                let package_reply = format!("Packages: {}", config.packages.join(", "));
-                let giveaway_reply = format!(
-                    "Duration: {} || Max tickets: {} || Price of ticket: {}",
-                    config.giveaway.duration,
-                    config.giveaway.max_tickets,
-                    config.giveaway.ticket_cost
-                );
-
-                drop(bot_state);
-
-                for reply in [queue_reply, package_reply, giveaway_reply] {
-                    client.say(msg.channel_login.clone(), reply).await?;
-                }
-
-                Ok(())
-            })
-        },
-        "Shows the settings of one's queue and packages.",
-        "!mod_config",
-        "Mod Config",
-        PermissionLevel::Moderator,
-    ))
-}
 
 //TODO! - add a way to reset streaming together only for the one channel not all!!!!
 pub fn mod_reset() -> Arc<dyn CommandT> {
@@ -133,46 +91,6 @@ pub fn removepackage() -> Arc<dyn CommandT> {
         "Remove a package",
         "remove_package nameOfPackage",
         "Remove Package",
-        PermissionLevel::Moderator,
-    ))
-}
-
-pub fn list_of_packages() -> Arc<dyn CommandT> {
-    Arc::new(FnCommand::new(
-        |msg, client, _pool, bot_state| {
-            Box::pin(async move {
-                let bot_state = bot_state.read().await;
-                let config =
-                    if let Some(config) = bot_state.config.get_channel_config(&msg.channel_login) {
-                        config
-                    } else {
-                        return Ok(());
-                    };
-                let streamer_packages = &config.packages;
-                let mut missing_packages: Vec<&str> = vec![];
-
-                for package in COMMAND_GROUPS.values() {
-                    if !streamer_packages.contains(&package.name) {
-                        missing_packages.push(&package.name);
-                    }
-                }
-
-                let reply = if missing_packages.is_empty() {
-                    "You have all packages activated!".to_string()
-                } else {
-                    format!(
-                        "Currently you have these packages on your channel: {}. And you can add: {}. Use: !add_package <name>",
-                        streamer_packages.join(", "), missing_packages.join(", ")
-                    )
-                };
-
-                client.say(msg.channel_login, reply).await?;
-                Ok(())
-            })
-        },
-        "Show all included packages",
-        "packages",
-        "Packages",
         PermissionLevel::Moderator,
     ))
 }

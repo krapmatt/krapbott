@@ -14,4 +14,7 @@ pub enum SseEvent {
         channel: ChannelId,
         open: bool,
     },
+    AliasesUpdated {
+        channel: ChannelId
+    }
 }

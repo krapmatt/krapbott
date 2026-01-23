@@ -1,6 +1,6 @@
 use sqlx::PgPool;
 
-use crate::bot::{chat_event::chat_event::{ChatUser, Platform}, commands::{commands::BotResult, queue::logic::QueueUser}, db::{ChannelId, UserId}};
+use crate::bot::{chat_event::chat_event::{Platform}, commands::{commands::BotResult, queue::logic::QueueUser}, db::{ChannelId, UserId}};
 
 pub const USERS_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS krapbott_v2.streamusers (

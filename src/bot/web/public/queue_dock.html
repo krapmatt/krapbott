@@ -232,7 +232,9 @@ function enableCopyHandlers() {
    LOAD QUEUE
 ======================= */
 async function loadQueue() {
-    const res = await fetch("/api/obs/queue");
+    const res = await fetch("/api/obs/queue", {
+      credentials: "include"
+    });
     if (!res.ok) return;
 
     const data = await res.json();
@@ -267,16 +269,33 @@ async function loadQueue() {
 
         tr.innerHTML = `
             <td>${entry.position}</td>
-            <td>${entry.display_name}</td>
+            <td title="${entry.user_id}">${entry.display_name}</td>
             <td class="copyable" data-bungie="${entry.bungie_name}">
                 ${entry.bungie_name}
             </td>
             <td>
-                <button class="remove-button" onclick="removeUser('${entry.display_name}')">✖</button>
+                <button class="remove-button" data-user-id="${entry.user_id}">✖</button>
             </td>
         `;
 
         tbody.appendChild(tr);
+        const btn = tr.querySelector(".remove-button");
+
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+
+          const userId = btn.dataset.userId;
+
+          console.log("REMOVE CLICKED", userId);
+
+          await fetch("/api/obs/queue/remove", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: userId }),
+            credentials: "include"
+          });
+        });
     });
 
     enableCopyHandlers();
@@ -288,7 +307,7 @@ async function loadQueue() {
 ======================= */
 
 async function nextQueue() {
-  await fetch("/api/obs/queue/next", { method: "POST" });
+  await fetch("/api/obs/queue/next", { method: "POST", credentials: "include" });
   toast("Next group selected");
 }
 
@@ -298,6 +317,7 @@ async function toggleQueue() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ open: queueOpen }),
+    credentials: "include"
   });
   updateToggle();
   toast(queueOpen ? "Queue opened" : "Queue closed");
@@ -309,14 +329,29 @@ function updateToggle() {
   btn.classList.toggle("closed", !queueOpen);
 }
 
-async function removeUser(userId) {
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".remove-button");
+  if (!btn) return;
+
+  const row = btn.closest("tr");
+  if (!row) {
+    console.error("No parent row found");
+    return;
+  }
+
+  const userId = row.dataset.userId;
+  if (!userId) {
+    console.error("Missing user_id on row", row);
+    return;
+  }
+
   await fetch("/api/obs/queue/remove", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ user_id: userId }),
+    credentials: "include"
   });
-  toast(queueOpen ? "Queue opened" : "Queue closed");
-}
+});
 
 
 /* =======================
@@ -356,6 +391,7 @@ async function submitOrder() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ order }),
+    credentials: "include"
   });
 }
 
@@ -373,7 +409,7 @@ function toast(msg, duration = 1500) {
    SSE
 ======================= */
 
-const evt = new EventSource("/api/obs/queue/events");
+const evt = new EventSource("/api/obs/queue/events", { withCredentials: true });
 evt.onmessage = loadQueue;
 
 /* =======================
@@ -381,6 +417,7 @@ evt.onmessage = loadQueue;
 ======================= */
 
 loadQueue();
+
 </script>
   <div id="toast"></div>
 </body>

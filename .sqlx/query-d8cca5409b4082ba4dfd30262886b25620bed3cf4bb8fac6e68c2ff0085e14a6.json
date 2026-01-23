@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO krapbott_v2.command_disabled (channel, command)\n             VALUES ($1, $2) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d8cca5409b4082ba4dfd30262886b25620bed3cf4bb8fac6e68c2ff0085e14a6"
+}

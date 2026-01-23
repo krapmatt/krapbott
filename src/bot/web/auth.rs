@@ -104,7 +104,7 @@ pub async fn twitch_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgP
             reply,
             "Content-Type",
             "text/html; charset=utf-8",
-        ));
+        ).into_response());
     }
     // Create session
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -121,30 +121,14 @@ pub async fn twitch_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgP
         session_id, user.id, user.login
     ).execute(&*pool).await.map_err(|_| warp::reject())?;
 
-    //let reply = warp::redirect::temporary(Uri::from_static("/obs"));
-    
-    Ok(warp::reply::with_header(
-        warp::reply::html(HTML),
-        "Set-Cookie",
-        format!("session_id={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000", session_id),
-    ))
-}
+    let reply = warp::redirect::temporary(Uri::from_static("/obs"));
 
-const HTML: &str = r#"
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Logging in…</title>
-</head>
-<body>
-  <script>
-    // Give OBS time to persist cookie
-    setTimeout(() => {
-      window.location.replace("/obs");
-    }, 500);
-  </script>
-  Logging you in…
-</body>
-</html>
-"#;
+    Ok(warp::reply::with_header(
+        reply,
+        "Set-Cookie",
+        format!(
+            "session_id={}; Path=/; HttpOnly; SameSite=None; Secure",
+            session_id
+        ),
+    ).into_response())
+}

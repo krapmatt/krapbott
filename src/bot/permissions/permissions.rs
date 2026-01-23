@@ -1,6 +1,6 @@
 
 use core::fmt;
-use std::{collections::HashSet, fmt::Display};
+use std::fmt::Display;
 
 use serde::Deserialize;
 
@@ -32,9 +32,7 @@ impl Display for PermissionLevel {
     }
 }
 
-pub const ADMINS: &[&str] = &["KrapMatt", "ThatJK", "Samoan_317"];
-
-pub async fn has_permission(event: &mut ChatEvent, required: PermissionLevel, secrets: &BotSecrets) -> bool {
+pub async fn has_permission(event: &mut ChatEvent, required: PermissionLevel, secrets: &BotSecrets, apptoken: &str) -> bool {
     let Some(user) = &event.user else {
         return false;
     };
@@ -48,7 +46,7 @@ pub async fn has_permission(event: &mut ChatEvent, required: PermissionLevel, se
     if required == PermissionLevel::Follower {
         // Twitch-only async check
         if event.platform == Platform::Twitch {
-           let result = is_follower(&event,&secrets.oauth_token_bot, &secrets.bot_id,).await;
+           let result = is_follower(&event,apptoken, &secrets.bot_id).await;
 
             event.follower = Some(result);
             return result;

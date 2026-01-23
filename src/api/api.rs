@@ -1,6 +1,6 @@
 use reqwest::{header::{HeaderMap, HeaderValue}, Client};
 use serde::{Deserialize, Serialize};
-use serde_json::{from_str, Value};
+use serde_json::Value;
 use std::{collections::HashMap, fs::{self, File}, io::Write};
 
 use crate::bot::state::def::BotError;

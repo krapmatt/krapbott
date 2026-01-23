@@ -10,16 +10,24 @@ use std::{collections::{HashMap, HashSet}, sync::Arc};
 use tokio::sync::RwLock;
 use include_dir::{include_dir, Dir};
 
-use crate::bot::{chat_event::chat_event::ChatEvent, commands::{CommandRegistry, commands::BotResult}, db::{ChannelId, config::{load_bot_config_from_db, save_channel_config}, initialize_database}, handler::handler::UnifiedChatClient, platforms::twitch::{event_loop::run_twitch_loop, twitch::build_twitch_client}, run_event_loop, state::def::{AliasConfig, AppState, BotRuntime, BotSecrets, ChannelConfig}, web::{auth::{twitch_callback, twitch_login}, obs::{obs_page, obs_queue, obs_queue_events, obs_queue_next, obs_queue_remove, obs_queue_reorder, obs_queue_toggle}}};
-static PUBLIC_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/bot/web/public");
-pub async fn init_db(pool: &PgPool) -> BotResult<()> {
-    sqlx::query!("SET search_path TO krapbott_v2")
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-#[shuttle_runtime::main]
-async fn main(#[shuttle_shared_db::Postgres] pool: sqlx::PgPool, #[shuttle_runtime::Secrets] secrets: SecretStore) -> shuttle_warp::ShuttleWarp<(impl Reply,)> {
+use crate::{api::twitch_api::create_twitch_app_token, bot::{chat_event::chat_event::ChatEvent, commands::{CommandRegistry, commands::BotResult}, db::{ChannelId, config::{load_bot_config_from_db, save_channel_config}, initialize_database}, handler::handler::UnifiedChatClient, platforms::twitch::{event_loop::run_twitch_loop, twitch::build_twitch_client}, run_event_loop, state::def::{AliasConfig, AppState, BotRuntime, BotSecrets, ChannelConfig}, web::{auth::{twitch_callback, twitch_login}, obs::{obs_alias_add, obs_alias_page, obs_alias_remove, obs_alias_remove_default, obs_alias_restore, obs_alias_restore_default, obs_alias_toggle_command, obs_aliases, obs_combined_page, obs_queue, obs_queue_events, obs_queue_len, obs_queue_next, obs_queue_page, obs_queue_remove, obs_queue_reorder, obs_queue_size, obs_queue_toggle}}}};
+
+#[tokio::main]
+async fn main() -> BotResult<()> {
+    let database_url = std::env::var("DATABASE_URL")
+    .expect("DATABASE_URL not set");
+
+    let pool = loop {
+        match PgPool::connect(&database_url).await {
+            Ok(pool) => break pool,
+            Err(e) => {
+                tracing::warn!("DB not ready yet: {}", e);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    };
+    
+    
     let (non_blocking, _guard) = tracing_appender::non_blocking(std::io::stdout());
     if tracing_subscriber::fmt()
         .with_writer(non_blocking)
@@ -43,19 +51,15 @@ async fn main(#[shuttle_shared_db::Postgres] pool: sqlx::PgPool, #[shuttle_runti
         save_channel_config(&pool, &channel_id, &cfg).await;
     }
     let registry = Arc::new(CommandRegistry::new());
-    info!("{:?}", config);
+
     let runtime = BotRuntime {
         dispatchers: RwLock::new(HashMap::new()),
-        alias_config: RwLock::new(AliasConfig {
-            disabled_commands: HashSet::new(),
-            removed_aliases: HashSet::new(),
-            aliases: HashMap::new(),
-        }),
     };
     
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ChatEvent>();
     let secrets = Arc::new(BotSecrets::from_shuttle(&secrets).expect("Missing secrets"));
-    let (twitch_rx, twitch_client) = build_twitch_client("Kr4pTr4p".to_string(), secrets.oauth_token_bot.clone());
+    let twitch_token = create_twitch_app_token(&secrets).await.expect("Invalid twitch Response");
+    let (twitch_rx, twitch_client) = build_twitch_client("Kr4pTr4p".to_string(), secrets.user_access_token.clone());
 
     let chat_client = Arc::new(UnifiedChatClient {
         twitch: twitch_client,
@@ -69,7 +73,8 @@ async fn main(#[shuttle_shared_db::Postgres] pool: sqlx::PgPool, #[shuttle_runti
         runtime: Arc::new(runtime),
         chat_client,
         registry: registry.clone(),
-        sse_bus: sse_tx
+        sse_bus: sse_tx,
+        twitch_auth: Arc::new(RwLock::new(twitch_token))
     });
 
     
@@ -104,12 +109,26 @@ async fn main(#[shuttle_shared_db::Postgres] pool: sqlx::PgPool, #[shuttle_runti
         .and(state_filter.clone())
         .and_then(twitch_callback);
 
-    let obs = warp::path!("obs")
+    let obs_combined = warp::path!("obs")
+        .and(warp::path::end())
         .and(warp::header::optional("cookie"))
         .and(pool_filter.clone())
-        .and_then(obs_page);
+        .and_then(obs_combined_page);
+
+    let obs_queue_page = warp::path!("obs" / "queue")
+        .and(warp::path::end())
+        .and(warp::header::optional("cookie"))
+        .and(pool_filter.clone())
+        .and_then(obs_queue_page);
+
+    let obs_alias = warp::path!("obs" / "aliases")
+        .and(warp::path::end())
+        .and(warp::header::optional("cookie"))
+        .and(pool_filter.clone())
+        .and_then(obs_alias_page);
 
     let obs_queue = warp::path!("api" / "obs" / "queue")
+        .and(warp::path::end())
         .and(warp::get())
         .and(warp::header::optional("cookie"))
         .and(pool_filter.clone())
@@ -131,6 +150,7 @@ async fn main(#[shuttle_shared_db::Postgres] pool: sqlx::PgPool, #[shuttle_runti
         .and_then(obs_queue_remove);
 
     let obs_reorder = warp::path!("api" / "obs" / "queue" / "reorder")
+        .and(warp::path::end())
         .and(warp::post())
         .and(warp::header::optional("cookie"))
         .and(warp::body::json())
@@ -138,46 +158,140 @@ async fn main(#[shuttle_shared_db::Postgres] pool: sqlx::PgPool, #[shuttle_runti
         .and(state_filter.clone())
         .and_then(obs_queue_reorder);
     let obs_toggle = warp::path!("api" / "obs" / "queue" / "toggle")
+        .and(warp::path::end())
         .and(warp::post())
         .and(warp::header::optional("cookie"))
         .and(warp::body::json())
         .and(pool_filter.clone())
         .and(state_filter.clone())
         .and_then(obs_queue_toggle);
+    let obs_queue_size = warp::path!("api" / "obs" / "queue" / "size")
+        .and(warp::path::end())
+        .and(warp::post())
+        .and(warp::header::optional("cookie"))
+        .and(warp::body::json())
+        .and(pool_filter.clone())
+        .and(state_filter.clone())
+        .and_then(obs_queue_size);
+    let obs_queue_len = warp::path!("api" / "obs" / "queue" / "length")
+        .and(warp::path::end())
+        .and(warp::post())
+        .and(warp::header::optional("cookie"))
+        .and(warp::body::json())
+        .and(pool_filter.clone())
+        .and(state_filter.clone())
+        .and_then(obs_queue_len);
     let obs_sse = warp::path!("api" / "obs" / "queue" / "events")
+        .and(warp::path::end())
         .and(warp::get())
         .and(warp::header::optional("cookie"))
         .and(pool_filter.clone())
         .and(state_filter.clone())
         .and_then(obs_queue_events);
 
-
+    let obs_aliases = warp::path!("api" / "obs" / "aliases")
+        .and(warp::path::end())
+        .and(warp::get())
+        .and(warp::header::optional("cookie"))
+        .and(pool_filter.clone())
+        .and(state_filter.clone())
+        .and_then(obs_aliases);
+    let obs_aliases_add = warp::path!("api" / "obs" / "aliases" / "add")
+        .and(warp::post())
+        .and(warp::header::optional("cookie"))
+        .and(warp::body::json())
+        .and(pool_filter.clone())
+        .and(state_filter.clone())
+        .and_then(obs_alias_add);
+    let obs_aliases_remove = warp::path!("api" / "obs" / "aliases" / "remove")
+        .and(warp::post())
+        .and(warp::header::optional("cookie"))
+        .and(warp::body::json())
+        .and(pool_filter.clone())
+        .and(state_filter.clone())
+        .and_then(obs_alias_remove);
     
+    let obs_aliases_toggle = warp::path!("api" / "obs" / "aliases" / "toggle")
+        .and(warp::post())
+        .and(warp::header::optional("cookie"))
+        .and(warp::body::json())
+        .and(pool_filter.clone())
+        .and(state_filter.clone())
+        .and_then(obs_alias_toggle_command);
+    
+    let obs_aliases_restore = warp::path!("api" / "obs" / "aliases" / "restore")
+        .and(warp::post())
+        .and(warp::header::optional("cookie"))
+        .and(warp::body::json())
+        .and(pool_filter.clone())
+        .and(state_filter.clone())
+        .and_then(obs_alias_restore);
+    let obs_aliases_remove_default = warp::path!("api" / "obs" / "aliases" / "remove-default")
+        .and(warp::post())
+        .and(warp::header::optional("cookie"))
+        .and(warp::body::json())
+        .and(pool_filter.clone())
+        .and(state_filter.clone())
+        .and_then(obs_alias_remove_default);
+    let obs_aliases_restore_default = warp::path!("api" / "obs" / "aliases" / "restore-default")
+        .and(warp::post())
+        .and(warp::header::optional("cookie"))
+        .and(warp::body::json())
+        .and(pool_filter.clone())
+        .and(state_filter.clone())
+        .and_then(obs_alias_restore_default);
+    
+    let favicon = warp::path("favicon.ico")
+        .and(warp::get())
+        .map(|| warp::reply::with_status("", warp::http::StatusCode::NO_CONTENT));
+
     // CORS
     let cors = warp::cors()
-        .allow_any_origin()
-        .allow_methods(vec!["GET", "POST"])
+        .allow_origin("https://krapbott-rajo.shuttle.app")
+        .allow_methods(vec!["GET", "POST", "OPTIONS"])
         .allow_headers(vec!["Content-Type", "Cookie"])
         .allow_credentials(true);
 
+    let options = warp::options()
+        .map(|| warp::reply());
 
     let routes = auth_twitch
     .or(auth_callback)
-    .or(obs)
+    .or(obs_combined)
+    .or(obs_queue_page)
+    .or(obs_alias)
     .or(obs_queue)
     .or(obs_next)
     .or(obs_remove)
     .or(obs_reorder)
     .or(obs_toggle)
+    .or(obs_queue_size)
+    .or(obs_queue_len)
+    .or(obs_aliases)
+    .or(obs_aliases_add)
+    .or(obs_aliases_remove)
+    .or(obs_aliases_toggle)
+    .or(obs_aliases_restore)
+    .or(obs_aliases_remove_default)
+    .or(obs_aliases_restore_default)
     .or(obs_sse)
+    .or(favicon)
+    .or(options)
     .with(cors)
     .boxed();
 
-    Ok(shuttle_warp::WarpService(routes.boxed()))
+    let port: u16 = std::env::var("PORT")
+    .unwrap_or_else(|_| "8080".into())
+    .parse()
+    .expect("Invalid PORT");
+
+    warp::serve(routes)
+        .run(([0, 0, 0, 0], port))
+        .await;
 }
 
 /* TODO!
 - BoTConfig Database
 - ALIASES DONT work
-
+- PRIORITY OF RESPONSES HAVE CLOSED QUEUE FIRST
 */

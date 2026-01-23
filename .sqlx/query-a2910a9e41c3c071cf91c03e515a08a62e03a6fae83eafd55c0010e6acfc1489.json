@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                            DELETE FROM krapbott_v2.command_disabled\n                            WHERE channel = $1 AND command = $2\n                            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a2910a9e41c3c071cf91c03e515a08a62e03a6fae83eafd55c0010e6acfc1489"
+}

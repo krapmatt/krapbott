@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use sqlx::PgPool;
-use tracing::info;
 
 use crate::bot::{chat_event::chat_event::ChatEvent, commands::commands::BotResult, handler::handler::{handle_event, init_bot_runtime}, state::def::AppState};
 
@@ -15,7 +14,7 @@ pub mod db;
 pub mod handler;
 pub mod runtime;
 pub mod web;
-pub mod scheduler;
+pub mod replies;
 
 pub async fn run_event_loop(pool: PgPool, state: Arc<AppState>, mut rx: tokio::sync::mpsc::UnboundedReceiver<ChatEvent>) -> BotResult<()> {
     init_bot_runtime(state.clone(), &pool).await?;

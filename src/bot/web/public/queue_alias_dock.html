@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>OBS Control Dock</title>
+
+<style>
+:root {
+  --bg: #1a1a1a;
+  --panel: #2a2a2a;
+  --panel-dark: #1f1f1f;
+  --accent: #d16ce6;
+  --accent-hover: #ff66cc;
+  --danger: #ff4b4b;
+  --text: #e1e1e1;
+  --muted: #aaa;
+}
+
+/* ───────── Global ───────── */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, sans-serif;
+}
+
+/* ───────── Tabs ───────── */
+
+.tabs {
+  display: flex;
+  margin-bottom: 12px;
+}
+
+.tab {
+  flex: 1;
+  background: #222;
+  color: var(--muted);
+  border: none;
+  padding: 10px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+.tab:hover {
+  color: var(--accent);
+}
+
+.tab.active {
+  background: var(--panel);
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.tab-content {
+  display: none;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+
+.tab-content.active {
+  display: block;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ───────── Buttons ───────── */
+
+button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-weight: bold;
+  transition:
+    background 0.2s ease,
+    transform 0.1s ease,
+    box-shadow 0.2s ease;
+}
+
+button:hover {
+  background: var(--accent-hover);
+  box-shadow: 0 0 0 1px rgba(209,108,230,0.4);
+}
+
+button:active {
+  transform: scale(0.96);
+}
+
+button.small {
+  padding: 2px 6px;
+  font-size: 0.75rem;
+}
+
+button.danger {
+  background: var(--danger);
+}
+
+button.danger:hover {
+  background: #ff6666;
+}
+
+/* ───────── Inputs ───────── */
+
+input {
+  background: #111;
+  color: var(--text);
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 6px;
+  transition: border 0.2s ease, box-shadow 0.2s ease;
+}
+
+input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(209,108,230,0.4);
+}
+
+/* ───────── Panels ───────── */
+
+.panel {
+  background: var(--panel);
+  padding: 10px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  transition: box-shadow 0.3s ease;
+}
+
+.panel:hover {
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.04);
+}
+
+/* ───────── QUEUE ───────── */
+
+.controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+th {
+  background: var(--accent);
+  padding: 8px;
+}
+
+td {
+  padding: 6px;
+  text-align: center;
+  border-bottom: 1px solid #333;
+  transition: background 0.2s ease;
+}
+
+tbody tr:hover td {
+  background: rgba(255,102,204,0.08);
+}
+
+.group-separator td {
+  background: var(--panel-dark);
+  color: var(--accent);
+  font-weight: bold;
+  text-align: left;
+}
+
+tr.draggable {
+  cursor: grab;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+tr.draggable:active {
+  cursor: grabbing;
+}
+
+tr.dragging {
+  opacity: 0.6;
+  transform: scale(0.98);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+}
+
+/* ───────── Copyable Bungie ───────── */
+
+.copyable {
+  cursor: pointer;
+  color: #ffd1f2;
+  position: relative;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+
+.copyable:hover {
+  background: rgba(255,102,204,0.15);
+  border-radius: 4px;
+}
+
+.copyable.copied {
+  background: rgba(209,108,230,0.35);
+  color: white;
+  transform: scale(1.05);
+}
+
+.copyable::after {
+  content: "Click to copy";
+  position: absolute;
+  bottom: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.65rem;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.copyable:hover::after {
+  opacity: 1;
+}
+
+/* ───────── ALIASES ───────── */
+
+.alias-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.badge {
+  background: var(--accent);
+  color: white;
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 999px;
+  margin-left: 6px;
+}
+
+.alias.conflict {
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  background: rgba(255,75,75,0.12);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255,75,75,0.2); }
+  70% { box-shadow: 0 0 0 6px rgba(255,75,75,0); }
+  100% { box-shadow: 0 0 0 0 rgba(255,75,75,0); }
+}
+
+.command {
+  background: var(--panel);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: box-shadow 0.25s ease, transform 0.2s ease;
+}
+
+.command:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+}
+
+.command-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  padding: 12px;
+}
+
+.command .details {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding: 0 12px;
+  transition:
+    max-height 0.45s cubic-bezier(.4,0,.2,1),
+    opacity 0.3s ease,
+    padding 0.3s ease;
+}
+
+.command:not(.collapsed) .details {
+  max-height: 800px;
+  opacity: 1;
+  padding: 12px;
+}
+
+.alias {
+  display: inline-flex;
+  align-items: center;
+  background: var(--panel-dark);
+  padding: 4px 6px;
+  border-radius: 6px;
+  margin: 2px;
+  transition: transform 0.15s ease;
+}
+
+.alias:hover {
+  transform: translateY(-2px);
+}
+
+.alias.removed {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+/* ───────── Toast ───────── */
+
+#toast {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  background: var(--panel);
+  padding: 8px 12px;
+  border-radius: 8px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+#toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+</style>
+</head>
+
+<body>
+
+<div class="tabs">
+  <button class="tab active" onclick="showTab('queue', this)">Queue</button>
+  <button class="tab" onclick="showTab('aliases', this)">Aliases</button>
+</div>
+
+<!-- ================= QUEUE ================= -->
+
+<section id="queue" class="tab-content active">
+  <h2>Queue Control</h2>
+
+  <div class="panel controls">
+    <button onclick="nextQueue()">NEXT</button>
+    <button onclick="toggleQueue()" id="queueToggle">Toggle Queue</button>
+  </div>
+
+  <div class="panel">
+    Team size:
+    <input type="number" id="teamSize" min="1">
+    <button onclick="updateTeamSize()">Save</button>
+
+    Queue length:
+    <input type="number" id="queueLen" min="1">
+    <button onclick="updateQueueLen()">Save</button>
+
+    <div id="runsInfo" style="margin-top:6px;color:var(--muted)"></div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>#</th><th>Name</th><th>Bungie</th><th></th></tr>
+    </thead>
+    <tbody id="queueBody"></tbody>
+  </table>
+</section>
+
+<!-- ================= ALIASES ================= -->
+
+<section id="aliases" class="tab-content">
+  <h2>Command Aliases</h2>
+
+  <div class="search-box">
+    <input
+      id="aliasSearch"
+      placeholder="Search command or alias…"
+      oninput="applyAliasFilter()"
+    />
+  </div>
+
+  <div class="panel">
+    <input id="aliasInput" placeholder="alias">
+    <input id="commandInput" placeholder="command">
+    <button onclick="addAlias()">Add Alias</button>
+  </div>
+
+  <div id="commands" class="alias-grid"></div>
+</section>
+
+<div id="toast"></div>
+
+<script>
+/* ───────── Tabs ───────── */
+function showTab(id, btn) {
+  document.querySelectorAll(".tab-content").forEach(s => s.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+  btn.classList.add("active");
+}
+
+/* ───────── Toast ───────── */
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 1500);
+}
+
+/* ───────── QUEUE ───────── */
+let queueOpen = true;
+let draggedRow = null;
+
+async function loadQueue() {
+  const res = await fetch("/api/obs/queue", { credentials: "include" });
+  if (!res.ok) return;
+  const data = await res.json();
+
+  queueOpen = data.open;
+  queueToggle.textContent = queueOpen ? "Close Queue" : "Open Queue";
+  teamSize.value = data.teamsize;
+  queueLen.value = data.len;
+  runsInfo.textContent = `Runs completed: ${data.runs ?? 0}`;
+
+  const body = queueBody;
+  body.innerHTML = "";
+
+  let group = null;
+  data.queue.forEach(q => {
+    const g = q.position <= data.teamsize ? "LIVE"
+      : q.position <= data.teamsize * 2 ? "NEXT" : "QUEUE";
+
+    if (g !== group) {
+      group = g;
+      body.innerHTML += `<tr class="group-separator"><td colspan="4">${g}</td></tr>`;
+    }
+
+    const tr = document.createElement("tr");
+    tr.className = "draggable";
+    tr.draggable = true;
+    tr.dataset.userId = q.user_id;
+
+    tr.innerHTML = `
+      <td>${q.position}</td>
+      <td>${q.display_name}</td>
+      <td class="copyable" data-copy="${q.bungie_name}">${q.bungie_name}</td>
+      <td><button class="danger small" onclick="removeUser('${q.user_id}')">✖</button></td>
+    `;
+    body.appendChild(tr);
+  });
+
+  enableDrag();
+}
+
+document.addEventListener("click", async e => {
+  const el = e.target.closest(".copyable");
+  if (!el) return;
+
+  const value = el.dataset.copy;
+  if (!value) return;
+
+  try {
+    await navigator.clipboard.writeText(value);
+
+    el.classList.add("copied");
+    const original = el.textContent;
+    el.textContent = "Copied ✔";
+
+    setTimeout(() => {
+      el.textContent = original;
+      el.classList.remove("copied");
+    }, 900);
+
+  } catch (err) {
+    console.error("Clipboard error", err);
+    toast("Failed to copy");
+  }
+});
+
+async function nextQueue() {
+  await fetch("/api/obs/queue/next", { method: "POST", credentials: "include" });
+}
+async function toggleQueue() {
+  queueOpen = !queueOpen;
+  await fetch("/api/obs/queue/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ open: queueOpen })
+  });
+}
+async function removeUser(id) {
+  await fetch("/api/obs/queue/remove", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ user_id: id })
+  });
+}
+async function updateTeamSize() {
+  await fetch("/api/obs/queue/size", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ teamsize: +teamSize.value })
+  });
+}
+async function updateQueueLen() {
+  await fetch("/api/obs/queue/length", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ length: +queueLen.value })
+  });
+}
+
+function enableDrag() {
+  document.querySelectorAll(".draggable").forEach(row => {
+    row.addEventListener("dragstart", () => {
+      draggedRow = row;
+      row.classList.add("dragging");
+    });
+    row.addEventListener("dragend", async () => {
+      row.classList.remove("dragging");
+      draggedRow = null;
+      await submitOrder();
+    });
+    row.addEventListener("dragover", e => {
+      e.preventDefault();
+      const target = e.target.closest(".draggable");
+      if (target && target !== draggedRow) target.before(draggedRow);
+    });
+  });
+}
+async function submitOrder() {
+  const order = [...document.querySelectorAll(".draggable")]
+    .map(r => r.dataset.userId);
+  await fetch("/api/obs/queue/reorder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ order })
+  });
+}
+
+/* ───────── ALIASES ───────── */
+async function loadAliases() {
+  const res = await fetch("/api/obs/aliases", { credentials: "include" });
+  if (!res.ok) return;
+
+  const data = await res.json();
+  const container = document.getElementById("commands");
+  const search = document.getElementById("aliasSearch")?.value?.toLowerCase() ?? "";
+
+  container.innerHTML = "";
+
+  // Build reverse maps
+  const aliasesByCommand = {};
+  const aliasUsage = {};
+
+  for (const [alias, command] of Object.entries(data.aliases)) {
+    (aliasesByCommand[command] ??= []).push(alias);
+    aliasUsage[alias] = aliasUsage[alias] || new Set();
+    aliasUsage[alias].add(command);
+  }
+
+  data.commands.forEach(cmd => {
+    const allAliases = [
+      ...cmd.default_aliases,
+      ...(aliasesByCommand[cmd.name] || [])
+    ].join(" ").toLowerCase();
+
+    if (
+      search &&
+      !cmd.name.includes(search) &&
+      !cmd.description.toLowerCase().includes(search) &&
+      !allAliases.includes(search)
+    ) return;
+
+    const disabled = data.disabled_commands.includes(cmd.name);
+    const removed = new Set(data.removed_aliases);
+    const custom = aliasesByCommand[cmd.name] || [];
+
+    const card = document.createElement("div");
+    card.className = "command collapsed";
+
+    const header = document.createElement("div");
+    header.className = "command-header";
+    header.innerHTML = `
+      <div class="title">
+        ${cmd.name}
+        <span class="badge">${custom.length + cmd.default_aliases.length}</span>
+      </div>
+      <button class="toggle-btn">${disabled ? "Enable" : "Disable"}</button>
+    `;
+
+    const body = document.createElement("div");
+    body.className = "details";
+
+    body.innerHTML = `
+      <div class="desc">${cmd.description}</div>
+
+      <div class="alias-section">
+        <b>Default</b>
+        <div class="alias-row">
+          ${cmd.default_aliases.map(a => `
+            <span class="alias ${removed.has(a) ? "removed" : ""}">
+              ${a}
+              ${
+                removed.has(a)
+                  ? `<button data-restore="${a}">Restore</button>`
+                  : `<button data-remove-default="${a}">✖</button>`
+              }
+            </span>
+          `).join("") || "—"}
+        </div>
+      </div>
+
+      <div class="alias-section">
+        <b>Custom</b>
+        <div class="alias-row">
+          ${custom.map(a => `
+            <span class="alias ${aliasUsage[a]?.size > 1 ? "conflict" : ""}">
+              ${a}
+              <button data-remove-alias="${a}">✖</button>
+            </span>
+          `).join("") || "—"}
+        </div>
+      </div>
+    `;
+
+    // Toggle expand (no inline onclick)
+    header.addEventListener("click", e => {
+      document.querySelectorAll(".command:not(.collapsed)").forEach(c => {
+        if (c !== card) c.classList.add("collapsed");
+      });
+
+      card.classList.toggle("collapsed");
+    });
+
+    // Enable / disable command
+    header.querySelector(".toggle-btn").addEventListener("click", async e => {
+      e.stopPropagation();
+      await fetch("/api/obs/aliases/toggle", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: cmd.name, disable: !disabled })
+      });
+      loadAliases();
+    });
+
+    // Delegated alias actions
+    body.addEventListener("click", async e => {
+      const btn = e.target;
+
+      if (btn.dataset.removeAlias) {
+        await fetch("/api/obs/aliases/remove", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ alias: btn.dataset.removeAlias })
+        });
+        loadAliases();
+      }
+
+      if (btn.dataset.removeDefault) {
+        await fetch("/api/obs/aliases/remove-default", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ alias: btn.dataset.removeDefault })
+        });
+        loadAliases();
+      }
+
+      if (btn.dataset.restore) {
+        await fetch("/api/obs/aliases/restore-default", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ alias: btn.dataset.restore })
+        });
+        loadAliases();
+      }
+    });
+
+    card.appendChild(header);
+    card.appendChild(body);
+    container.appendChild(card);
+  });
+}
+
+async function addAlias() {
+  await fetch("/api/obs/aliases/add", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ alias: aliasInput.value, command: commandInput.value })
+  });
+}
+async function removeAlias(a) {
+  await fetch("/api/obs/aliases/remove", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ alias: a })
+  });
+}
+async function removeDefault(a) {
+  await fetch("/api/obs/aliases/remove-default", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ alias: a })
+  });
+}
+async function restoreDefault(a) {
+  await fetch("/api/obs/aliases/restore-default", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ alias: a })
+  });
+}
+async function toggleCmd(cmd, disable) {
+  await fetch("/api/obs/aliases/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ command: cmd, disable })
+  });
+}
+
+/* ───────── INIT ───────── */
+const evt = new EventSource("/api/obs/queue/events", { withCredentials: true });
+evt.onmessage = () => { loadQueue(); loadAliases(); };
+
+loadQueue();
+loadAliases();
+</script>
+</body>
+</html>

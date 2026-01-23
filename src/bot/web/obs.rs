@@ -1,25 +1,53 @@
-use std::{convert::Infallible, str::FromStr, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, str::FromStr, sync::Arc};
 
+use rand::rand_core::le;
 use serde::{Deserialize, Serialize};
 use shuttle_warp::warp::{self, filters::sse::Event, reply::{Reply, Response}};
 use sqlx::PgPool;
 use tokio_tungstenite::tungstenite::http::Uri;
 use tracing::info;
 
-use crate::bot::{commands::queue::logic::{remove_from_queue, reorder_queue, resolve_queue_owner, run_next, set_queue_open}, db::{UserId, queue::fetch_queue_for_owner}, handler::handler::ChatClient, state::def::{AppState, ObsQueueEntry}, web::sessions::channel_from_session};
+use crate::bot::{commands::queue::logic::{remove_from_queue, reorder_queue, resolve_queue_owner, run_next, set_queue_len, set_queue_open, set_queue_size}, db::{UserId, aliases::fetch_aliases_from_db, queue::fetch_queue_for_owner}, dispatcher::dispatcher::refresh_channel_dispatcher, handler::handler::ChatClient, replies::Replies, state::def::{AppState, ObsQueueEntry}, web::sessions::channel_from_session};
 
-pub async fn obs_page(cookies: Option<String>, pool: Arc<sqlx::PgPool>) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn obs_combined_page(cookies: Option<String>, pool: Arc<sqlx::PgPool>) -> Result<impl Reply, warp::Rejection> {
+    // 1. Try cookie
     if channel_from_session(cookies, &pool).await.is_err() {
-        return Ok(warp::redirect::temporary(Uri::from_static("/auth/twitch")).into_response());
+        return Ok(warp::redirect::temporary(
+            Uri::from_static("/auth/twitch")
+        ).into_response());
+    }
+
+    Ok(warp::reply::html(include_str!("public/queue_alias_dock.html")).into_response())
+}
+
+pub async fn obs_queue_page(cookies: Option<String>, pool: Arc<sqlx::PgPool>) -> Result<impl Reply, warp::Rejection> {
+    // 1. Try cookie
+    if channel_from_session(cookies, &pool).await.is_err() {
+        return Ok(warp::redirect::temporary(
+            Uri::from_static("/auth/twitch")
+        ).into_response());
     }
 
     Ok(warp::reply::html(include_str!("public/queue_dock.html")).into_response())
+}
+
+pub async fn obs_alias_page(cookies: Option<String>, pool: Arc<sqlx::PgPool>) -> Result<impl Reply, warp::Rejection> {
+    // 1. Try cookie
+    if channel_from_session(cookies, &pool).await.is_err() {
+        return Ok(warp::redirect::temporary(
+            Uri::from_static("/auth/twitch")
+        ).into_response());
+    }
+
+    Ok(warp::reply::html(include_str!("public/alias_dock.html")).into_response())
 }
 
 #[derive(Serialize)]
 pub struct ObsQueueResponse {
     pub open: bool,
     pub teamsize: usize,
+    pub length: usize,
+    pub runs: usize,
     pub queue: Vec<ObsQueueEntry>,
 }
 
@@ -31,11 +59,14 @@ pub async fn obs_queue(cookies: Option<String>, pool: Arc<PgPool>, state: Arc<Ap
 
     let owner = resolve_queue_owner(&state, &channel).await.map_err(|_| warp::reject())?;
 
-    let (teamsize, open) = {
+    let (teamsize, open, len, runs) = {
         let cfg = state.config.read().await;
-        (cfg.get_channel_config(&owner)
-            .map(|c| c.teamsize)
-            .unwrap_or(1), cfg.get_channel_config(&owner).map(|c| c.open).unwrap_or(false))
+        (
+            cfg.get_channel_config(&owner).map(|c| c.teamsize).unwrap_or(1), 
+            cfg.get_channel_config(&owner).map(|c| c.open).unwrap_or(false), 
+            cfg.get_channel_config(&owner).map(|c| c.size).unwrap_or(1),
+            cfg.get_channel_config(&owner).map(|c| c.runs).unwrap_or(0)
+        )
     };
 
     let queue = fetch_queue_for_owner(&pool, &owner, teamsize).await.map_err(|_| warp::reject())?;
@@ -43,6 +74,8 @@ pub async fn obs_queue(cookies: Option<String>, pool: Arc<PgPool>, state: Arc<Ap
     Ok(warp::reply::json(&ObsQueueResponse {
         open,
         teamsize,
+        length: len,
+        runs,
         queue,
     }).into_response())
 }
@@ -80,7 +113,7 @@ pub async fn obs_queue_remove(cookies: Option<String>, body: RemovePayload, pool
 
     let user_id = UserId::from_str(&body.user_id).map_err(|_| warp::reject())?;
 
-    remove_from_queue(&pool, &owner, &user_id)
+    remove_from_queue(&pool, &owner, &user_id, state)
         .await
         .map_err(|_| warp::reject())?;
 
@@ -133,9 +166,9 @@ pub async fn obs_queue_toggle(cookies: Option<String>, body: ToggleQueuePayload,
     set_queue_open(&pool, state.clone(), &owner, body.open).await.map_err(|_| warp::reject::custom(ObsToggleError))?;
 
     let msg = if body.open {
-        "🟢 Queue is now OPEN!"
+        &Replies::queue_opened()
     } else {
-        "🔴 Queue is now CLOSED!"
+        &Replies::queue_closed()
     };
 
     state.chat_client.send_message(&owner, msg).await.map_err(|_| warp::reject::custom(ObsToggleError))?;
@@ -143,6 +176,60 @@ pub async fn obs_queue_toggle(cookies: Option<String>, body: ToggleQueuePayload,
     Ok(warp::reply::json(&serde_json::json!({
         "ok": true,
         "open": body.open
+    })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct SizeQueuePayload {
+    pub teamsize: usize,
+}
+
+#[derive(Debug)]
+struct ObsQueueSizeError;
+impl warp::reject::Reject for ObsQueueSizeError {}
+
+pub async fn obs_queue_size(cookies: Option<String>, body: SizeQueuePayload, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
+    let channel = match channel_from_session(cookies, &pool).await {
+        Ok(c) => c,
+        Err(_) => return Err(warp::reject()),
+    };
+
+    let owner = resolve_queue_owner(&state, &channel).await.map_err(|_| warp::reject::custom(ObsQueueSizeError))?;
+
+    set_queue_size(&pool, state.clone(), &owner, body.teamsize).await.map_err(|_| warp::reject::custom(ObsQueueSizeError))?;
+
+    state.chat_client.send_message(&owner, &Replies::queue_size(&body.teamsize.to_string())).await.map_err(|_| warp::reject::custom(ObsQueueSizeError))?;
+
+    Ok(warp::reply::json(&serde_json::json!({
+        "ok": true,
+        "teamsize": body.teamsize
+    })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct LenQueuePayload {
+    pub length: usize,
+}
+
+#[derive(Debug)]
+struct ObsQueueLenError;
+impl warp::reject::Reject for ObsQueueLenError {}
+
+pub async fn obs_queue_len(cookies: Option<String>, body: LenQueuePayload, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
+    let channel = match channel_from_session(cookies, &pool).await {
+        Ok(c) => c,
+        Err(_) => return Err(warp::reject()),
+    };
+
+    let owner = resolve_queue_owner(&state, &channel).await.map_err(|_| warp::reject::custom(ObsQueueLenError))?;
+
+    set_queue_len(&pool, state.clone(), &owner, body.length).await.map_err(|_| warp::reject::custom(ObsQueueLenError))?;
+
+    state.chat_client.send_message(&owner, &Replies::queue_length(&body.length.to_string())).await.map_err(|_| warp::reject::custom(ObsQueueLenError))?;
+
+    Ok(warp::reply::json(&serde_json::json!({
+        "ok": true,
+        "length": body.length
     })))
 }
 
@@ -168,3 +255,169 @@ pub async fn obs_queue_events(cookies: Option<String>, pool: Arc<PgPool>, state:
     ))
 }
 
+#[derive(Serialize)]
+pub struct ObsAliasResponse {
+    pub aliases: HashMap<String, String>,  // custom aliases
+    pub removed_aliases: Vec<String>,      // removed default aliases
+    pub disabled_commands: Vec<String>,    // disabled commands
+    pub commands: Vec<ObsCommandInfo>,     // all commands
+}
+
+#[derive(Serialize)]
+pub struct ObsCommandInfo {
+    pub name: String,
+    pub description: String,
+    pub default_aliases: Vec<String>,
+}
+
+pub async fn obs_aliases(cookies: Option<String>, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<impl Reply, warp::Rejection> {
+    let channel = channel_from_session(cookies, &pool).await.map_err(|_| warp::reject())?;
+
+    let alias_config = fetch_aliases_from_db(&channel, &pool).await.map_err(|_| warp::reject())?;
+
+    let commands = state.registry
+        .groups
+        .values()
+        .flat_map(|g| &g.commands)
+        .map(|reg| ObsCommandInfo {
+            name: reg.command.name().to_string(),
+            description: reg.command.description().to_string(),
+            default_aliases: reg.aliases.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    Ok(warp::reply::json(&ObsAliasResponse {
+        aliases: alias_config.aliases.clone(),
+        removed_aliases: alias_config.removed_aliases.iter().cloned().collect(),
+        disabled_commands: alias_config.disabled_commands.iter().cloned().collect(),
+        commands,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct AddAliasPayload {
+    pub alias: String,
+    pub command: String,
+}
+
+pub async fn obs_alias_add(cookies: Option<String>, body: AddAliasPayload, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<impl Reply, warp::Rejection> {
+    let channel =
+        channel_from_session(cookies, &pool).await.map_err(|_| warp::reject())?;
+
+    sqlx::query!(
+        r#"
+        INSERT INTO krapbott_v2.command_aliases (channel, alias, command)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (channel, alias)
+        DO UPDATE SET command = EXCLUDED.command
+        "#,
+        channel.as_str(), body.alias.to_lowercase(), body.command.to_lowercase()
+    ).execute(&*pool).await.map_err(|_| warp::reject())?;
+
+    refresh_channel_dispatcher(&channel, state, &pool).await.map_err(|_| warp::reject())?;
+
+    Ok(warp::reply::json(&serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct RemoveAliasPayload {
+    pub alias: String,
+}
+
+pub async fn obs_alias_remove(cookies: Option<String>, body: RemoveAliasPayload, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<impl Reply, warp::Rejection> {
+    let channel =
+        channel_from_session(cookies, &pool).await.map_err(|_| warp::reject())?;
+
+    sqlx::query!(
+        "DELETE FROM krapbott_v2.command_aliases WHERE channel = $1 AND alias = $2",
+        channel.as_str(), body.alias.to_lowercase()
+    ).execute(&*pool).await.map_err(|_| warp::reject())?;
+
+    refresh_channel_dispatcher(&channel, state, &pool).await.map_err(|_| warp::reject())?;
+
+    Ok(warp::reply::json(&serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct ToggleCommandPayload {
+    pub command: String,
+    pub disable: bool,
+}
+
+pub async fn obs_alias_toggle_command(cookies: Option<String>, body: ToggleCommandPayload, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<impl Reply, warp::Rejection> {
+    let channel =
+        channel_from_session(cookies, &pool).await.map_err(|_| warp::reject())?;
+
+    if body.disable {
+        sqlx::query!(
+            "INSERT INTO krapbott_v2.command_disabled (channel, command)
+             VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            channel.as_str(), body.command
+        ).execute(&*pool).await.map_err(|_| warp::reject())?;
+    } else {
+        sqlx::query!(
+            "DELETE FROM krapbott_v2.command_disabled
+             WHERE channel = $1 AND command = $2",
+            channel.as_str(), body.command
+        ).execute(&*pool).await.map_err(|_| warp::reject())?;
+    }
+
+    refresh_channel_dispatcher(&channel, state, &pool).await.map_err(|_| warp::reject())?;
+
+    Ok(warp::reply::json(&serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct RestoreAliasPayload {
+    pub alias: String,
+}
+
+pub async fn obs_alias_restore(cookies: Option<String>, body: RestoreAliasPayload, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<impl Reply, warp::Rejection> {
+    let channel = channel_from_session(cookies, &pool).await.map_err(|_| warp::reject())?;
+
+    sqlx::query!(
+        "DELETE FROM krapbott_v2.command_alias_removals
+         WHERE channel = $1 AND alias = $2",
+        channel.as_str(), body.alias.to_lowercase()
+    ).execute(&*pool).await.map_err(|_| warp::reject())?;
+
+    refresh_channel_dispatcher(&channel, state, &pool).await.map_err(|_| warp::reject())?;
+
+    Ok(warp::reply::json(&serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct DefaultAliasPayload {
+    pub alias: String,
+}
+
+pub async fn obs_alias_remove_default(cookies: Option<String>, body: DefaultAliasPayload, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<impl Reply, warp::Rejection> {
+    let channel = channel_from_session(cookies, &pool).await.map_err(|_| warp::reject())?;
+
+    sqlx::query!(
+        "INSERT INTO krapbott_v2.command_alias_removals (channel, alias)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING",
+        channel.as_str(),
+        body.alias.to_lowercase()
+    ).execute(&*pool).await.map_err(|_| warp::reject())?;
+
+    refresh_channel_dispatcher(&channel, state, &pool).await.map_err(|_| warp::reject())?;
+
+    Ok(warp::reply::json(&serde_json::json!({ "ok": true })))
+}
+
+pub async fn obs_alias_restore_default(cookies: Option<String>, body: DefaultAliasPayload, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<impl Reply, warp::Rejection> {
+    let channel = channel_from_session(cookies, &pool).await.map_err(|_| warp::reject())?;
+
+    sqlx::query!(
+        "DELETE FROM krapbott_v2.command_alias_removals
+         WHERE channel = $1 AND alias = $2",
+        channel.as_str(),
+        body.alias.to_lowercase()
+    ).execute(&*pool).await.map_err(|_| warp::reject())?;
+
+    refresh_channel_dispatcher(&channel, state, &pool).await.map_err(|_| warp::reject())?;
+
+    Ok(warp::reply::json(&serde_json::json!({ "ok": true })))
+}
