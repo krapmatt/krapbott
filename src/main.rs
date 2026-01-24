@@ -244,7 +244,7 @@ async fn main() -> BotResult<()> {
 
     // CORS
     let cors = warp::cors()
-        .allow_origin("https://krapbott-rajo.shuttle.app")
+        .allow_origin("https://krapbott.up.railway.app")
         .allow_methods(vec!["GET", "POST", "OPTIONS"])
         .allow_headers(vec!["Content-Type", "Cookie"])
         .allow_credentials(true);
