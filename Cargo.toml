@@ -35,4 +35,4 @@ once_cell = "1.21.3"
 urlencoding = "2.1.3"
 async-stream = "0.3.6"
 warp = { version = "0.4.2", features = ["server"]}
-twitch-irc =  { version = "5.0.1", features = ["transport-tcp", "transport-ws", "transport-tcp-native-tls"] }
+twitch-irc =  { version = "5.0.1", features = ["transport-tcp", "transport-ws", "transport-ws-rustls-webpki-roots"] }

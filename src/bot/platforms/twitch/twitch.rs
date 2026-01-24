@@ -2,14 +2,14 @@ use std::collections::HashSet;
 
 use tokio::sync::mpsc;
 use twitch_irc::message::ServerMessage;
-use twitch_irc::transport::websocket::WSTransport;
+use twitch_irc::transport::websocket::{ConnectionUri, WSTransport};
 use twitch_irc::{SecureTCPTransport, login::StaticLoginCredentials, message::PrivmsgMessage};
 use twitch_irc::{ClientConfig, TwitchIRCClient};
 
 use crate::bot::chat_event::chat_event::{ChatEvent, ChatUser, DisplayName, Platform, UserIdentity};
 use crate::bot::permissions::permissions::PermissionLevel;
 
-pub type TwitchClient = TwitchIRCClient<SecureTCPTransport, StaticLoginCredentials>;
+pub type TwitchClient = TwitchIRCClient<WSTransport<ConnectionUri>, StaticLoginCredentials>;
 
 pub fn map_privmsg(msg: &PrivmsgMessage) -> ChatEvent {
     let permission = if msg.badges.iter().any(|b| b.name == "broadcaster") {
