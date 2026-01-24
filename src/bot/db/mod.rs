@@ -16,6 +16,7 @@ pub mod config;
         
 
 pub async fn initialize_database(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query("CREATE SCHEMA IF NOT EXISTS  krapbott_v2;").execute(pool).await?;
     sqlx::query("SET search_path TO krapbott_v2;").execute(pool).await?;
 
     sqlx::query!(
