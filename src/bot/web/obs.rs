@@ -2,10 +2,10 @@ use std::{collections::HashMap, convert::Infallible, str::FromStr, sync::Arc};
 
 use rand::rand_core::le;
 use serde::{Deserialize, Serialize};
-use shuttle_warp::warp::{self, filters::sse::Event, reply::{Reply, Response}};
 use sqlx::PgPool;
 use tokio_tungstenite::tungstenite::http::Uri;
 use tracing::info;
+use warp::{filters::sse::Event, reply::{Reply, Response}};
 
 use crate::bot::{commands::queue::logic::{remove_from_queue, reorder_queue, resolve_queue_owner, run_next, set_queue_len, set_queue_open, set_queue_size}, db::{UserId, aliases::fetch_aliases_from_db, queue::fetch_queue_for_owner}, dispatcher::dispatcher::refresh_channel_dispatcher, handler::handler::ChatClient, replies::Replies, state::def::{AppState, ObsQueueEntry}, web::sessions::channel_from_session};
 

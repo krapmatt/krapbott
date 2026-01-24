@@ -7,11 +7,10 @@ use sqlx::{query, types::time::{self, PrimitiveDateTime}, PgPool};
 use uuid::Uuid;
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
 use tokio_tungstenite::{connect_async, tungstenite::{Message, http::Uri}};
-use shuttle_warp::warp::http::StatusCode;
-use crate::{bot::{self, chat_event::chat_event::Platform, db::ChannelId, state::def::AppState}, warp::reply::json};
+use warp::reply::Reply;
+use crate::{bot::{self, chat_event::chat_event::Platform, db::ChannelId, state::def::AppState}};
 
 use crate::bot::state::def::BotSecrets;
-use shuttle_warp::warp::{self, filters::reply::header, reject::Rejection, reply::Reply, Filter};
 
 pub async fn twitch_login(secrets: Arc<BotSecrets>) -> Result<impl warp::Reply, warp::Rejection> {
     let client_id = &secrets.bot_id;

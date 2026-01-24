@@ -17,11 +17,11 @@ pub const QUEUE_TABLE: &str = r#"
 "#;
 
 pub const BAN_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS krapbott_v2.banlist (
-    membership_id TEXT PRIMARY KEY,
-    banned_until TIMESTAMP NULL, -- Null = permanent ban
-    reason TEXT
-);
+    CREATE TABLE IF NOT EXISTS krapbott_v2.banlist (
+        membership_id TEXT PRIMARY KEY,
+        banned_until TIMESTAMP NULL, -- Null = permanent ban
+        reason TEXT
+    );
 "#;
 
 #[derive(Debug, Clone)]

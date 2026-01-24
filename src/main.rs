@@ -1,12 +1,9 @@
 pub(crate) mod api;
 pub(crate) mod bot;
-
-
-use shuttle_runtime::SecretStore;
-use shuttle_warp::{warp::{self, reply::Reply, Filter}};
 use sqlx::PgPool;
 use tracing::info;
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use warp::Filter;
+use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use include_dir::{include_dir, Dir};
 
@@ -57,7 +54,7 @@ async fn main() -> BotResult<()> {
     };
     
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ChatEvent>();
-    let secrets = Arc::new(BotSecrets::from_shuttle(&secrets).expect("Missing secrets"));
+    let secrets = Arc::new(BotSecrets::from_env().expect("Missing secrets"));
     let twitch_token = create_twitch_app_token(&secrets).await.expect("Invalid twitch Response");
     let (twitch_rx, twitch_client) = build_twitch_client("Kr4pTr4p".to_string(), secrets.user_access_token.clone());
 
@@ -288,6 +285,7 @@ async fn main() -> BotResult<()> {
     warp::serve(routes)
         .run(([0, 0, 0, 0], port))
         .await;
+    Ok(())
 }
 
 /* TODO!

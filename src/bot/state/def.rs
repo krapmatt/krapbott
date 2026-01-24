@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, io, sync::Arc, time::Instant};
+use std::{collections::{HashMap, HashSet}, env::VarError, io, sync::Arc, time::Instant};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{sync::{RwLock, broadcast::error::SendError}};
@@ -84,6 +84,8 @@ pub enum BotError {
     SendError(#[from] SendError<SseEvent>),
     #[error("{0}")]
     Chat(String),
+    #[error("Env missing?  {0}")]
+    VarError(#[from] VarError),
     #[error("{0}")]
     Custom(String),
 

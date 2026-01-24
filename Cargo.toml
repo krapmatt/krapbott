@@ -34,4 +34,5 @@ kick-rust = "0.1.0"
 once_cell = "1.21.3"
 urlencoding = "2.1.3"
 async-stream = "0.3.6"
-warp = "0.4.2"
+warp = { version = "0.4.2", features = ["server"]}
+twitch-irc = "5.0.1"

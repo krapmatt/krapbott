@@ -1,7 +1,4 @@
 use std::{collections::HashMap, time::Instant};
-
-use shuttle_runtime::SecretStore;
-
 use crate::{api::twitch_api::create_twitch_app_token, bot::{chat_event::chat_event::Platform, commands::{commands::BotResult, queue::logic::QueueKey}, db::ChannelId, state::def::{AliasConfig, AppState, BotConfig, BotError, BotSecrets, ChannelConfig}, web::obs::ObsCommandInfo}};
 
 
@@ -20,37 +17,8 @@ impl ChannelConfig {
     }
 }
 
-#[derive(Debug)]
-pub enum SecretError {
-    Missing(&'static str),
-}
-
 impl BotSecrets {
-    pub fn from_shuttle(store: &SecretStore) -> Result<Self, SecretError> {
-        let bot_id = store
-            .get("TWITCH_CLIENT_ID")
-            .ok_or(SecretError::Missing("TWITCH_CLIENT_ID"))?
-            .to_string();
-
-        let x_api_key = store
-            .get("XAPIKEY")
-            .ok_or(SecretError::Missing("XAPIKEY"))?
-            .to_string();
-        let client_secret = store.get("CLIENT_SECRET")
-            .ok_or(SecretError::Missing("CLIENT_SECRET"))?
-            .to_string();
-        let access_token = store.get("TWITCH_USER_ACCESS_TOKEN")
-            .ok_or(SecretError::Missing("TWITCH_USER_ACCESS_TOKEN"))?
-            .to_string();
-
-        Ok(Self {
-            user_access_token: access_token,
-            bot_id,
-            x_api_key,
-            client_secret
-        })
-    }
-    pub fn from_env() -> BotResult<self> {
+    pub fn from_env() -> BotResult<Self> {
         Ok(Self {
             bot_id: std::env::var("TWITCH_CLIENT_ID")?,
             client_secret: std::env::var("CLIENT_SECRET")?,
