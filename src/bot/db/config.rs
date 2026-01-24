@@ -7,7 +7,7 @@ use crate::bot::{commands::commands::BotResult, db::ChannelId, state::def::{BotC
 pub const CONFIG_TABLE: &str = "CREATE TABLE IF NOT EXISTS krapbott_v2.channel_config (
         channel_id TEXT PRIMARY KEY,
         config JSONB NOT NULL
-    )";
+    );";
 
 pub async fn load_bot_config_from_db(pool: &PgPool) -> BotResult<BotConfig> {
     let rows = sqlx::query!(

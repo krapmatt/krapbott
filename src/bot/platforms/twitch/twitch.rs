@@ -49,5 +49,5 @@ pub fn map_privmsg(msg: &PrivmsgMessage) -> ChatEvent {
 pub fn build_twitch_client(nick: String, oauth: String) -> (mpsc::UnboundedReceiver<ServerMessage>, TwitchClient) {
     let creds = StaticLoginCredentials::new(nick, Some(oauth));
     let config = ClientConfig::new_simple(creds);
-    TwitchIRCClient::new(config)
+    TwitchIRCClient::<SecureTCPTransport, _>::new(config)
 }

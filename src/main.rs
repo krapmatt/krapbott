@@ -45,7 +45,7 @@ async fn main() -> BotResult<()> {
         {config.write().await.channels.insert(channel_id.clone(), chal_config);}
         
         let cfg = config.read().await;
-        save_channel_config(&pool, &channel_id, &cfg).await;
+        save_channel_config(&pool, &channel_id, &cfg).await?;
     }
     let registry = Arc::new(CommandRegistry::new());
 
