@@ -14,7 +14,7 @@ use crate::bot::state::def::BotSecrets;
 
 pub async fn twitch_login(secrets: Arc<BotSecrets>) -> Result<impl warp::Reply, warp::Rejection> {
     let client_id = &secrets.bot_id;
-    let redirect_uri = "https://krapbott-rajo.shuttle.app/auth/callback";
+    let redirect_uri = "https://krapbott.up.railway.app/auth/callback";
 
     let url = format!(
         "https://id.twitch.tv/oauth2/authorize\
@@ -59,7 +59,7 @@ pub async fn twitch_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgP
         client_secret: &state.secrets.client_secret,
         code: code,
         grant_type: "authorization_code",
-        redirect_uri: "https://krapbott-rajo.shuttle.app/auth/callback",
+        redirect_uri: "https://krapbott.up.railway.app/auth/callback",
     };
     let client = reqwest::Client::new();
     // Exchange code → token
