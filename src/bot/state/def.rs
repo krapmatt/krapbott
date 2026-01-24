@@ -2,7 +2,7 @@ use std::{collections::{HashMap, HashSet}, env::VarError, io, sync::Arc, time::I
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{sync::{RwLock, broadcast::error::SendError}};
-use twitch_irc::{login::StaticLoginCredentials, transport::tcp::{TCPTransport, TLS}, validate};
+use twitch_irc::{login::StaticLoginCredentials, transport::{tcp::{TCPTransport, TLS}, websocket::WSTransport}, validate};
 
 use crate::bot::{commands::{CommandRegistry, queue::logic::QueueKey}, db::ChannelId, dispatcher::dispatcher::DispatcherCache, handler::handler::UnifiedChatClient, web::sse::{SseBus, SseEvent}};
 
@@ -76,6 +76,8 @@ pub enum BotError {
     SqlxError(#[from] sqlx::Error),
     #[error("TwitchIRC Error: {0}")]
     TwitchIrc(#[from] twitch_irc::Error<TCPTransport<TLS>, StaticLoginCredentials>),
+    #[error("TwitchWS Error: {0}")]
+    TwitchWS(#[from] twitch_irc::Error<WSTransport<twitch_irc::transport::websocket::TLS>, StaticLoginCredentials>),
     #[error("Validate Error: {0}")]
     Validate(#[from] validate::Error),
     #[error("Configuration missing for channel: {0}")]
