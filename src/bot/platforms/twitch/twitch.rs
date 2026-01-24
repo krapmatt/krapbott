@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use tokio::sync::mpsc;
 use twitch_irc::message::ServerMessage;
+use twitch_irc::transport::websocket::WSTransport;
 use twitch_irc::{SecureTCPTransport, login::StaticLoginCredentials, message::PrivmsgMessage};
 use twitch_irc::{ClientConfig, TwitchIRCClient};
 
@@ -49,5 +50,5 @@ pub fn map_privmsg(msg: &PrivmsgMessage) -> ChatEvent {
 pub fn build_twitch_client(nick: String, oauth: String) -> (mpsc::UnboundedReceiver<ServerMessage>, TwitchClient) {
     let creds = StaticLoginCredentials::new(nick, Some(oauth));
     let config = ClientConfig::new_simple(creds);
-    TwitchIRCClient::<SecureTCPTransport, _>::new(config)
+    TwitchIRCClient::new(config)
 }
