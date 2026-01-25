@@ -7,7 +7,7 @@ use tokio_tungstenite::tungstenite::http::Uri;
 use tracing::info;
 use warp::{filters::sse::Event, reply::{Reply, Response}};
 
-use crate::bot::{commands::queue::logic::{remove_from_queue, reorder_queue, resolve_queue_owner, run_next, set_queue_len, set_queue_open, set_queue_size}, db::{UserId, aliases::fetch_aliases_from_db, queue::fetch_queue_for_owner}, dispatcher::dispatcher::refresh_channel_dispatcher, handler::handler::ChatClient, replies::Replies, state::def::{AppState, ObsQueueEntry}, web::sessions::channel_from_session};
+use crate::bot::{commands::queue::logic::{remove_from_queue, reorder_queue, reset_queue_runs, resolve_queue_owner, run_next, set_queue_len, set_queue_open, set_queue_size}, db::{UserId, aliases::fetch_aliases_from_db, queue::fetch_queue_for_owner}, dispatcher::dispatcher::refresh_channel_dispatcher, handler::handler::ChatClient, replies::Replies, state::def::{AppState, ObsQueueEntry}, web::sessions::channel_from_session};
 
 pub async fn obs_combined_page(cookies: Option<String>, pool: Arc<sqlx::PgPool>) -> Result<impl Reply, warp::Rejection> {
     // 1. Try cookie
@@ -420,4 +420,30 @@ pub async fn obs_alias_restore_default(cookies: Option<String>, body: DefaultAli
     refresh_channel_dispatcher(&channel, state, &pool).await.map_err(|_| warp::reject())?;
 
     Ok(warp::reply::json(&serde_json::json!({ "ok": true })))
+}
+
+#[derive(Debug)]
+struct ObsQueueResetError;
+impl warp::reject::Reject for ObsQueueResetError {}
+
+pub async fn obs_queue_reset(
+    cookies: Option<String>,
+    pool: Arc<PgPool>,
+    state: Arc<AppState>,
+) -> Result<impl Reply, warp::Rejection> {
+    let channel =
+        channel_from_session(cookies, &pool).await.map_err(|_| warp::reject())?;
+
+    let owner = resolve_queue_owner(&state, &channel)
+        .await
+        .map_err(|_| warp::reject::custom(ObsQueueResetError))?;
+
+    reset_queue_runs(&pool, state.clone(), &owner).await.map_err(|_| warp::reject::custom(ObsQueueResetError))?;
+
+    // Chat feedback
+    state.chat_client.send_message(&owner, &Replies::queue_runs_reset(&owner)).await.map_err(|_| warp::reject::custom(ObsQueueResetError))?;
+
+    Ok(warp::reply::json(&serde_json::json!({
+        "ok": true
+    })))
 }

@@ -7,7 +7,7 @@ use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use include_dir::{include_dir, Dir};
 
-use crate::{api::twitch_api::create_twitch_app_token, bot::{chat_event::chat_event::ChatEvent, commands::{CommandRegistry, commands::BotResult}, db::{ChannelId, config::{load_bot_config_from_db, save_channel_config}, initialize_database}, handler::handler::UnifiedChatClient, platforms::twitch::{event_loop::run_twitch_loop, twitch::build_twitch_client}, run_event_loop, state::def::{AliasConfig, AppState, BotRuntime, BotSecrets, ChannelConfig}, web::{auth::{twitch_callback, twitch_login}, obs::{obs_alias_add, obs_alias_page, obs_alias_remove, obs_alias_remove_default, obs_alias_restore, obs_alias_restore_default, obs_alias_toggle_command, obs_aliases, obs_combined_page, obs_queue, obs_queue_events, obs_queue_len, obs_queue_next, obs_queue_page, obs_queue_remove, obs_queue_reorder, obs_queue_size, obs_queue_toggle}}}};
+use crate::{api::twitch_api::create_twitch_app_token, bot::{chat_event::chat_event::ChatEvent, commands::{CommandRegistry, commands::BotResult}, db::{ChannelId, config::{load_bot_config_from_db, save_channel_config}, initialize_database}, handler::handler::UnifiedChatClient, platforms::twitch::{event_loop::run_twitch_loop, twitch::build_twitch_client}, run_event_loop, state::def::{AliasConfig, AppState, BotRuntime, BotSecrets, ChannelConfig}, web::{auth::{twitch_callback, twitch_login}, obs::{obs_alias_add, obs_alias_page, obs_alias_remove, obs_alias_remove_default, obs_alias_restore, obs_alias_restore_default, obs_alias_toggle_command, obs_aliases, obs_combined_page, obs_queue, obs_queue_events, obs_queue_len, obs_queue_next, obs_queue_page, obs_queue_remove, obs_queue_reorder, obs_queue_reset, obs_queue_size, obs_queue_toggle}}}};
 
 #[tokio::main]
 async fn main() -> BotResult<()> {
@@ -237,7 +237,12 @@ async fn main() -> BotResult<()> {
         .and(pool_filter.clone())
         .and(state_filter.clone())
         .and_then(obs_alias_restore_default);
-    
+    let obs_queue_reset = warp::path!("api" / "obs" / "queue" / "reset")
+        .and(warp::post())
+        .and(warp::header::optional("cookie"))
+        .and(pool_filter.clone())
+        .and(state_filter.clone())
+        .and_then(obs_queue_reset);
     let favicon = warp::path("favicon.ico")
         .and(warp::get())
         .map(|| warp::reply::with_status("", warp::http::StatusCode::NO_CONTENT));
@@ -264,6 +269,7 @@ async fn main() -> BotResult<()> {
     .or(obs_toggle)
     .or(obs_queue_size)
     .or(obs_queue_len)
+    .or(obs_queue_reset)
     .or(obs_aliases)
     .or(obs_aliases_add)
     .or(obs_aliases_remove)

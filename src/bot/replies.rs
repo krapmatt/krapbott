@@ -84,4 +84,7 @@ impl Replies {
         format!("📋 Channel config for {}", channel.as_str())
     }
 
+    pub fn queue_runs_reset(channel: &ChannelId) -> String {
+        format!("📋 Runs reset for {}", channel.as_str())
+    }
 }

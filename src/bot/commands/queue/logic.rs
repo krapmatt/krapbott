@@ -486,3 +486,18 @@ pub async fn set_queue_size(pool: &PgPool, state: Arc<AppState>, owner: &Channel
 
     Ok(())
 }
+
+pub async fn reset_queue_runs(pool: &PgPool, state: Arc<AppState>, owner: &ChannelId) -> BotResult<()> {
+    {
+        let mut cfg = state.config.write().await;
+        if let Some(c) = cfg.channels.get_mut(owner) {
+            c.runs = 0;
+        }
+        save_channel_config(pool, owner, &cfg).await?;
+    }
+
+    // Notify SSE listeners
+    let _ = state.sse_bus.send(SseEvent::QueueUpdated { channel: owner.to_owned() });
+
+    Ok(())
+}

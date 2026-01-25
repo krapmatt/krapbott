@@ -228,6 +228,46 @@ tr.dragging {
   opacity: 1;
 }
 
+.reset-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.reset-btn.loading {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.reset-btn.success {
+  background: #4caf50 !important;
+}
+
+.reset-btn.shake {
+  animation: shake 0.35s ease;
+}
+
+@keyframes shake {
+  0% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  50% { transform: translateX(4px); }
+  75% { transform: translateX(-4px); }
+  100% { transform: translateX(0); }
+}
+
+/* Subtle danger pulse */
+.reset-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(255,75,75,0.25);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.reset-btn:hover::after {
+  opacity: 1;
+}
+
 /* ───────── ALIASES ───────── */
 
 .alias-grid {
@@ -350,6 +390,7 @@ tr.dragging {
   <div class="panel controls">
     <button onclick="nextQueue()">NEXT</button>
     <button onclick="toggleQueue()" id="queueToggle">Toggle Queue</button>
+    <button class="danger reset-btn" onclick="resetRuns(this)">Reset Runs</button>
   </div>
 
   <div class="panel">
@@ -487,13 +528,22 @@ async function nextQueue() {
   await fetch("/api/obs/queue/next", { method: "POST", credentials: "include" });
 }
 async function toggleQueue() {
-  queueOpen = !queueOpen;
   await fetch("/api/obs/queue/toggle", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ open: queueOpen })
+    body: JSON.stringify({ open: !queueOpen })
   });
+  if (!res.ok) {
+    toast("Failed to toggle queue");
+    return;
+  }
+
+  const data = await res.json();
+  queueOpen = data.open;
+
+  queueToggle.textContent = queueOpen ? "Close Queue" : "Open Queue";
+  toast(queueOpen ? "Queue opened" : "Queue closed");
 }
 async function removeUser(id) {
   await fetch("/api/obs/queue/remove", {
@@ -503,6 +553,31 @@ async function removeUser(id) {
     body: JSON.stringify({ user_id: id })
   });
 }
+async function resetRuns(btn) {
+  btn.classList.add("loading");
+
+  const res = await fetch("/api/obs/queue/reset", {
+    method: "POST",
+    credentials: "include"
+  });
+
+  btn.classList.remove("loading");
+
+  if (!res.ok) {
+    btn.classList.add("shake");
+    toast("Failed to reset runs");
+    setTimeout(() => btn.classList.remove("shake"), 400);
+    return;
+  }
+
+  btn.classList.add("success");
+  toast("Runs reset");
+
+  setTimeout(() => {
+    btn.classList.remove("success");
+  }, 1200);
+}
+
 async function updateTeamSize() {
   await fetch("/api/obs/queue/size", {
     method: "POST",
