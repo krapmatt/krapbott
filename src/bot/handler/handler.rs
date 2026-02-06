@@ -3,7 +3,7 @@ use std::{sync::Arc};
 use sqlx::PgPool;
 use tracing::info;
 
-use crate::api::kick_api::send_kick_message;
+use crate::api::{kick_api::send_kick_message, kick_oauth::KickAuthManager};
 use crate::bot::{chat_event::chat_event::{ChatEvent, Platform}, commands::{CommandRegistry, commands::BotResult}, db::ChannelId, dispatcher::dispatcher::{dispatch_message}, platforms::{kick::event_loop::spawn_kick_channel, twitch::twitch::TwitchClient}, runtime::channel_lifecycle::start_channels_from_config, state::def::AppState};
 use tracing::warn;
 use kick_rust::KickClient;
@@ -17,7 +17,7 @@ pub struct UnifiedChatClient {
     pub twitch: TwitchClient,
     pub kick: KickClient,
     pub kick_tx: tokio::sync::mpsc::UnboundedSender<crate::bot::chat_event::chat_event::ChatEvent>,
-    pub kick_access_token: Option<String>,
+    pub kick_auth: Arc<KickAuthManager>,
 }
 
 impl ChatClient for UnifiedChatClient {
@@ -28,11 +28,7 @@ impl ChatClient for UnifiedChatClient {
             }
 
             Platform::Kick => {
-                let Some(token) = self.kick_access_token.as_deref() else {
-                    return Err(crate::bot::state::def::BotError::Custom(
-                        "KICK_ACCESS_TOKEN not set".to_string(),
-                    ));
-                };
+                let token = self.kick_auth.get_access_token().await?;
                 send_kick_message(channel.channel(), message, token).await?;
             }
 

@@ -27,6 +27,10 @@ pub struct BotSecrets {
     pub client_secret: String,
     pub user_access_token: String,
     pub kick_access_token: Option<String>,
+    pub kick_refresh_token: Option<String>,
+    pub kick_client_id: Option<String>,
+    pub kick_client_secret: Option<String>,
+    pub kick_redirect_uri: Option<String>,
 }
 
 pub struct BotRuntime {

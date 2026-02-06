@@ -8,7 +8,7 @@ use crate::bot::{commands::commands::BotResult, state::def::BotError};
 
 static BROADCASTER_CACHE: Lazy<DashMap<String, u64>> = Lazy::new(DashMap::new);
 
-pub async fn send_kick_message(channel_slug: &str, content: &str, access_token: &str) -> BotResult<()> {
+pub async fn send_kick_message(channel_slug: &str, content: &str, access_token: String) -> BotResult<()> {
     let content = content.trim();
     if content.is_empty() {
         return Ok(());

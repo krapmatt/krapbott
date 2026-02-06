@@ -10,7 +10,7 @@ use crate::bot::{
     chat_event::chat_event::{ChatEvent, Platform},
     commands::commands::BotResult,
     platforms::kick::kick::map_kick_msg,
-    state::def::{AppState, BotError},
+    state::def::AppState,
 };
 
 pub async fn run_kick_loop(tx: UnboundedSender<ChatEvent>, state: Arc<AppState>) -> BotResult<()> {

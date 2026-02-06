@@ -131,3 +131,46 @@ pub async fn twitch_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgP
         ),
     ).into_response())
 }
+
+pub async fn kick_login(state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
+    let redirect_uri = state
+        .secrets
+        .kick_redirect_uri
+        .as_deref()
+        .ok_or_else(warp::reject)?;
+
+    let scope = "chat:write";
+    let url = state
+        .chat_client
+        .kick_auth
+        .build_authorize_url(redirect_uri, scope)
+        .map_err(|_| warp::reject())?;
+
+    let uri: Uri = url.parse().map_err(|_| warp::reject())?;
+    Ok(warp::redirect::temporary(uri))
+}
+
+pub async fn kick_callback(query: HashMap<String, String>, state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Some(error) = query.get("error") {
+        let desc = query.get("error_description").cloned().unwrap_or_default();
+        let reply = warp::reply::html(format!("Kick auth failed: {} {}", error, desc));
+        return Ok(warp::reply::with_header(reply, "Content-Type", "text/html; charset=utf-8"));
+    }
+
+    let code = query.get("code").ok_or(warp::reject())?;
+    let state_param = query.get("state").ok_or(warp::reject())?;
+
+    state
+        .chat_client
+        .kick_auth
+        .exchange_code(code, state_param)
+        .await
+        .map_err(|_| warp::reject())?;
+
+    let reply = warp::reply::html("Kick authorized. You can close this window.".to_string());
+    Ok(warp::reply::with_header(
+        reply,
+        "Content-Type",
+        "text/html; charset=utf-8",
+    ))
+}

@@ -1456,6 +1456,7 @@ name = "krapbott"
 version = "3.0.0"
 dependencies = [
  "async-stream",
+ "base64 0.22.1",
  "chrono",
  "chrono-tz",
  "dashmap",
@@ -1472,6 +1473,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_millis",
+ "sha2",
  "sqlx",
  "thiserror 2.0.17",
  "tokio",

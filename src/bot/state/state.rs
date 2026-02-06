@@ -25,6 +25,10 @@ impl BotSecrets {
             user_access_token: std::env::var("TWITCH_USER_ACCESS_TOKEN")?,
             x_api_key: std::env::var("XAPIKEY")?,
             kick_access_token: std::env::var("KICK_ACCESS_TOKEN").ok(),
+            kick_refresh_token: std::env::var("KICK_REFRESH_TOKEN").ok(),
+            kick_client_id: std::env::var("KICK_CLIENT_ID").ok(),
+            kick_client_secret: std::env::var("KICK_CLIENT_SECRET").ok(),
+            kick_redirect_uri: std::env::var("KICK_REDIRECT_URI").ok(),
         })
     }
 
