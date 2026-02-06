@@ -3,7 +3,10 @@ use std::{sync::Arc};
 use sqlx::PgPool;
 use tracing::info;
 
-use crate::bot::{chat_event::chat_event::{ChatEvent, Platform}, commands::{CommandRegistry, commands::BotResult}, db::ChannelId, dispatcher::dispatcher::{dispatch_message}, platforms::twitch::twitch::TwitchClient, runtime::channel_lifecycle::start_channels_from_config, state::def::AppState};
+use crate::api::kick_api::send_kick_message;
+use crate::bot::{chat_event::chat_event::{ChatEvent, Platform}, commands::{CommandRegistry, commands::BotResult}, db::ChannelId, dispatcher::dispatcher::{dispatch_message}, platforms::{kick::event_loop::spawn_kick_channel, twitch::twitch::TwitchClient}, runtime::channel_lifecycle::start_channels_from_config, state::def::AppState};
+use tracing::warn;
+use kick_rust::KickClient;
 use crate::bot::runtime::channel_lifecycle::start_channel;
 
 pub trait ChatClient: Send + Sync {
@@ -12,6 +15,9 @@ pub trait ChatClient: Send + Sync {
 
 pub struct UnifiedChatClient {
     pub twitch: TwitchClient,
+    pub kick: KickClient,
+    pub kick_tx: tokio::sync::mpsc::UnboundedSender<crate::bot::chat_event::chat_event::ChatEvent>,
+    pub kick_access_token: Option<String>,
 }
 
 impl ChatClient for UnifiedChatClient {
@@ -21,11 +27,14 @@ impl ChatClient for UnifiedChatClient {
                 self.twitch.say(channel.channel().to_owned(), message.to_owned()).await?;
             }
 
-            Platform::Kick => todo!(), /*{
-                self.kick
-                    .send(channel.channel(), message)
-                    .await?;
-            }*/
+            Platform::Kick => {
+                let Some(token) = self.kick_access_token.as_deref() else {
+                    return Err(crate::bot::state::def::BotError::Custom(
+                        "KICK_ACCESS_TOKEN not set".to_string(),
+                    ));
+                };
+                send_kick_message(channel.channel(), message, token).await?;
+            }
 
             Platform::Obs => todo!(), /*{
                 self.obs
@@ -44,7 +53,7 @@ impl UnifiedChatClient {
                 self.twitch.join(channel.channel().to_string())?;
             }
             Platform::Kick => {
-                // future
+                spawn_kick_channel(channel.channel().to_string(), self.kick_tx.clone()).await?;
             }
             Platform::Obs => {}
         }
@@ -56,7 +65,9 @@ impl UnifiedChatClient {
             Platform::Twitch => {
                 self.twitch.part(channel.channel().to_string());
             }
-            Platform::Kick => {}
+            Platform::Kick => {
+                warn!("Kick leave not implemented: {}", channel.channel());
+            }
             Platform::Obs => {}
         }
         Ok(())

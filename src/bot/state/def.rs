@@ -26,6 +26,7 @@ pub struct BotSecrets {
     pub x_api_key: String,
     pub client_secret: String,
     pub user_access_token: String,
+    pub kick_access_token: Option<String>,
 }
 
 pub struct BotRuntime {

@@ -209,7 +209,7 @@ pub fn connect_command() -> Arc<dyn CommandT> {
                 if parts.len() != 2 {
                     client.send_message(
                         &ChannelId::new(event.platform, &event.channel),
-                        "Usage: !connect twitch:channel"
+                        "Usage: !connect twitch:channel | !connect kick:channel"
                     ).await?;
                     return Ok(());
                 }

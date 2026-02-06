@@ -24,6 +24,7 @@ impl BotSecrets {
             client_secret: std::env::var("CLIENT_SECRET")?,
             user_access_token: std::env::var("TWITCH_USER_ACCESS_TOKEN")?,
             x_api_key: std::env::var("XAPIKEY")?,
+            kick_access_token: std::env::var("KICK_ACCESS_TOKEN").ok(),
         })
     }
 

@@ -7,7 +7,8 @@ use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use include_dir::{include_dir, Dir};
 
-use crate::{api::twitch_api::create_twitch_app_token, bot::{chat_event::chat_event::ChatEvent, commands::{CommandRegistry, commands::BotResult}, db::{ChannelId, config::{load_bot_config_from_db, save_channel_config}, initialize_database}, handler::handler::UnifiedChatClient, platforms::twitch::{event_loop::run_twitch_loop, twitch::build_twitch_client}, run_event_loop, state::def::{AliasConfig, AppState, BotRuntime, BotSecrets, ChannelConfig}, web::{auth::{twitch_callback, twitch_login}, obs::{obs_alias_add, obs_alias_page, obs_alias_remove, obs_alias_remove_default, obs_alias_restore, obs_alias_restore_default, obs_alias_toggle_command, obs_aliases, obs_combined_page, obs_queue, obs_queue_events, obs_queue_len, obs_queue_next, obs_queue_page, obs_queue_remove, obs_queue_reorder, obs_queue_reset, obs_queue_size, obs_queue_toggle}}}};
+use crate::{api::twitch_api::create_twitch_app_token, bot::{chat_event::chat_event::ChatEvent, commands::{CommandRegistry, commands::BotResult}, db::{ChannelId, config::{load_bot_config_from_db, save_channel_config}, initialize_database}, handler::handler::UnifiedChatClient, platforms::{kick::event_loop::run_kick_loop, twitch::{event_loop::run_twitch_loop, twitch::build_twitch_client}}, run_event_loop, state::def::{AliasConfig, AppState, BotRuntime, BotSecrets, ChannelConfig}, web::{auth::{twitch_callback, twitch_login}, obs::{obs_alias_add, obs_alias_page, obs_alias_remove, obs_alias_remove_default, obs_alias_restore, obs_alias_restore_default, obs_alias_toggle_command, obs_aliases, obs_combined_page, obs_queue, obs_queue_events, obs_queue_len, obs_queue_next, obs_queue_page, obs_queue_remove, obs_queue_reorder, obs_queue_reset, obs_queue_size, obs_queue_toggle}}}};
+use kick_rust::KickClient;
 
 #[tokio::main]
 async fn main() -> BotResult<()> {
@@ -57,9 +58,11 @@ async fn main() -> BotResult<()> {
     let secrets = Arc::new(BotSecrets::from_env().expect("Missing secrets"));
     let twitch_token = create_twitch_app_token(&secrets).await.expect("Invalid twitch Response");
     let (twitch_rx, twitch_client) = build_twitch_client("Kr4pTr4p".to_string(), secrets.user_access_token.clone());
-
     let chat_client = Arc::new(UnifiedChatClient {
         twitch: twitch_client,
+        kick: KickClient::new(),
+        kick_tx: tx.clone(),
+        kick_access_token: secrets.kick_access_token.clone(),
     });
 
     let (sse_tx, _) = tokio::sync::broadcast::channel(32);
@@ -77,6 +80,7 @@ async fn main() -> BotResult<()> {
     
     // Twitch input
     tokio::spawn(run_twitch_loop(twitch_rx, tx.clone(), state.clone()));
+    tokio::spawn(run_kick_loop(tx.clone(), state.clone()));
 
     // Core dispatcher
     tokio::spawn(run_event_loop(pool.clone(), state.clone(), rx));
