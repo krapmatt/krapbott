@@ -173,6 +173,9 @@ fn apply_token(state: &mut KickAuthState, token: TokenResponse) {
     state.refresh_token = token.refresh_token.or(state.refresh_token.clone());
     state.expires_at = expires_at;
 
+    info!("Refresh token updated: {}", state.refresh_token);
+    info!("Access token updated: {}", state.access_token);
+
     info!("Kick OAuth token updated");
 }
 
