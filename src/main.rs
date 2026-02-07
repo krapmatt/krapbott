@@ -7,7 +7,7 @@ use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use include_dir::{include_dir, Dir};
 
-use crate::{api::{kick_oauth::KickAuthManager, twitch_api::create_twitch_app_token}, bot::{chat_event::chat_event::ChatEvent, commands::{CommandRegistry, commands::BotResult}, db::{ChannelId, config::{load_bot_config_from_db, save_channel_config}, initialize_database}, handler::handler::UnifiedChatClient, platforms::{kick::event_loop::run_kick_loop, twitch::{event_loop::run_twitch_loop, twitch::build_twitch_client}}, run_event_loop, state::def::{AliasConfig, AppState, BotRuntime, BotSecrets, ChannelConfig}, web::{auth::{kick_callback, kick_login, twitch_callback, twitch_login}, obs::{obs_alias_add, obs_alias_page, obs_alias_remove, obs_alias_remove_default, obs_alias_restore, obs_alias_restore_default, obs_alias_toggle_command, obs_aliases, obs_combined_page, obs_queue, obs_queue_events, obs_queue_len, obs_queue_next, obs_queue_page, obs_queue_remove, obs_queue_reorder, obs_queue_reset, obs_queue_size, obs_queue_toggle}}}};
+use crate::{api::{kick_oauth::KickAuthManager, twitch_api::create_twitch_app_token}, bot::{chat_event::chat_event::ChatEvent, commands::{CommandRegistry, commands::BotResult}, db::{ChannelId, config::{load_bot_config_from_db, save_channel_config}, initialize_database}, handler::handler::UnifiedChatClient, platforms::{kick::event_loop::run_kick_loop, twitch::{event_loop::run_twitch_loop, twitch::build_twitch_client}}, run_event_loop, state::def::{AliasConfig, AppState, BotRuntime, BotSecrets, ChannelConfig}, web::{auth::{kick_callback, kick_login, twitch_callback, twitch_login}, obs::{obs_alias_add, obs_alias_remove, obs_alias_remove_default, obs_alias_restore, obs_alias_restore_default, obs_alias_toggle_command, obs_aliases, obs_combined_page, obs_queue, obs_queue_events, obs_queue_len, obs_queue_next, obs_queue_remove, obs_queue_reorder, obs_queue_reset, obs_queue_size, obs_queue_toggle}}}};
 use kick_rust::KickClient;
 
 #[tokio::main]
@@ -127,18 +127,6 @@ async fn main() -> BotResult<()> {
         .and(warp::header::optional("cookie"))
         .and(pool_filter.clone())
         .and_then(obs_combined_page);
-
-    let obs_queue_page = warp::path!("obs" / "queue")
-        .and(warp::path::end())
-        .and(warp::header::optional("cookie"))
-        .and(pool_filter.clone())
-        .and_then(obs_queue_page);
-
-    let obs_alias = warp::path!("obs" / "aliases")
-        .and(warp::path::end())
-        .and(warp::header::optional("cookie"))
-        .and(pool_filter.clone())
-        .and_then(obs_alias_page);
 
     let obs_queue = warp::path!("api" / "obs" / "queue")
         .and(warp::path::end())
@@ -278,8 +266,6 @@ async fn main() -> BotResult<()> {
     .or(auth_kick)
     .or(auth_kick_callback)
     .or(obs_combined)
-    .or(obs_queue_page)
-    .or(obs_alias)
     .or(obs_queue)
     .or(obs_next)
     .or(obs_remove)

@@ -20,28 +20,6 @@ pub async fn obs_combined_page(cookies: Option<String>, pool: Arc<sqlx::PgPool>)
     Ok(warp::reply::html(include_str!("public/queue_alias_dock.html")).into_response())
 }
 
-pub async fn obs_queue_page(cookies: Option<String>, pool: Arc<sqlx::PgPool>) -> Result<impl Reply, warp::Rejection> {
-    // 1. Try cookie
-    if channel_from_session(cookies, &pool).await.is_err() {
-        return Ok(warp::redirect::temporary(
-            Uri::from_static("/auth/twitch")
-        ).into_response());
-    }
-
-    Ok(warp::reply::html(include_str!("public/queue_dock.html")).into_response())
-}
-
-pub async fn obs_alias_page(cookies: Option<String>, pool: Arc<sqlx::PgPool>) -> Result<impl Reply, warp::Rejection> {
-    // 1. Try cookie
-    if channel_from_session(cookies, &pool).await.is_err() {
-        return Ok(warp::redirect::temporary(
-            Uri::from_static("/auth/twitch")
-        ).into_response());
-    }
-
-    Ok(warp::reply::html(include_str!("public/alias_dock.html")).into_response())
-}
-
 #[derive(Serialize)]
 pub struct ObsQueueResponse {
     pub open: bool,
