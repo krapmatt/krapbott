@@ -8,6 +8,8 @@ use uuid::Uuid;
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
 use tokio_tungstenite::{connect_async, tungstenite::{Message, http::Uri}};
 use warp::reply::Reply;
+use warp::http::StatusCode;
+use tracing::error;
 use crate::{bot::{self, chat_event::chat_event::Platform, db::ChannelId, state::def::AppState}};
 
 use crate::bot::state::def::BotSecrets;
@@ -133,44 +135,95 @@ pub async fn twitch_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgP
 }
 
 pub async fn kick_login(state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
-    let redirect_uri = state
-        .secrets
-        .kick_redirect_uri
-        .as_deref()
-        .ok_or_else(warp::reject)?;
+    let redirect_uri = match state.secrets.kick_redirect_uri.as_deref() {
+        Some(uri) => uri,
+        None => {
+            let reply = warp::reply::with_status(
+                warp::reply::html("Kick OAuth misconfigured: KICK_REDIRECT_URI missing".to_string()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            );
+            return Ok(reply.into_response());
+        }
+    };
 
     let scope = "chat:write";
-    let url = state
+    let url = match state
         .chat_client
         .kick_auth
         .build_authorize_url(redirect_uri, scope)
-        .map_err(|_| warp::reject())?;
+    {
+        Ok(url) => url,
+        Err(err) => {
+            error!("Kick OAuth build_authorize_url failed: {}", err);
+            let reply = warp::reply::with_status(
+                warp::reply::html(format!("Kick OAuth setup failed: {err}")),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            );
+            return Ok(reply.into_response());
+        }
+    };
 
-    let uri: Uri = url.parse().map_err(|_| warp::reject())?;
-    Ok(warp::redirect::temporary(uri))
+    let uri: Uri = match url.parse() {
+        Ok(uri) => uri,
+        Err(err) => {
+            error!("Kick OAuth authorize URL parse failed: {}", err);
+            let reply = warp::reply::with_status(
+                warp::reply::html("Kick OAuth setup failed: invalid authorize URL".to_string()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            );
+            return Ok(reply.into_response());
+        }
+    };
+
+    Ok(warp::redirect::temporary(uri).into_response())
 }
 
 pub async fn kick_callback(query: HashMap<String, String>, state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(error) = query.get("error") {
         let desc = query.get("error_description").cloned().unwrap_or_default();
-        let reply = warp::reply::html(format!("Kick auth failed: {} {}", error, desc));
-        return Ok(warp::reply::with_header(reply, "Content-Type", "text/html; charset=utf-8"));
+        let reply = warp::reply::with_status(
+            warp::reply::html(format!("Kick auth failed: {} {}", error, desc)),
+            StatusCode::BAD_REQUEST,
+        );
+        return Ok(reply.into_response());
     }
 
-    let code = query.get("code").ok_or(warp::reject())?;
-    let state_param = query.get("state").ok_or(warp::reject())?;
+    let code = match query.get("code") {
+        Some(code) => code,
+        None => {
+            let reply = warp::reply::with_status(
+                warp::reply::html("Kick callback missing query parameter: code".to_string()),
+                StatusCode::BAD_REQUEST,
+            );
+            return Ok(reply.into_response());
+        }
+    };
 
-    state
+    let state_param = match query.get("state") {
+        Some(state_param) => state_param,
+        None => {
+            let reply = warp::reply::with_status(
+                warp::reply::html("Kick callback missing query parameter: state".to_string()),
+                StatusCode::BAD_REQUEST,
+            );
+            return Ok(reply.into_response());
+        }
+    };
+
+    if let Err(err) = state
         .chat_client
         .kick_auth
         .exchange_code(code, state_param)
         .await
-        .map_err(|_| warp::reject())?;
+    {
+        error!("Kick OAuth exchange_code failed: {}", err);
+        let reply = warp::reply::with_status(
+            warp::reply::html(format!("Kick auth failed during token exchange: {err}")),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        return Ok(reply.into_response());
+    }
 
     let reply = warp::reply::html("Kick authorized. You can close this window.".to_string());
-    Ok(warp::reply::with_header(
-        reply,
-        "Content-Type",
-        "text/html; charset=utf-8",
-    ))
+    Ok(warp::reply::with_status(reply, StatusCode::OK).into_response())
 }
