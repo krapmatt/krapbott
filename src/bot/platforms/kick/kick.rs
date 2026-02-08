@@ -46,13 +46,30 @@ pub fn map_kick_msg(msg: ChatMessageEvent, raw_json: Option<&str>) -> ChatEvent 
 }
 
 fn extract_permission_from_raw(raw_json: &str) -> Option<PermissionLevel> {
-    let value: Value = serde_json::from_str(raw_json).ok()?;
+    let mut value: Value = serde_json::from_str(raw_json).ok()?;
+    decode_embedded_data_json(&mut value);
     let badges = extract_badge_types(&value);
     if badges.is_empty() {
         return None;
     }
 
     Some(permission_from_badges(&badges))
+}
+
+fn decode_embedded_data_json(root: &mut Value) {
+    let Some(obj) = root.as_object_mut() else {
+        return;
+    };
+
+    let Some(data_str) = obj.get("data").and_then(|v| v.as_str()) else {
+        return;
+    };
+
+    let Ok(parsed_data) = serde_json::from_str::<Value>(data_str) else {
+        return;
+    };
+
+    obj.insert("data".to_string(), parsed_data);
 }
 
 fn permission_from_badges(badges: &[String]) -> PermissionLevel {
@@ -83,20 +100,20 @@ fn extract_badge_types(root: &Value) -> Vec<String> {
             let mut out = Vec::new();
             for item in items {
                 if let Some(s) = item.as_str() {
-                    out.push(s.to_string());
+                    out.push(s.to_ascii_lowercase());
                     continue;
                 }
                 if let Some(obj) = item.as_object() {
                     if let Some(s) = obj.get("type").and_then(|v| v.as_str()) {
-                        out.push(s.to_string());
+                        out.push(s.to_ascii_lowercase());
                         continue;
                     }
                     if let Some(s) = obj.get("name").and_then(|v| v.as_str()) {
-                        out.push(s.to_string());
+                        out.push(s.to_ascii_lowercase());
                         continue;
                     }
                     if let Some(s) = obj.get("badge").and_then(|v| v.as_str()) {
-                        out.push(s.to_string());
+                        out.push(s.to_ascii_lowercase());
                         continue;
                     }
                 }
