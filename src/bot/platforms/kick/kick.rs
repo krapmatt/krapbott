@@ -9,7 +9,7 @@ use crate::bot::{
 pub fn map_kick_msg(msg: ChatMessageEvent, raw_json: Option<&str>) -> ChatEvent {
     let permission = raw_json
         .and_then(extract_permission_from_raw)
-        .unwrap_or(PermissionLevel::Everyone);
+        .unwrap_or(PermissionLevel::Follower);
 
     let display = msg
         .sender
