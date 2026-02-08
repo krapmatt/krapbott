@@ -102,14 +102,8 @@ impl KickAuthManager {
             }
         }
 
-        if let Ok(token) = client_credentials_token(&self.config).await {
-            apply_token(&mut state, token);
-            persist_tokens_with_warning(&self.token_store_path, &state);
-            return Ok(());
-        }
-
         if state.access_token.is_some() {
-            // No refresh/client-credentials path worked, but we still have a token to try.
+            // Refresh failed, but we still have a token to try.
             warn!("Kick OAuth refresh failed; using existing access token.");
             return Ok(());
         }
@@ -137,12 +131,6 @@ impl KickAuthManager {
                 persist_tokens_with_warning(&self.token_store_path, &state);
                 return Ok(state.access_token.clone().unwrap_or_default());
             }
-        }
-
-        if let Ok(token) = client_credentials_token(&self.config).await {
-            apply_token(&mut state, token);
-            persist_tokens_with_warning(&self.token_store_path, &state);
-            return Ok(state.access_token.clone().unwrap_or_default());
         }
 
         if let Some(existing) = state.access_token.clone() {
