@@ -7,6 +7,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, warn};
 
+use crate::api::kick_api::prime_broadcaster_user_id;
 use crate::bot::{
     chat_event::chat_event::{ChatEvent, Platform},
     commands::commands::BotResult,
@@ -99,13 +100,15 @@ async fn run_kick_ws_reader(
                     match MessageParser::parse_message(&raw) {
                         Ok(Some(parsed)) => {
                             if let KickEventData::ChatMessage(chat_msg) = parsed.data {
-                                let mut event = map_kick_msg(chat_msg, Some(&raw));
-                                if event.channel.is_empty()
-                                    || event.channel
-                                        == event.broadcaster_id.clone().unwrap_or_default()
-                                {
-                                    event.channel = channel.clone();
+                                prime_broadcaster_user_id(&channel, chat_msg.chatroom.channel_id);
+                                if !chat_msg.chatroom.name.is_empty() {
+                                    prime_broadcaster_user_id(
+                                        &chat_msg.chatroom.name,
+                                        chat_msg.chatroom.channel_id,
+                                    );
                                 }
+                                let mut event = map_kick_msg(chat_msg, Some(&raw));
+                                event.channel = channel.clone();
 
                                 info!(
                                     "Kick [{}] {}: {}",

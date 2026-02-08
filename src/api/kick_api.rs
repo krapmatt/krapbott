@@ -1,12 +1,16 @@
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use serde_json::json;
-
-use kick_rust::KickApiClient;
+use serde_json::Value;
 
 use crate::bot::{commands::commands::BotResult, state::def::BotError};
 
 static BROADCASTER_CACHE: Lazy<DashMap<String, u64>> = Lazy::new(DashMap::new);
+
+pub fn prime_broadcaster_user_id(channel_slug: &str, broadcaster_user_id: u64) {
+    let key = normalize_channel_slug(channel_slug);
+    BROADCASTER_CACHE.insert(key, broadcaster_user_id);
+}
 
 pub async fn send_kick_message(channel_slug: &str, content: &str, access_token: String) -> BotResult<()> {
     let content = content.trim();
@@ -43,25 +47,54 @@ pub async fn send_kick_message(channel_slug: &str, content: &str, access_token: 
 }
 
 async fn get_broadcaster_user_id(channel_slug: &str) -> BotResult<u64> {
-    if let Some(id) = BROADCASTER_CACHE.get(channel_slug).map(|v| *v) {
+    let key = normalize_channel_slug(channel_slug);
+
+    if let Some(id) = BROADCASTER_CACHE.get(&key).map(|v| *v) {
         return Ok(id);
     }
 
-    let api = KickApiClient::new().map_err(|e| {
-        BotError::Custom(format!("Kick API client error: {e}"))
-    })?;
+    let id = fetch_broadcaster_user_id_from_public_api(&key).await?;
+    BROADCASTER_CACHE.insert(key, id);
+    Ok(id)
+}
 
-    let channel = api
-        .get_channel(channel_slug)
+async fn fetch_broadcaster_user_id_from_public_api(channel_slug: &str) -> BotResult<u64> {
+    let url = format!("https://kick.com/api/v2/channels/{channel_slug}");
+    let client = reqwest::Client::new();
+    let response = client
+        .get(url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        )
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Referer", format!("https://kick.com/{channel_slug}"))
+        .send()
         .await
         .map_err(|e| BotError::Custom(format!("Kick channel lookup failed: {e}")))?;
 
-    let user = channel.user.ok_or_else(|| {
-        BotError::Custom("Kick channel missing user info".to_string())
-    })?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(BotError::Custom(format!(
+            "Kick channel lookup failed ({status}): {body}"
+        )));
+    }
 
-    BROADCASTER_CACHE.insert(channel_slug.to_string(), user.id);
-    Ok(user.id)
+    let value: Value = serde_json::from_str(&body)?;
+    let broadcaster_user_id = value
+        .get("user")
+        .and_then(|u| u.get("id"))
+        .and_then(|v| v.as_u64())
+        .or_else(|| {
+            value
+                .get("chatroom")
+                .and_then(|c| c.get("channel_id"))
+                .and_then(|v| v.as_u64())
+        })
+        .ok_or_else(|| BotError::Custom("Kick response missing broadcaster user id".to_string()))?;
+
+    Ok(broadcaster_user_id)
 }
 
 fn truncate_message(input: &str, max_len: usize) -> String {
@@ -75,4 +108,11 @@ fn truncate_message(input: &str, max_len: usize) -> String {
         count += 1;
     }
     out
+}
+
+fn normalize_channel_slug(channel_slug: &str) -> String {
+    channel_slug
+        .trim()
+        .trim_start_matches('@')
+        .to_ascii_lowercase()
 }
