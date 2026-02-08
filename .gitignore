@@ -4,3 +4,4 @@
 objective_manifest_cache.json
 record_manifest_cache.json
 /logs
+/.secrets

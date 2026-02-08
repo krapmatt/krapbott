@@ -1,9 +1,13 @@
-use std::time::{Duration, Instant};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use dashmap::DashMap;
 use rand::RngCore;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -18,6 +22,7 @@ pub struct KickAuthManager {
     state: RwLock<KickAuthState>,
     config: KickOAuthConfig,
     pending: DashMap<String, PkceState>,
+    token_store_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -52,11 +57,22 @@ struct TokenResponse {
     scope: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct PersistedKickTokens {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+}
+
 impl KickAuthManager {
     pub fn from_secrets(secrets: &BotSecrets) -> Self {
+        let token_store_path = token_store_path_from_env();
+        let persisted = load_persisted_tokens(&token_store_path).unwrap_or_default();
+
         let state = KickAuthState {
-            access_token: secrets.kick_access_token.clone(),
-            refresh_token: secrets.kick_refresh_token.clone(),
+            access_token: persisted.access_token.or(secrets.kick_access_token.clone()),
+            refresh_token: persisted
+                .refresh_token
+                .or(secrets.kick_refresh_token.clone()),
             expires_at: None,
         };
 
@@ -67,25 +83,34 @@ impl KickAuthManager {
                 client_secret: secrets.kick_client_secret.clone(),
             },
             pending: DashMap::new(),
+            token_store_path,
         }
     }
 
     pub async fn bootstrap(&self) -> BotResult<()> {
         let mut state = self.state.write().await;
 
-        if state.access_token.is_some() {
+        if has_fresh_access_token(&state) {
             return Ok(());
         }
 
         if let Some(refresh) = state.refresh_token.clone() {
             if let Ok(token) = refresh_kick_token(&refresh, &self.config).await {
                 apply_token(&mut state, token);
+                persist_tokens_with_warning(&self.token_store_path, &state);
                 return Ok(());
             }
         }
 
         if let Ok(token) = client_credentials_token(&self.config).await {
             apply_token(&mut state, token);
+            persist_tokens_with_warning(&self.token_store_path, &state);
+            return Ok(());
+        }
+
+        if state.access_token.is_some() {
+            // No refresh/client-credentials path worked, but we still have a token to try.
+            warn!("Kick OAuth refresh failed; using existing access token.");
             return Ok(());
         }
 
@@ -96,30 +121,36 @@ impl KickAuthManager {
     pub async fn get_access_token(&self) -> BotResult<String> {
         {
             let state = self.state.read().await;
-            if let Some(token) = &state.access_token {
-                if state.expires_at.map(|t| t > Instant::now()).unwrap_or(true) {
-                    return Ok(token.clone());
-                }
+            if has_fresh_access_token(&state) {
+                return Ok(state.access_token.clone().unwrap_or_default());
             }
         }
 
         let mut state = self.state.write().await;
-        if let Some(token) = &state.access_token {
-            if state.expires_at.map(|t| t > Instant::now()).unwrap_or(true) {
-                return Ok(token.clone());
-            }
+        if has_fresh_access_token(&state) {
+            return Ok(state.access_token.clone().unwrap_or_default());
         }
 
         if let Some(refresh) = state.refresh_token.clone() {
             if let Ok(token) = refresh_kick_token(&refresh, &self.config).await {
                 apply_token(&mut state, token);
-                return Ok(state.access_token.clone().unwrap());
+                persist_tokens_with_warning(&self.token_store_path, &state);
+                return Ok(state.access_token.clone().unwrap_or_default());
             }
         }
 
-        let token = client_credentials_token(&self.config).await?;
-        apply_token(&mut state, token);
-        Ok(state.access_token.clone().unwrap())
+        if let Ok(token) = client_credentials_token(&self.config).await {
+            apply_token(&mut state, token);
+            persist_tokens_with_warning(&self.token_store_path, &state);
+            return Ok(state.access_token.clone().unwrap_or_default());
+        }
+
+        if let Some(existing) = state.access_token.clone() {
+            warn!("Returning existing Kick access token without known expiry.");
+            return Ok(existing);
+        }
+
+        Err(BotError::Custom("Kick access token unavailable".to_string()))
     }
 
     pub fn build_authorize_url(&self, redirect_uri: &str, scope: &str) -> BotResult<String> {
@@ -161,6 +192,7 @@ impl KickAuthManager {
         let token = authorization_code_token(code, &pkce, &self.config).await?;
         let mut state_guard = self.state.write().await;
         apply_token(&mut state_guard, token);
+        persist_tokens_with_warning(&self.token_store_path, &state_guard);
         Ok(())
     }
 }
@@ -173,10 +205,84 @@ fn apply_token(state: &mut KickAuthState, token: TokenResponse) {
     state.refresh_token = token.refresh_token.or(state.refresh_token.clone());
     state.expires_at = expires_at;
 
-    info!("Refresh token updated: {:?}", state.refresh_token);
-    info!("Access token updated: {:?}", state.access_token);
+    info!(
+        "Kick OAuth token updated (access_present={}, refresh_present={})",
+        state.access_token.is_some(),
+        state.refresh_token.is_some()
+    );
+}
 
-    info!("Kick OAuth token updated");
+fn has_fresh_access_token(state: &KickAuthState) -> bool {
+    match (&state.access_token, state.expires_at) {
+        (Some(_), Some(expires_at)) => expires_at > Instant::now(),
+        _ => false,
+    }
+}
+
+fn token_store_path_from_env() -> PathBuf {
+    match std::env::var("KICK_TOKEN_STORE_PATH") {
+        Ok(path) if !path.trim().is_empty() => PathBuf::from(path),
+        _ => PathBuf::from(".secrets/kick_oauth_tokens.json"),
+    }
+}
+
+fn load_persisted_tokens(path: &Path) -> Option<PersistedKickTokens> {
+    let data = match fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(err) => {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                warn!("Failed to read Kick token store {}: {}", path.display(), err);
+            }
+            return None;
+        }
+    };
+
+    match serde_json::from_str::<PersistedKickTokens>(&data) {
+        Ok(tokens) => Some(tokens),
+        Err(err) => {
+            warn!(
+                "Failed to parse Kick token store {}: {}",
+                path.display(),
+                err
+            );
+            None
+        }
+    }
+}
+
+fn persist_tokens_with_warning(path: &Path, state: &KickAuthState) {
+    let tokens = PersistedKickTokens {
+        access_token: state.access_token.clone(),
+        refresh_token: state.refresh_token.clone(),
+    };
+
+    if tokens.access_token.is_none() && tokens.refresh_token.is_none() {
+        return;
+    }
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(err) = fs::create_dir_all(parent) {
+                warn!(
+                    "Failed to create Kick token store directory {}: {}",
+                    parent.display(),
+                    err
+                );
+                return;
+            }
+        }
+    }
+
+    match serde_json::to_string_pretty(&tokens) {
+        Ok(serialized) => {
+            if let Err(err) = fs::write(path, serialized) {
+                warn!("Failed to write Kick token store {}: {}", path.display(), err);
+            }
+        }
+        Err(err) => {
+            warn!("Failed to serialize Kick tokens: {}", err);
+        }
+    }
 }
 
 async fn refresh_kick_token(refresh_token: &str, config: &KickOAuthConfig) -> BotResult<TokenResponse> {
