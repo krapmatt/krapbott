@@ -1,5 +1,6 @@
 use kick_rust::ChatMessageEvent;
 use serde_json::Value;
+use tracing::info;
 
 use crate::bot::{
     chat_event::chat_event::{ChatEvent, ChatUser, DisplayName, Platform, UserIdentity},
@@ -7,10 +8,11 @@ use crate::bot::{
 };
 
 pub fn map_kick_msg(msg: ChatMessageEvent, raw_json: Option<&str>) -> ChatEvent {
+    info!("Received Kick message: {:?}", raw_json);
     let permission = raw_json
         .and_then(extract_permission_from_raw)
         .unwrap_or(PermissionLevel::Follower);
-
+    info!("Extracted permission: {:?}", permission);
     let display = msg
         .sender
         .display_name
