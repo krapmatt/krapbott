@@ -19,8 +19,22 @@ pub async fn send_kick_message(channel_slug: &str, content: &str, access_token: 
     }
 
     let content = truncate_message(content, 500);
-    let broadcaster_user_id = get_broadcaster_user_id(channel_slug).await?;
+    let key = normalize_channel_slug(channel_slug);
+    let broadcaster_user_id = get_broadcaster_user_id(&key).await?;
+    let mut result = post_kick_chat(&content, broadcaster_user_id, &access_token).await;
 
+    // Kick can return generic 500s for stale/incorrect broadcaster ids.
+    // Drop cache and retry once with a fresh lookup before surfacing the error.
+    if matches!(result, Err(BotError::Custom(ref msg)) if msg.contains("Kick send failed (500")) {
+        BROADCASTER_CACHE.remove(&key);
+        let fresh_id = get_broadcaster_user_id(&key).await?;
+        result = post_kick_chat(&content, fresh_id, &access_token).await;
+    }
+
+    result
+}
+
+async fn post_kick_chat(content: &str, broadcaster_user_id: u64, access_token: &str) -> BotResult<()> {
     let body = json!({
         "type": "bot",
         "content": content,
@@ -86,13 +100,7 @@ async fn fetch_broadcaster_user_id_from_public_api(channel_slug: &str) -> BotRes
         .get("user")
         .and_then(|u| u.get("id"))
         .and_then(|v| v.as_u64())
-        .or_else(|| {
-            value
-                .get("chatroom")
-                .and_then(|c| c.get("channel_id"))
-                .and_then(|v| v.as_u64())
-        })
-        .ok_or_else(|| BotError::Custom("Kick response missing broadcaster user id".to_string()))?;
+        .ok_or_else(|| BotError::Custom("Kick response missing user.id for broadcaster".to_string()))?;
 
     Ok(broadcaster_user_id)
 }
