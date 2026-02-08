@@ -21,22 +21,28 @@ pub async fn send_kick_message(channel_slug: &str, content: &str, access_token: 
     let content = truncate_message(content, 500);
     let key = normalize_channel_slug(channel_slug);
     let broadcaster_user_id = get_broadcaster_user_id(&key).await?;
-    let mut result = post_kick_chat(&content, broadcaster_user_id, &access_token).await;
+    let mut result = post_kick_chat_user(&content, broadcaster_user_id, &access_token).await;
 
     // Kick can return generic 500s for stale/incorrect broadcaster ids.
     // Drop cache and retry once with a fresh lookup before surfacing the error.
     if matches!(result, Err(BotError::Custom(ref msg)) if msg.contains("Kick send failed (500")) {
         BROADCASTER_CACHE.remove(&key);
         let fresh_id = get_broadcaster_user_id(&key).await?;
-        result = post_kick_chat(&content, fresh_id, &access_token).await;
+        result = post_kick_chat_user(&content, fresh_id, &access_token).await;
+    }
+
+    // Kick behavior is inconsistent across token types.
+    // If user payload still fails with 500, fallback once to bot payload.
+    if matches!(result, Err(BotError::Custom(ref msg)) if msg.contains("Kick send failed (500")) {
+        result = post_kick_chat_bot(&content, &access_token).await;
     }
 
     result
 }
 
-async fn post_kick_chat(content: &str, broadcaster_user_id: u64, access_token: &str) -> BotResult<()> {
+async fn post_kick_chat_user(content: &str, broadcaster_user_id: u64, access_token: &str) -> BotResult<()> {
     let body = json!({
-        "type": "bot",
+        "type": "user",
         "content": content,
         "broadcaster_user_id": broadcaster_user_id
     });
@@ -53,7 +59,32 @@ async fn post_kick_chat(content: &str, broadcaster_user_id: u64, access_token: &
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         return Err(BotError::Custom(format!(
-            "Kick send failed ({status}): {text}"
+            "Kick send failed (user payload) ({status}): {text}"
+        )));
+    }
+
+    Ok(())
+}
+
+async fn post_kick_chat_bot(content: &str, access_token: &str) -> BotResult<()> {
+    let body = json!({
+        "type": "bot",
+        "content": content
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://api.kick.com/public/v1/chat")
+        .bearer_auth(access_token)
+        .json(&body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(BotError::Custom(format!(
+            "Kick send failed (bot payload) ({status}): {text}"
         )));
     }
 
