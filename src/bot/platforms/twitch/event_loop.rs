@@ -34,7 +34,6 @@ pub async fn run_twitch_loop(mut incoming: UnboundedReceiver<ServerMessage>, tx:
                 }
             }
             let event = map_privmsg(&privmsg);
-            info!("Forwarded Twitch message to event loop: {}", event.message);
             let _ = tx.send(event);
             
         }

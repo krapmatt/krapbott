@@ -72,7 +72,6 @@ impl UnifiedChatClient {
 
 pub async fn handle_event(event: &mut ChatEvent, pool: PgPool, state: Arc<AppState>) -> BotResult<()> {
     let channel_id = ChannelId::new(event.platform.clone(), &event.channel);
-    info!("im here");
      let dispatcher = {
         let cache = state.runtime.dispatchers.read().await;
 

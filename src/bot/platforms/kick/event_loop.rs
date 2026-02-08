@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
-use kick_rust::{ChatMessageEvent, KickClient, RawMessage};
+use kick_rust::{ChatMessageEvent, KickApiClient, KickClient, RawMessage};
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{info, warn};
@@ -16,12 +16,7 @@ use crate::bot::{
 pub async fn run_kick_loop(tx: UnboundedSender<ChatEvent>, state: Arc<AppState>) -> BotResult<()> {
     let channels: Vec<String> = {
         let config = state.config.read().await;
-        config
-            .channels
-            .keys()
-            .filter(|id| id.platform() == Platform::Kick)
-            .map(|id| id.channel().to_string())
-            .collect()
+        config.channels.keys().filter(|id| id.platform() == Platform::Kick).map(|id| id.channel().to_string()).collect()
     };
 
     if channels.is_empty() {
