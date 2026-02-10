@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite::http::Uri;
 use tracing::error;
-use warp::{http::StatusCode, reply::Reply};
+use warp::{http::{header::SET_COOKIE, HeaderValue, StatusCode}, reply::Reply};
 
 use crate::bot::{
     chat_event::chat_event::Platform,
@@ -122,17 +122,18 @@ pub async fn twitch_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgP
 
     let reply = warp::redirect::temporary(Uri::from_static("/obs"));
 
-    let response = warp::reply::with_header(
-        warp::reply::with_header(
-            reply,
-            "Set-Cookie",
-            session_cookie_header(platform_session_cookie(Platform::Twitch), &session_id),
-        ),
-        "Set-Cookie",
-        session_cookie_header("session_id", &session_id),
+    let mut response = reply.into_response();
+    let platform_cookie = session_cookie_header(platform_session_cookie(Platform::Twitch), &session_id);
+    let active_cookie = session_cookie_header("session_id", &session_id);
+    response.headers_mut().append(
+        SET_COOKIE,
+        HeaderValue::from_str(&platform_cookie).map_err(|_| warp::reject())?,
     );
-
-    Ok(response.into_response())
+    response.headers_mut().append(
+        SET_COOKIE,
+        HeaderValue::from_str(&active_cookie).map_err(|_| warp::reject())?,
+    );
+    Ok(response)
 }
 
 pub async fn kick_login(state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
@@ -261,15 +262,16 @@ pub async fn kick_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgPoo
     .map_err(|_| warp::reject())?;
 
     let reply = warp::redirect::temporary(Uri::from_static("/obs"));
-    let response = warp::reply::with_header(
-        warp::reply::with_header(
-            reply,
-            "Set-Cookie",
-            session_cookie_header(platform_session_cookie(Platform::Kick), &session_id),
-        ),
-        "Set-Cookie",
-        session_cookie_header("session_id", &session_id),
+    let mut response = reply.into_response();
+    let platform_cookie = session_cookie_header(platform_session_cookie(Platform::Kick), &session_id);
+    let active_cookie = session_cookie_header("session_id", &session_id);
+    response.headers_mut().append(
+        SET_COOKIE,
+        HeaderValue::from_str(&platform_cookie).map_err(|_| warp::reject())?,
     );
-
-    Ok(response.into_response())
+    response.headers_mut().append(
+        SET_COOKIE,
+        HeaderValue::from_str(&active_cookie).map_err(|_| warp::reject())?,
+    );
+    Ok(response)
 }
