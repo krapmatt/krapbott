@@ -1,23 +1,93 @@
 use std::{collections::HashMap, convert::Infallible, str::FromStr, sync::Arc};
 
-use rand::rand_core::le;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tokio_tungstenite::tungstenite::http::Uri;
 use tracing::info;
-use warp::{filters::sse::Event, reply::{Reply, Response}};
+use warp::{filters::sse::Event, http::StatusCode, reply::{Reply, Response}};
 
-use crate::bot::{commands::queue::logic::{remove_from_queue, reorder_queue, reset_queue_runs, resolve_queue_owner, run_next, set_queue_len, set_queue_open, set_queue_size}, db::{UserId, aliases::fetch_aliases_from_db, queue::fetch_queue_for_owner}, dispatcher::dispatcher::refresh_channel_dispatcher, handler::handler::ChatClient, replies::Replies, state::def::{AppState, ObsQueueEntry}, web::sessions::channel_from_session};
+use crate::bot::{
+    chat_event::chat_event::Platform,
+    commands::queue::logic::{remove_from_queue, reorder_queue, reset_queue_runs, resolve_queue_owner, run_next, set_queue_len, set_queue_open, set_queue_size},
+    db::{UserId, aliases::fetch_aliases_from_db, queue::fetch_queue_for_owner},
+    dispatcher::dispatcher::refresh_channel_dispatcher,
+    handler::handler::ChatClient,
+    replies::Replies,
+    state::def::{AppState, ObsQueueEntry},
+    web::sessions::{channel_from_session, session_cookie_header, sessions_from_cookies},
+};
 
 pub async fn obs_combined_page(cookies: Option<String>, pool: Arc<sqlx::PgPool>) -> Result<impl Reply, warp::Rejection> {
-    // 1. Try cookie
-    if channel_from_session(cookies, &pool).await.is_err() {
-        return Ok(warp::redirect::temporary(
-            Uri::from_static("/auth/twitch")
-        ).into_response());
-    }
-
+    let _ = cookies;
+    let _ = pool;
     Ok(warp::reply::html(include_str!("public/queue_alias_dock.html")).into_response())
+}
+
+#[derive(Serialize)]
+pub struct ObsSessionView {
+    pub platform: String,
+    pub login: String,
+    pub active: bool,
+}
+
+#[derive(Serialize)]
+pub struct ObsSessionsResponse {
+    pub active_platform: Option<String>,
+    pub active_login: Option<String>,
+    pub sessions: Vec<ObsSessionView>,
+}
+
+pub async fn obs_sessions(cookies: Option<String>, pool: Arc<PgPool>) -> Result<Response, warp::Rejection> {
+    let active = channel_from_session(cookies.clone(), &pool).await.ok();
+    let sessions = sessions_from_cookies(cookies, &pool).await.unwrap_or_default();
+
+    let rows = sessions
+        .iter()
+        .map(|s| ObsSessionView {
+            platform: s.channel.platform().to_string(),
+            login: s.channel.channel().to_string(),
+            active: active.as_ref().map(|a| a == &s.channel).unwrap_or(false),
+        })
+        .collect::<Vec<_>>();
+
+    Ok(warp::reply::json(&ObsSessionsResponse {
+        active_platform: active.as_ref().map(|a| a.platform().to_string()),
+        active_login: active.as_ref().map(|a| a.channel().to_string()),
+        sessions: rows,
+    }).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct ObsSwitchSessionPayload {
+    pub platform: String,
+}
+
+pub async fn obs_switch_session(
+    cookies: Option<String>,
+    body: ObsSwitchSessionPayload,
+    pool: Arc<PgPool>,
+) -> Result<Response, warp::Rejection> {
+    let platform = Platform::from_str(&body.platform).map_err(|_| warp::reject())?;
+    let sessions = sessions_from_cookies(cookies, &pool).await.map_err(|_| warp::reject())?;
+
+    let Some(found) = sessions.into_iter().find(|s| s.channel.platform() == platform) else {
+        let reply = warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({ "ok": false, "error": "No linked session for that platform" })),
+            StatusCode::BAD_REQUEST,
+        );
+        return Ok(reply.into_response());
+    };
+
+    let reply = warp::reply::with_header(
+        warp::reply::json(&serde_json::json!({
+            "ok": true,
+            "platform": platform.to_string(),
+            "login": found.channel.channel()
+        })),
+        "Set-Cookie",
+        session_cookie_header("session_id", &found.session_id),
+    );
+
+    Ok(reply.into_response())
 }
 
 #[derive(Serialize)]

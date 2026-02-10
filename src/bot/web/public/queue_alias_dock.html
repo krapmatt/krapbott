@@ -35,6 +35,25 @@ body {
   margin-bottom: 12px;
 }
 
+.auth-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.auth-row .spacer {
+  flex: 1;
+}
+
+select {
+  background: #111;
+  color: var(--text);
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 6px;
+}
+
 .tab {
   flex: 1;
   background: #222;
@@ -377,6 +396,16 @@ tr.dragging {
 
 <body>
 
+<div class="panel auth-row">
+  <button onclick="window.location.href='/auth/twitch'">Connect Twitch</button>
+  <button onclick="window.location.href='/auth/kick'">Connect Kick</button>
+  <span class="spacer"></span>
+  <label for="sessionSelect">Active:</label>
+  <select id="sessionSelect" onchange="switchSession(this.value)">
+    <option value="">Not connected</option>
+  </select>
+</div>
+
 <div class="tabs">
   <button class="tab active" onclick="showTab('queue', this)">Queue</button>
   <button class="tab" onclick="showTab('aliases', this)">Aliases</button>
@@ -457,6 +486,38 @@ function toast(msg) {
 /* ───────── QUEUE ───────── */
 let queueOpen = true;
 let draggedRow = null;
+let dragHandlersBound = false;
+
+async function loadSessions() {
+  const select = document.getElementById("sessionSelect");
+  const res = await fetch("/api/obs/sessions", { credentials: "include" });
+  if (!res.ok) return;
+  const data = await res.json();
+
+  select.innerHTML = '<option value="">Not connected</option>';
+  for (const session of data.sessions || []) {
+    const opt = new Option(`${session.platform}:${session.login}`, session.platform, false, session.active);
+    select.add(opt);
+  }
+}
+
+async function switchSession(platform) {
+  if (!platform) return;
+  const res = await fetch("/api/obs/sessions/switch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ platform })
+  });
+  if (!res.ok) {
+    toast("Failed to switch platform");
+    return;
+  }
+
+  await loadSessions();
+  await loadQueue();
+  await loadAliases();
+}
 
 async function loadQueue() {
   const res = await fetch("/api/obs/queue", { credentials: "include" });
@@ -464,12 +525,12 @@ async function loadQueue() {
   const data = await res.json();
 
   queueOpen = data.open;
-  queueToggle.textContent = queueOpen ? "Close Queue" : "Open Queue";
-  teamSize.value = data.teamsize;
-  queueLen.value = data.len;
-  runsInfo.textContent = `Runs completed: ${data.runs ?? 0}`;
+  document.getElementById("queueToggle").textContent = queueOpen ? "Close Queue" : "Open Queue";
+  document.getElementById("teamSize").value = data.teamsize;
+  document.getElementById("queueLen").value = data.length;
+  document.getElementById("runsInfo").textContent = `Runs completed: ${data.runs ?? 0}`;
 
-  const body = queueBody;
+  const body = document.getElementById("queueBody");
   body.innerHTML = "";
 
   let group = null;
@@ -528,7 +589,7 @@ async function nextQueue() {
   await fetch("/api/obs/queue/next", { method: "POST", credentials: "include" });
 }
 async function toggleQueue() {
-  await fetch("/api/obs/queue/toggle", {
+  const res = await fetch("/api/obs/queue/toggle", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -542,7 +603,7 @@ async function toggleQueue() {
   const data = await res.json();
   queueOpen = data.open;
 
-  queueToggle.textContent = queueOpen ? "Close Queue" : "Open Queue";
+  document.getElementById("queueToggle").textContent = queueOpen ? "Close Queue" : "Open Queue";
   toast(queueOpen ? "Queue opened" : "Queue closed");
 }
 async function removeUser(id) {
@@ -579,6 +640,7 @@ async function resetRuns(btn) {
 }
 
 async function updateTeamSize() {
+  const teamSize = document.getElementById("teamSize");
   await fetch("/api/obs/queue/size", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -587,6 +649,7 @@ async function updateTeamSize() {
   });
 }
 async function updateQueueLen() {
+  const queueLen = document.getElementById("queueLen");
   await fetch("/api/obs/queue/length", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -596,9 +659,14 @@ async function updateQueueLen() {
 }
 
 function enableDrag() {
-  document.querySelectorAll(".draggable").forEach(row => {
-    row.addEventListener("dragstart", () => {
+  const body = document.getElementById("queueBody");
+
+  body.querySelectorAll(".draggable").forEach(row => {
+    row.addEventListener("dragstart", e => {
       draggedRow = row;
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = "move";
+      }
       row.classList.add("dragging");
     });
     row.addEventListener("dragend", async () => {
@@ -606,12 +674,37 @@ function enableDrag() {
       draggedRow = null;
       await submitOrder();
     });
-    row.addEventListener("dragover", e => {
-      e.preventDefault();
-      const target = e.target.closest(".draggable");
-      if (target && target !== draggedRow) target.before(draggedRow);
-    });
   });
+
+  if (!dragHandlersBound) {
+    body.addEventListener("dragover", e => {
+      e.preventDefault();
+      if (!draggedRow) return;
+
+      const after = getDragAfterElement(body, e.clientY);
+      if (!after) {
+        body.appendChild(draggedRow);
+      } else {
+        body.insertBefore(draggedRow, after);
+      }
+    });
+    dragHandlersBound = true;
+  }
+}
+
+function getDragAfterElement(container, y) {
+  const rows = [...container.querySelectorAll("tr.draggable:not(.dragging)")];
+  let closest = { offset: Number.NEGATIVE_INFINITY, element: null };
+
+  for (const row of rows) {
+    const box = row.getBoundingClientRect();
+    const offset = y - box.top - box.height / 2;
+    if (offset < 0 && offset > closest.offset) {
+      closest = { offset, element: row };
+    }
+  }
+
+  return closest.element;
 }
 async function submitOrder() {
   const order = [...document.querySelectorAll(".draggable")]
@@ -773,6 +866,8 @@ async function loadAliases() {
 }
 
 async function addAlias() {
+  const aliasInput = document.getElementById("aliasInput");
+  const commandInput = document.getElementById("commandInput");
   await fetch("/api/obs/aliases/add", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -813,10 +908,15 @@ async function toggleCmd(cmd, disable) {
   });
 }
 
+function applyAliasFilter() {
+  loadAliases();
+}
+
 /* ───────── INIT ───────── */
 const evt = new EventSource("/api/obs/queue/events", { withCredentials: true });
 evt.onmessage = () => { loadQueue(); loadAliases(); };
 
+loadSessions();
 loadQueue();
 loadAliases();
 </script>

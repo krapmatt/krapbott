@@ -1,18 +1,16 @@
 use std::{collections::HashMap, sync::Arc};
-use reqwest::Client;
+
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-
-use sqlx::{query, types::time::{self, PrimitiveDateTime}, PgPool};
-use uuid::Uuid;
-use tokio::sync::{mpsc::UnboundedSender, RwLock};
-use tokio_tungstenite::{connect_async, tungstenite::{Message, http::Uri}};
-use warp::reply::Reply;
-use warp::http::StatusCode;
+use tokio_tungstenite::tungstenite::http::Uri;
 use tracing::error;
-use crate::{bot::{self, chat_event::chat_event::Platform, db::ChannelId, state::def::AppState}};
+use warp::{http::StatusCode, reply::Reply};
 
-use crate::bot::state::def::BotSecrets;
+use crate::bot::{
+    chat_event::chat_event::Platform,
+    db::ChannelId,
+    state::def::{AppState, BotSecrets},
+    web::sessions::{platform_session_cookie, session_cookie_header},
+};
 
 pub async fn twitch_login(secrets: Arc<BotSecrets>) -> Result<impl warp::Reply, warp::Rejection> {
     let client_id = &secrets.bot_id;
@@ -124,14 +122,17 @@ pub async fn twitch_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgP
 
     let reply = warp::redirect::temporary(Uri::from_static("/obs"));
 
-    Ok(warp::reply::with_header(
-        reply,
-        "Set-Cookie",
-        format!(
-            "session_id={}; Path=/; HttpOnly; SameSite=None; Secure",
-            session_id
+    let response = warp::reply::with_header(
+        warp::reply::with_header(
+            reply,
+            "Set-Cookie",
+            session_cookie_header(platform_session_cookie(Platform::Twitch), &session_id),
         ),
-    ).into_response())
+        "Set-Cookie",
+        session_cookie_header("session_id", &session_id),
+    );
+
+    Ok(response.into_response())
 }
 
 pub async fn kick_login(state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
@@ -178,7 +179,7 @@ pub async fn kick_login(state: Arc<AppState>) -> Result<impl warp::Reply, warp::
     Ok(warp::redirect::temporary(uri).into_response())
 }
 
-pub async fn kick_callback(query: HashMap<String, String>, state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
+pub async fn kick_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgPool>, state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
     if let Some(error) = query.get("error") {
         let desc = query.get("error_description").cloned().unwrap_or_default();
         let reply = warp::reply::with_status(
@@ -224,6 +225,51 @@ pub async fn kick_callback(query: HashMap<String, String>, state: Arc<AppState>)
         return Ok(reply.into_response());
     }
 
-    let reply = warp::reply::html("Kick authorized. You can close this window.".to_string());
-    Ok(warp::reply::with_status(reply, StatusCode::OK).into_response())
+    let kick_login = {
+        let cfg = state.config.read().await;
+        cfg.channels
+            .keys()
+            .find(|ch| ch.platform() == Platform::Kick)
+            .map(|ch| ch.channel().to_string())
+    };
+
+    let Some(kick_login) = kick_login else {
+        let reply = warp::reply::with_status(
+            warp::reply::html("No authorized Kick channel is configured in the bot.".to_string()),
+            StatusCode::FORBIDDEN,
+        );
+        return Ok(reply.into_response());
+    };
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query!(
+        r#"
+        INSERT INTO krapbott_v2.sessions
+        (session_id, platform, platform_user_id, login)
+        VALUES ($1, 'kick', $2, $3)
+        ON CONFLICT (platform, platform_user_id)
+        DO UPDATE SET
+            session_id = EXCLUDED.session_id,
+            created_at = NOW()
+        "#,
+        session_id,
+        kick_login,
+        kick_login
+    )
+    .execute(&*pool)
+    .await
+    .map_err(|_| warp::reject())?;
+
+    let reply = warp::redirect::temporary(Uri::from_static("/obs"));
+    let response = warp::reply::with_header(
+        warp::reply::with_header(
+            reply,
+            "Set-Cookie",
+            session_cookie_header(platform_session_cookie(Platform::Kick), &session_id),
+        ),
+        "Set-Cookie",
+        session_cookie_header("session_id", &session_id),
+    );
+
+    Ok(response.into_response())
 }
