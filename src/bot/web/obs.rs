@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
 use tracing::info;
-use warp::{filters::sse::Event, http::StatusCode, reply::{Reply, Response}};
+use warp::{filters::sse::Event, http::{header::SET_COOKIE, HeaderValue, StatusCode}, reply::{Reply, Response}};
 
 use crate::bot::{
     chat_event::chat_event::Platform,
@@ -14,7 +14,10 @@ use crate::bot::{
     handler::handler::ChatClient,
     replies::Replies,
     state::def::{AppState, ObsQueueEntry},
-    web::sessions::{channel_from_session, session_cookie_header, sessions_from_cookies},
+    web::sessions::{
+        channel_from_session, clear_session_cookie_header, get_cookie, platform_session_cookie,
+        session_cookie_header, sessions_from_cookies,
+    },
 };
 
 pub async fn obs_combined_page(cookies: Option<String>, pool: Arc<sqlx::PgPool>) -> Result<impl Reply, warp::Rejection> {
@@ -165,6 +168,37 @@ pub async fn obs_switch_session(
     );
 
     Ok(reply.into_response())
+}
+
+pub async fn obs_logout(cookies: Option<String>, pool: Arc<PgPool>) -> Result<Response, warp::Rejection> {
+    let mut session_ids = Vec::new();
+    if let Some(cookie_str) = &cookies {
+        for name in ["session_id", platform_session_cookie(Platform::Twitch), platform_session_cookie(Platform::Kick)] {
+            if let Some(id) = get_cookie(cookie_str, name) {
+                session_ids.push(id);
+            }
+        }
+    }
+
+    session_ids.sort();
+    session_ids.dedup();
+    if !session_ids.is_empty() {
+        sqlx::query!("DELETE FROM krapbott_v2.sessions WHERE session_id = ANY($1)", &session_ids)
+            .execute(&*pool)
+            .await
+            .map_err(|_| warp::reject())?;
+    }
+
+    let mut response = warp::reply::json(&serde_json::json!({ "ok": true })).into_response();
+    for name in ["session_id", platform_session_cookie(Platform::Twitch), platform_session_cookie(Platform::Kick)] {
+        let cookie = clear_session_cookie_header(name);
+        response.headers_mut().append(
+            SET_COOKIE,
+            HeaderValue::from_str(&cookie).map_err(|_| warp::reject())?,
+        );
+    }
+
+    Ok(response)
 }
 
 #[derive(Serialize)]

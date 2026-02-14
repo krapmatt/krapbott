@@ -32,6 +32,10 @@ pub fn session_cookie_header(name: &str, value: &str) -> String {
     format!("{name}={value}; {}", default_cookie_attributes())
 }
 
+pub fn clear_session_cookie_header(name: &str) -> String {
+    format!("{name}=; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=0")
+}
+
 async fn channel_from_session_id(session_id: &str, pool: &sqlx::PgPool) -> Result<ChannelId, BotError> {
     let row = sqlx::query!(
         r#"
