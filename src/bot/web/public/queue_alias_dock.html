@@ -46,6 +46,19 @@ body {
   flex: 1;
 }
 
+.connect-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connect-btn img {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
 select {
   background: #111;
   color: var(--text);
@@ -483,6 +496,15 @@ function toast(msg) {
   setTimeout(() => t.classList.remove("show"), 1500);
 }
 
+function esc(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /* ───────── QUEUE ───────── */
 let queueOpen = true;
 let draggedRow = null;
@@ -504,8 +526,14 @@ async function loadSessions() {
 
   const twitch = (data.sessions || []).find(s => s.platform === "twitch");
   const kick = (data.sessions || []).find(s => s.platform === "kick");
-  twitchBtn.textContent = twitch ? `Twitch: ${twitch.login}` : "Connect Twitch";
-  kickBtn.textContent = kick ? `Kick: ${kick.login}` : "Connect Kick";
+  twitchBtn.classList.add("connect-btn");
+  kickBtn.classList.add("connect-btn");
+  twitchBtn.innerHTML = twitch
+    ? `${twitch.avatar_url ? `<img src="${esc(twitch.avatar_url)}" alt="">` : ""}<span>${esc(twitch.display_name || twitch.login)}</span>`
+    : "Connect Twitch";
+  kickBtn.innerHTML = kick
+    ? `${kick.avatar_url ? `<img src="${esc(kick.avatar_url)}" alt="">` : ""}<span>${esc(kick.display_name || kick.login)}</span>`
+    : "Connect Kick";
 }
 
 async function switchSession(platform) {

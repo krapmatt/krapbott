@@ -1,6 +1,7 @@
 use std::{collections::HashMap, convert::Infallible, str::FromStr, sync::Arc};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::PgPool;
 use tracing::info;
 use warp::{filters::sse::Event, http::StatusCode, reply::{Reply, Response}};
@@ -26,6 +27,8 @@ pub async fn obs_combined_page(cookies: Option<String>, pool: Arc<sqlx::PgPool>)
 pub struct ObsSessionView {
     pub platform: String,
     pub login: String,
+    pub display_name: String,
+    pub avatar_url: Option<String>,
     pub active: bool,
 }
 
@@ -36,18 +39,92 @@ pub struct ObsSessionsResponse {
     pub sessions: Vec<ObsSessionView>,
 }
 
-pub async fn obs_sessions(cookies: Option<String>, pool: Arc<PgPool>) -> Result<Response, warp::Rejection> {
+async fn fetch_twitch_profile(login: &str, state: &AppState) -> (String, Option<String>) {
+    let token = {
+        let guard = state.twitch_auth.read().await;
+        guard.access_token.clone()
+    };
+    let res = reqwest::Client::new()
+        .get(format!("https://api.twitch.tv/helix/users?login={}", login))
+        .header("Client-Id", &state.secrets.bot_id)
+        .bearer_auth(token)
+        .send()
+        .await;
+
+    let Ok(res) = res else {
+        return (login.to_string(), None);
+    };
+    if !res.status().is_success() {
+        return (login.to_string(), None);
+    }
+    let Ok(json) = res.json::<Value>().await else {
+        return (login.to_string(), None);
+    };
+    let Some(user) = json.get("data").and_then(|v| v.as_array()).and_then(|a| a.first()) else {
+        return (login.to_string(), None);
+    };
+
+    let name = user
+        .get("display_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(login)
+        .to_string();
+    let avatar = user
+        .get("profile_image_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    (name, avatar)
+}
+
+async fn fetch_kick_profile(login: &str) -> (String, Option<String>) {
+    let url = format!("https://kick.com/api/v2/channels/{login}");
+    let res = reqwest::Client::new().get(url).send().await;
+    let Ok(res) = res else {
+        return (login.to_string(), None);
+    };
+    if !res.status().is_success() {
+        return (login.to_string(), None);
+    }
+    let Ok(json) = res.json::<Value>().await else {
+        return (login.to_string(), None);
+    };
+    let user = json.get("user").cloned().unwrap_or(Value::Null);
+    let name = user
+        .get("username")
+        .or_else(|| user.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(login)
+        .to_string();
+    let avatar = user
+        .get("profile_pic")
+        .or_else(|| user.get("profile_picture"))
+        .or_else(|| user.get("profile_pic_url"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    (name, avatar)
+}
+
+pub async fn obs_sessions(cookies: Option<String>, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<Response, warp::Rejection> {
     let active = channel_from_session(cookies.clone(), &pool).await.ok();
     let sessions = sessions_from_cookies(cookies, &pool).await.unwrap_or_default();
 
-    let rows = sessions
-        .iter()
-        .map(|s| ObsSessionView {
-            platform: s.channel.platform().to_string(),
-            login: s.channel.channel().to_string(),
+    let mut rows = Vec::with_capacity(sessions.len());
+    for s in &sessions {
+        let login = s.channel.channel().to_string();
+        let platform = s.channel.platform().to_string();
+        let (display_name, avatar_url) = match s.channel.platform() {
+            Platform::Twitch => fetch_twitch_profile(&login, &state).await,
+            Platform::Kick => fetch_kick_profile(&login).await,
+            Platform::Obs => (login.clone(), None),
+        };
+        rows.push(ObsSessionView {
+            platform,
+            login,
+            display_name,
+            avatar_url,
             active: active.as_ref().map(|a| a == &s.channel).unwrap_or(false),
-        })
-        .collect::<Vec<_>>();
+        });
+    }
 
     Ok(warp::reply::json(&ObsSessionsResponse {
         active_platform: active.as_ref().map(|a| a.platform().to_string()),

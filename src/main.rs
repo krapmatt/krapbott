@@ -247,6 +247,7 @@ async fn main() -> BotResult<()> {
         .and(warp::get())
         .and(warp::header::optional("cookie"))
         .and(pool_filter.clone())
+        .and(state_filter.clone())
         .and_then(obs_sessions);
     let obs_switch = warp::path!("api" / "obs" / "sessions" / "switch")
         .and(warp::path::end())
