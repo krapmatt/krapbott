@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 
 use crate::bot::{chat_event::chat_event::Platform, db::ChannelId, state::def::BotError};
 
@@ -77,6 +77,14 @@ pub struct WebSession {
 pub async fn sessions_from_cookies(cookies: Option<String>, pool: &sqlx::PgPool) -> Result<Vec<WebSession>, BotError> {
     let cookies = cookies.ok_or(BotError::Custom("No cookies".into()))?;
     let mut out = Vec::new();
+    let mut seen_channels = HashSet::new();
+
+    if let Some(session_id) = get_cookie(&cookies, "session_id") {
+        if let Ok(channel) = channel_from_session_id(&session_id, pool).await {
+            seen_channels.insert(channel.as_str().to_string());
+            out.push(WebSession { session_id, channel });
+        }
+    }
 
     for platform in [Platform::Twitch, Platform::Kick] {
         let Some(session_id) = get_cookie(&cookies, platform_session_cookie(platform)) else {
@@ -84,6 +92,10 @@ pub async fn sessions_from_cookies(cookies: Option<String>, pool: &sqlx::PgPool)
         };
 
         if let Ok(channel) = channel_from_session_id(&session_id, pool).await {
+            if seen_channels.contains(channel.as_str()) {
+                continue;
+            }
+            seen_channels.insert(channel.as_str().to_string());
             out.push(WebSession { session_id, channel });
         }
     }

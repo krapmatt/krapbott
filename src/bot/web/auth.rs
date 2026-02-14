@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio_tungstenite::tungstenite::http::Uri;
 use tracing::error;
 use warp::{http::{header::SET_COOKIE, HeaderValue, StatusCode}, reply::Reply};
@@ -148,7 +149,7 @@ pub async fn kick_login(state: Arc<AppState>) -> Result<impl warp::Reply, warp::
         }
     };
 
-    let scope = "chat:write";
+    let scope = "chat:write user:read";
     let url = match state
         .chat_client
         .kick_auth
@@ -178,6 +179,40 @@ pub async fn kick_login(state: Arc<AppState>) -> Result<impl warp::Reply, warp::
     };
 
     Ok(warp::redirect::temporary(uri).into_response())
+}
+
+fn parse_kick_identity(value: &Value) -> Option<(String, String)> {
+    let user = if let Some(obj) = value.as_object() {
+        if obj.contains_key("data") {
+            value
+                .get("data")
+                .and_then(|d| d.as_array())
+                .and_then(|arr| arr.first())
+                .unwrap_or(value)
+        } else {
+            value
+        }
+    } else {
+        value
+    };
+
+    let id = user
+        .get("id")
+        .or_else(|| user.get("user_id"))
+        .and_then(|v| v.as_u64().map(|n| n.to_string()).or_else(|| v.as_str().map(|s| s.to_string())))?;
+
+    let login = user
+        .get("username")
+        .or_else(|| user.get("name"))
+        .or_else(|| user.get("slug"))
+        .or_else(|| user.get("channel_slug"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_ascii_lowercase())?;
+
+    if login.is_empty() {
+        return None;
+    }
+    Some((id, login))
 }
 
 pub async fn kick_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgPool>, state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
@@ -226,21 +261,53 @@ pub async fn kick_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgPoo
         return Ok(reply.into_response());
     }
 
-    let kick_login = {
-        let cfg = state.config.read().await;
-        cfg.channels
-            .keys()
-            .find(|ch| ch.platform() == Platform::Kick)
-            .map(|ch| ch.channel().to_string())
-    };
+    let access_token = state
+        .chat_client
+        .kick_auth
+        .get_access_token()
+        .await
+        .map_err(|_| warp::reject())?;
 
-    let Some(kick_login) = kick_login else {
+    let profile = reqwest::Client::new()
+        .get("https://api.kick.com/public/v1/users")
+        .bearer_auth(&access_token)
+        .send()
+        .await
+        .map_err(|_| warp::reject())?;
+
+    if !profile.status().is_success() {
+        let status = profile.status();
+        let body = profile.text().await.unwrap_or_default();
         let reply = warp::reply::with_status(
-            warp::reply::html("No authorized Kick channel is configured in the bot.".to_string()),
-            StatusCode::FORBIDDEN,
+            warp::reply::html(format!("Kick auth failed while fetching user profile ({status}): {body}")),
+            StatusCode::BAD_GATEWAY,
+        );
+        return Ok(reply.into_response());
+    }
+
+    let profile_json: Value = profile.json().await.map_err(|_| warp::reject())?;
+    let Some((kick_user_id, kick_login)) = parse_kick_identity(&profile_json) else {
+        let reply = warp::reply::with_status(
+            warp::reply::html("Kick auth failed: could not parse Kick user profile.".to_string()),
+            StatusCode::BAD_GATEWAY,
         );
         return Ok(reply.into_response());
     };
+
+    let allowed = {
+        let cfg = state.config.read().await;
+        cfg.channels
+            .keys()
+            .any(|ch| ch.platform() == Platform::Kick && ch.channel().eq_ignore_ascii_case(&kick_login))
+    };
+
+    if !allowed {
+        let reply = warp::reply::with_status(
+            warp::reply::html(format!("Kick channel '{kick_login}' is not authorized for this bot.")),
+            StatusCode::FORBIDDEN,
+        );
+        return Ok(reply.into_response());
+    }
 
     let session_id = uuid::Uuid::new_v4().to_string();
     sqlx::query!(
@@ -254,7 +321,7 @@ pub async fn kick_callback(query: HashMap<String, String>, pool: Arc<sqlx::PgPoo
             created_at = NOW()
         "#,
         session_id,
-        kick_login,
+        kick_user_id,
         kick_login
     )
     .execute(&*pool)
