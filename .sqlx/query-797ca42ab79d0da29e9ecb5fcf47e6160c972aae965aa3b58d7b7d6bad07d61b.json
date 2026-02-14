@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM krapbott_v2.sessions WHERE session_id = ANY($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "797ca42ab79d0da29e9ecb5fcf47e6160c972aae965aa3b58d7b7d6bad07d61b"
+}
