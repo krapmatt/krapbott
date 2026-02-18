@@ -5,7 +5,7 @@ use crate::bot::{commands::{commands::BotResult, queue::logic::{Queue, QueueEntr
 pub const QUEUE_TABLE: &str = r#"
     CREATE TABLE IF NOT EXISTS krapbott_v2.queue (
         position INTEGER NOT NULL,
-        user_id TEXT NOT NULL REFERENCES krapbott_v2.streamusers(id),
+        user_id TEXT NOT NULL,
         display_name TEXT NOT NULL,
         bungie_name TEXT NOT NULL,
         channel_id TEXT NOT NULL,

@@ -19,6 +19,15 @@ pub async fn initialize_database(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("CREATE SCHEMA IF NOT EXISTS  krapbott_v2;").execute(pool).await?;
     sqlx::query("SET search_path TO krapbott_v2;").execute(pool).await?;
 
+    sqlx::query(
+        r#"
+        ALTER TABLE IF EXISTS krapbott_v2.queue
+        DROP CONSTRAINT IF EXISTS queue_user_id_fkey;
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     sqlx::query!(
         r#"
         CREATE INDEX IF NOT EXISTS idx_queue_channel_position

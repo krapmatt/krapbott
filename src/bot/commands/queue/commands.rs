@@ -72,6 +72,7 @@ impl CommandT for ForceAddCommand {
                 let token = get_twitch_access_token(&state).await?;
                 let (platform_id, display_name) = resolve_twitch_user_id(&name, &state.secrets, &token).await?;
                 let user_id = UserId::new(Platform::Twitch, platform_id);
+
                 QueueEntry {
                     user_id,
                     bungie_name: bungie_name.clone(),
@@ -944,3 +945,6 @@ pub fn mod_register_command() -> Arc<dyn CommandT> {
         PermissionLevel::Moderator,
     ))
 }
+
+
+
