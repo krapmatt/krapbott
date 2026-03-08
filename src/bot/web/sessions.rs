@@ -25,7 +25,7 @@ pub fn platform_session_cookie(platform: Platform) -> &'static str {
 }
 
 pub fn default_cookie_attributes() -> &'static str {
-    "Path=/; HttpOnly; SameSite=None; Secure Max-Age=2592000"
+    "Path=/; HttpOnly; SameSite=None; Secure; Max-Age=2592000"
 }
 
 pub fn session_cookie_header(name: &str, value: &str) -> String {
