@@ -57,11 +57,7 @@ pub async fn spawn_kick_channel(channel: String, tx: UnboundedSender<ChatEvent>)
     Ok(())
 }
 
-async fn run_kick_ws_reader(
-    channel: String,
-    chatroom_id: u64,
-    tx: UnboundedSender<ChatEvent>,
-) -> BotResult<()> {
+async fn run_kick_ws_reader(channel: String, chatroom_id: u64, tx: UnboundedSender<ChatEvent>) -> BotResult<()> {
     let ws_url = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false";
 
     loop {

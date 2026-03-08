@@ -16,8 +16,7 @@
   --muted: #aaa;
 }
 
-/* ───────── Global ───────── */
-
+/* ───────── Global & Scrollbar ───────── */
 * { box-sizing: border-box; }
 
 body {
@@ -28,36 +27,40 @@ body {
   font-family: system-ui, sans-serif;
 }
 
-/* ───────── Tabs ───────── */
+/* Custom OBS-friendly scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
-.tabs {
+/* ───────── Headers & Status ───────── */
+.top-bar {
   display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 12px;
 }
 
+#sse-status {
+  font-size: 0.75rem;
+  color: var(--danger);
+  display: none;
+  animation: pulse 2s infinite;
+}
+
+/* ───────── Tabs & Auth ───────── */
 .auth-row {
   display: flex;
   gap: 8px;
   align-items: center;
   margin-bottom: 12px;
+  flex-wrap: wrap; /* Pro velmi úzké docky */
 }
 
-.auth-row .spacer {
-  flex: 1;
-}
+.auth-row .spacer { flex: 1; }
 
-.connect-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.connect-btn img {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  object-fit: cover;
-}
+.connect-btn { display: inline-flex; align-items: center; gap: 8px; }
+.connect-btn img { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; }
 
 select {
   background: #111;
@@ -65,414 +68,174 @@ select {
   border: 1px solid #444;
   border-radius: 6px;
   padding: 6px;
-}
-
-.tab {
   flex: 1;
-  background: #222;
-  color: var(--muted);
-  border: none;
-  padding: 10px;
-  font-weight: bold;
-  cursor: pointer;
-  transition: background 0.25s ease, color 0.25s ease;
+  min-width: 120px;
 }
 
-.tab:hover {
-  color: var(--accent);
+.tabs { display: flex; margin-bottom: 12px; }
+.tab {
+  flex: 1; background: #222; color: var(--muted); border: none; padding: 10px;
+  font-weight: bold; cursor: pointer; transition: background 0.25s ease, color 0.25s ease;
 }
+.tab:hover { color: var(--accent); }
+.tab.active { background: var(--panel); color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
 
-.tab.active {
-  background: var(--panel);
-  color: var(--accent);
-  box-shadow: inset 0 -2px 0 var(--accent);
-}
+.tab-content { display: none; opacity: 0; transform: translateY(6px); transition: opacity 0.35s ease, transform 0.35s ease; }
+.tab-content.active { display: block; opacity: 1; transform: translateY(0); }
 
-.tab-content {
-  display: none;
-  opacity: 0;
-  transform: translateY(6px);
-  transition: opacity 0.35s ease, transform 0.35s ease;
-}
-
-.tab-content.active {
-  display: block;
-  opacity: 1;
-  transform: translateY(0);
-}
-
-/* ───────── Buttons ───────── */
-
+/* ───────── Buttons & Inputs ───────── */
 button {
-  background: var(--accent);
-  color: white;
-  border: none;
-  border-radius: 6px;
-  padding: 6px 10px;
-  cursor: pointer;
-  font-weight: bold;
-  transition:
-    background 0.2s ease,
-    transform 0.1s ease,
-    box-shadow 0.2s ease;
+  background: var(--accent); color: white; border: none; border-radius: 6px;
+  padding: 6px 10px; cursor: pointer; font-weight: bold;
+  transition: background 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
 }
-
-button:hover {
-  background: var(--accent-hover);
-  box-shadow: 0 0 0 1px rgba(209,108,230,0.4);
-}
-
-button:active {
-  transform: scale(0.96);
-}
-
-button.small {
-  padding: 2px 6px;
-  font-size: 0.75rem;
-}
-
-button.danger {
-  background: var(--danger);
-}
-
-button.danger:hover {
-  background: #ff6666;
-}
-
-/* ───────── Inputs ───────── */
+button:hover { background: var(--accent-hover); box-shadow: 0 0 0 1px rgba(209,108,230,0.4); }
+button:active { transform: scale(0.96); }
+button.small { padding: 2px 6px; font-size: 0.75rem; }
+button.danger { background: var(--danger); }
+button.danger:hover { background: #ff6666; }
 
 input {
-  background: #111;
-  color: var(--text);
-  border: 1px solid #444;
-  border-radius: 6px;
-  padding: 6px;
-  transition: border 0.2s ease, box-shadow 0.2s ease;
+  background: #111; color: var(--text); border: 1px solid #444; border-radius: 6px;
+  padding: 6px; transition: border 0.2s ease, box-shadow 0.2s ease;
+  width: 100%;
 }
+input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px rgba(209,108,230,0.4); }
 
-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(209,108,230,0.4);
+.form-group {
+  display: flex; gap: 8px; align-items: center; margin-bottom: 6px;
 }
+.form-group label { width: 80px; font-size: 0.85rem; color: var(--muted); }
+.form-group input { width: 70px; text-align: center; }
 
 /* ───────── Panels ───────── */
-
 .panel {
-  background: var(--panel);
-  padding: 10px;
-  border-radius: 10px;
-  margin-bottom: 12px;
+  background: var(--panel); padding: 10px; border-radius: 10px; margin-bottom: 12px;
   transition: box-shadow 0.3s ease;
 }
-
-.panel:hover {
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.04);
-}
+.panel:hover { box-shadow: 0 0 0 1px rgba(255,255,255,0.04); }
 
 /* ───────── QUEUE ───────── */
+.controls { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.controls button { flex: 1; min-width: 100px; text-align: center; }
 
-.controls {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
-}
+table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 10px; overflow: hidden; }
+th { background: var(--accent); padding: 8px; font-size: 0.85rem;}
+td { padding: 6px; text-align: center; border-bottom: 1px solid #333; transition: background 0.2s ease; font-size: 0.9rem;}
+tbody tr:hover td { background: rgba(255,102,204,0.08); }
 
-table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--panel);
-  border-radius: 10px;
-  overflow: hidden;
-}
+.group-separator td { background: var(--panel-dark); color: var(--accent); font-weight: bold; text-align: left; font-size: 0.8rem;}
 
-th {
-  background: var(--accent);
-  padding: 8px;
-}
-
-td {
-  padding: 6px;
-  text-align: center;
-  border-bottom: 1px solid #333;
-  transition: background 0.2s ease;
-}
-
-tbody tr:hover td {
-  background: rgba(255,102,204,0.08);
-}
-
-.group-separator td {
-  background: var(--panel-dark);
-  color: var(--accent);
-  font-weight: bold;
-  text-align: left;
-}
-
-tr.draggable {
-  cursor: grab;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-
-tr.draggable:active {
-  cursor: grabbing;
-}
-
-tr.dragging {
-  opacity: 0.6;
-  transform: scale(0.98);
-  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
-}
+tr.draggable { cursor: grab; transition: transform 0.15s ease, box-shadow 0.15s ease; }
+tr.draggable:active { cursor: grabbing; }
+tr.dragging { opacity: 0.6; transform: scale(0.98); box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
 
 /* ───────── Copyable Bungie ───────── */
-
-.copyable {
-  cursor: pointer;
-  color: #ffd1f2;
-  position: relative;
-  transition: background 0.2s ease, transform 0.15s ease;
-}
-
-.copyable:hover {
-  background: rgba(255,102,204,0.15);
-  border-radius: 4px;
-}
-
-.copyable.copied {
-  background: rgba(209,108,230,0.35);
-  color: white;
-  transform: scale(1.05);
-}
-
-.copyable::after {
-  content: "Click to copy";
-  position: absolute;
-  bottom: -18px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 0.65rem;
-  color: var(--muted);
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-.copyable:hover::after {
-  opacity: 1;
-}
-
-.reset-btn {
-  position: relative;
-  overflow: hidden;
-}
-
-.reset-btn.loading {
-  pointer-events: none;
-  opacity: 0.6;
-}
-
-.reset-btn.success {
-  background: #4caf50 !important;
-}
-
-.reset-btn.shake {
-  animation: shake 0.35s ease;
-}
-
-@keyframes shake {
-  0% { transform: translateX(0); }
-  25% { transform: translateX(-4px); }
-  50% { transform: translateX(4px); }
-  75% { transform: translateX(-4px); }
-  100% { transform: translateX(0); }
-}
-
-/* Subtle danger pulse */
-.reset-btn::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(255,75,75,0.25);
-  opacity: 0;
-  transition: opacity 0.25s ease;
-}
-
-.reset-btn:hover::after {
-  opacity: 1;
-}
+.copyable { cursor: pointer; color: #ffd1f2; position: relative; transition: background 0.2s ease, transform 0.15s ease; }
+.copyable:hover { background: rgba(255,102,204,0.15); border-radius: 4px; }
+.copyable.copied { background: rgba(209,108,230,0.35); color: white; transform: scale(1.05); }
 
 /* ───────── ALIASES ───────── */
+.alias-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.badge { background: var(--accent); color: white; font-size: 0.7rem; padding: 2px 6px; border-radius: 999px; margin-left: 6px; }
 
-.alias-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px;
-}
+.command { background: var(--panel); border-radius: 10px; overflow: hidden; transition: box-shadow 0.25s ease, transform 0.2s ease; }
+.command:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(0,0,0,0.35); }
+.command-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; padding: 12px; font-weight: bold;}
+.command .details { max-height: 0; opacity: 0; overflow: hidden; padding: 0 12px; transition: max-height 0.45s cubic-bezier(.4,0,.2,1), opacity 0.3s ease, padding 0.3s ease; }
+.command:not(.collapsed) .details { max-height: 800px; opacity: 1; padding: 12px; border-top: 1px solid #333;}
+.command .desc { font-size: 0.85rem; color: var(--muted); margin-bottom: 10px; }
 
-.badge {
-  background: var(--accent);
-  color: white;
-  font-size: 0.7rem;
-  padding: 2px 6px;
-  border-radius: 999px;
-  margin-left: 6px;
-}
-
-.alias.conflict {
-  border: 1px solid var(--danger);
-  color: var(--danger);
-  background: rgba(255,75,75,0.12);
-  animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-  0% { box-shadow: 0 0 0 0 rgba(255,75,75,0.2); }
-  70% { box-shadow: 0 0 0 6px rgba(255,75,75,0); }
-  100% { box-shadow: 0 0 0 0 rgba(255,75,75,0); }
-}
-
-.command {
-  background: var(--panel);
-  border-radius: 10px;
-  overflow: hidden;
-  transition: box-shadow 0.25s ease, transform 0.2s ease;
-}
-
-.command:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 30px rgba(0,0,0,0.35);
-}
-
-.command-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: pointer;
-  padding: 12px;
-}
-
-.command .details {
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  padding: 0 12px;
-  transition:
-    max-height 0.45s cubic-bezier(.4,0,.2,1),
-    opacity 0.3s ease,
-    padding 0.3s ease;
-}
-
-.command:not(.collapsed) .details {
-  max-height: 800px;
-  opacity: 1;
-  padding: 12px;
-}
+.alias-section { margin-bottom: 8px; font-size: 0.85rem;}
+.alias-section b { color: var(--muted); display: block; margin-bottom: 4px; font-size: 0.75rem; text-transform: uppercase;}
+.alias-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .alias {
-  display: inline-flex;
-  align-items: center;
-  background: var(--panel-dark);
-  padding: 4px 6px;
-  border-radius: 6px;
-  margin: 2px;
-  transition: transform 0.15s ease;
+  display: inline-flex; align-items: center; background: var(--panel-dark); padding: 4px 8px;
+  border-radius: 6px; transition: transform 0.15s ease; border: 1px solid #444; font-size: 0.8rem;
 }
-
-.alias:hover {
-  transform: translateY(-2px);
+.alias button {
+  background: none; border: none; padding: 0; margin-left: 6px; color: var(--muted); font-size: 0.7rem; box-shadow: none;
 }
-
-.alias.removed {
-  opacity: 0.4;
-  text-decoration: line-through;
-}
+.alias button:hover { color: var(--danger); background: none; transform: scale(1.2); }
+.alias.removed { opacity: 0.4; text-decoration: line-through; }
 
 /* ───────── Toast ───────── */
-
 #toast {
-  position: fixed;
-  bottom: 16px;
-  right: 16px;
-  background: var(--panel);
-  padding: 8px 12px;
-  border-radius: 8px;
-  opacity: 0;
-  transform: translateY(6px);
-  transition: opacity 0.3s ease, transform 0.3s ease;
+  position: fixed; bottom: 16px; right: 16px; background: var(--panel); border: 1px solid #444;
+  padding: 8px 12px; border-radius: 8px; opacity: 0; transform: translateY(6px);
+  transition: opacity 0.3s ease, transform 0.3s ease; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
 }
+#toast.show { opacity: 1; transform: translateY(0); }
 
-#toast.show {
-  opacity: 1;
-  transform: translateY(0);
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.4; }
+  100% { opacity: 1; }
 }
 </style>
 </head>
 
 <body>
 
+<div class="top-bar">
+  <div class="tabs" style="margin:0; flex:1;">
+    <button class="tab active" onclick="showTab('queue', this)">Queue</button>
+    <button class="tab" onclick="showTab('aliases', this)">Aliases</button>
+  </div>
+  <span id="sse-status">🔴 Disconnected</span>
+</div>
+
 <div class="panel auth-row">
   <button id="connectTwitchBtn" onclick="window.location.href='/auth/twitch'">Connect Twitch</button>
   <button id="connectKickBtn" onclick="window.location.href='/auth/kick'">Connect Kick</button>
   <button id="logoutBtn" class="danger" onclick="logout()" style="display:none;">Logout</button>
-  <span class="spacer"></span>
-  <label for="sessionSelect">Active:</label>
   <select id="sessionSelect" onchange="switchSession(this.value)">
     <option value="">Not connected</option>
   </select>
 </div>
 
-<div class="tabs">
-  <button class="tab active" onclick="showTab('queue', this)">Queue</button>
-  <button class="tab" onclick="showTab('aliases', this)">Aliases</button>
-</div>
-
-<!-- ================= QUEUE ================= -->
-
 <section id="queue" class="tab-content active">
-  <h2>Queue Control</h2>
-
   <div class="panel controls">
     <button onclick="nextQueue()">The Samosa Button</button>
     <button onclick="toggleQueue()" id="queueToggle">Toggle Queue</button>
     <button class="danger reset-btn" onclick="resetRuns(this)">Reset Runs</button>
   </div>
 
-  <div class="panel">
-    Team size:
-    <input type="number" id="teamSize" min="1">
-    <button onclick="updateTeamSize()">Save</button>
-
-    Queue length:
-    <input type="number" id="queueLen" min="1">
-    <button onclick="updateQueueLen()">Save</button>
-
-    <div id="runsInfo" style="margin-top:6px;color:var(--muted)"></div>
+  <div class="panel" style="display: flex; justify-content: space-between; flex-wrap: wrap;">
+    <div>
+      <div class="form-group">
+        <label for="teamSize">Team size:</label>
+        <input type="number" id="teamSize" min="1">
+        <button class="small" onclick="updateTeamSize()">Save</button>
+      </div>
+      <div class="form-group">
+        <label for="queueLen">Max length:</label>
+        <input type="number" id="queueLen" min="1">
+        <button class="small" onclick="updateQueueLen()">Save</button>
+      </div>
+    </div>
+    <div id="runsInfo" style="display:flex; align-items:flex-end; font-size:0.85rem; color:var(--accent); font-weight:bold;">
+      Runs: 0
+    </div>
   </div>
 
   <table>
     <thead>
-      <tr><th>#</th><th>Name</th><th>Bungie</th><th></th></tr>
+      <tr><th>#</th><th>Name</th><th>Bungie</th><th>Act</th></tr>
     </thead>
     <tbody id="queueBody"></tbody>
   </table>
 </section>
 
-<!-- ================= ALIASES ================= -->
-
 <section id="aliases" class="tab-content">
-  <h2>Command Aliases</h2>
-
-  <div class="search-box">
-    <input
-      id="aliasSearch"
-      placeholder="Search command or alias…"
-      oninput="applyAliasFilter()"
-    />
-  </div>
-
   <div class="panel">
-    <input id="aliasInput" placeholder="alias">
-    <input id="commandInput" placeholder="command">
-    <button onclick="addAlias()">Add Alias</button>
+    <input id="aliasSearch" placeholder="Search command or alias…" oninput="applyAliasFilter()" style="margin-bottom: 8px;"/>
+    <div style="display: flex; gap: 8px;">
+      <input id="aliasInput" placeholder="New alias">
+      <input id="commandInput" placeholder="Target command">
+      <button onclick="addAlias()">Add</button>
+    </div>
   </div>
 
   <div id="commands" class="alias-grid"></div>
@@ -481,7 +244,12 @@ tr.dragging {
 <div id="toast"></div>
 
 <script>
-/* ───────── Tabs ───────── */
+/* ───────── Globals & Utils ───────── */
+let queueOpen = true;
+let draggedRow = null;
+let dragHandlersBound = false;
+let searchTimeout = null;
+
 function showTab(id, btn) {
   document.querySelectorAll(".tab-content").forEach(s => s.classList.remove("active"));
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
@@ -489,7 +257,6 @@ function showTab(id, btn) {
   btn.classList.add("active");
 }
 
-/* ───────── Toast ───────── */
 function toast(msg) {
   const t = document.getElementById("toast");
   t.textContent = msg;
@@ -498,475 +265,281 @@ function toast(msg) {
 }
 
 function esc(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+  return String(s).replace(/[&<>"']/g, m => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[m]);
 }
 
-/* ───────── QUEUE ───────── */
-let queueOpen = true;
-let draggedRow = null;
-let dragHandlersBound = false;
-
+/* ───────── Data Fetching ───────── */
 async function loadSessions() {
   const select = document.getElementById("sessionSelect");
   const twitchBtn = document.getElementById("connectTwitchBtn");
   const kickBtn = document.getElementById("connectKickBtn");
   const logoutBtn = document.getElementById("logoutBtn");
-  const res = await fetch("/api/obs/sessions", { credentials: "include" });
-  if (!res.ok) return;
-  const data = await res.json();
+  
+  try {
+    const res = await fetch("/api/obs/sessions", { credentials: "include" });
+    if (!res.ok) return;
+    const data = await res.json();
 
-  select.innerHTML = '<option value="">Not connected</option>';
-  for (const session of data.sessions || []) {
-    const opt = new Option(`${session.platform}:${session.login}`, session.platform, false, session.active);
-    select.add(opt);
-  }
+    select.innerHTML = '<option value="">Not connected</option>';
+    for (const session of data.sessions || []) {
+      const opt = new Option(`${session.platform}:${session.login}`, session.platform, false, session.active);
+      select.add(opt);
+    }
 
-  const twitch = (data.sessions || []).find(s => s.platform === "twitch");
-  const kick = (data.sessions || []).find(s => s.platform === "kick");
-  twitchBtn.classList.add("connect-btn");
-  kickBtn.classList.add("connect-btn");
-  twitchBtn.innerHTML = twitch
-    ? `${twitch.avatar_url ? `<img src="${esc(twitch.avatar_url)}" alt="">` : ""}<span>${esc(twitch.display_name || twitch.login)}</span>`
-    : "Connect Twitch";
-  kickBtn.innerHTML = kick
-    ? `${kick.avatar_url ? `<img src="${esc(kick.avatar_url)}" alt="">` : ""}<span>${esc(kick.display_name || kick.login)}</span>`
-    : "Connect Kick";
-  logoutBtn.style.display = (data.sessions || []).length > 0 ? "inline-flex" : "none";
+    const twitch = (data.sessions || []).find(s => s.platform === "twitch");
+    const kick = (data.sessions || []).find(s => s.platform === "kick");
+    
+    twitchBtn.classList.add("connect-btn");
+    kickBtn.classList.add("connect-btn");
+    twitchBtn.innerHTML = twitch 
+      ? `${twitch.avatar_url ? `<img src="${esc(twitch.avatar_url)}" alt="">` : ""}<span>${esc(twitch.display_name || twitch.login)}</span>` 
+      : "Connect Twitch";
+    kickBtn.innerHTML = kick 
+      ? `${kick.avatar_url ? `<img src="${esc(kick.avatar_url)}" alt="">` : ""}<span>${esc(kick.display_name || kick.login)}</span>` 
+      : "Connect Kick";
+      
+    logoutBtn.style.display = (data.sessions || []).length > 0 ? "inline-flex" : "none";
+  } catch(e) { console.error("Session load failed", e); }
 }
 
 async function switchSession(platform) {
   if (!platform) return;
-  const res = await fetch("/api/obs/sessions/switch", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ platform })
-  });
-  if (!res.ok) {
-    toast("Failed to switch platform");
-    return;
-  }
-
-  await loadSessions();
-  await loadQueue();
-  await loadAliases();
+  const res = await fetch("/api/obs/sessions/switch", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ platform }) });
+  if (res.ok) { await loadSessions(); await loadQueue(); await loadAliases(); } 
+  else { toast("Failed to switch platform"); }
 }
 
 async function logout() {
-  const res = await fetch("/api/obs/logout", {
-    method: "POST",
-    credentials: "include"
-  });
-  if (!res.ok) {
-    toast("Logout failed");
-    return;
-  }
-  await loadSessions();
-  toast("Logged out");
+  const res = await fetch("/api/obs/logout", { method: "POST", credentials: "include" });
+  if (res.ok) { await loadSessions(); toast("Logged out"); }
 }
 
+/* ───────── QUEUE ───────── */
 async function loadQueue() {
-  const res = await fetch("/api/obs/queue", { credentials: "include" });
-  if (!res.ok) return;
-  const data = await res.json();
+  try {
+    const res = await fetch("/api/obs/queue", { credentials: "include" });
+    if (!res.ok) return;
+    const data = await res.json();
 
-  queueOpen = data.open;
-  document.getElementById("queueToggle").textContent = queueOpen ? "Close Queue" : "Open Queue";
-  document.getElementById("teamSize").value = data.teamsize;
-  document.getElementById("queueLen").value = data.length;
-  document.getElementById("runsInfo").textContent = `Runs completed: ${data.runs ?? 0}`;
+    queueOpen = data.open;
+    document.getElementById("queueToggle").textContent = queueOpen ? "Close Queue" : "Open Queue";
+    document.getElementById("teamSize").value = data.teamsize;
+    document.getElementById("queueLen").value = data.length;
+    document.getElementById("runsInfo").textContent = `Runs: ${data.runs ?? 0}`;
 
-  const body = document.getElementById("queueBody");
-  body.innerHTML = "";
+    const body = document.getElementById("queueBody");
+    body.innerHTML = "";
 
-  let group = null;
-  data.queue.forEach(q => {
-    const g = q.position <= data.teamsize ? "LIVE"
-      : q.position <= data.teamsize * 2 ? "NEXT" : "QUEUE";
+    let group = null;
+    data.queue.forEach(q => {
+      const g = q.position <= data.teamsize ? "LIVE" : q.position <= data.teamsize * 2 ? "NEXT" : "QUEUE";
+      if (g !== group) {
+        group = g;
+        body.innerHTML += `<tr class="group-separator"><td colspan="4">${g}</td></tr>`;
+      }
 
-    if (g !== group) {
-      group = g;
-      body.innerHTML += `<tr class="group-separator"><td colspan="4">${g}</td></tr>`;
-    }
+      const tr = document.createElement("tr");
+      tr.className = "draggable";
+      tr.draggable = true;
+      tr.dataset.userId = q.user_id;
 
-    const tr = document.createElement("tr");
-    tr.className = "draggable";
-    tr.draggable = true;
-    tr.dataset.userId = q.user_id;
+      tr.innerHTML = `
+        <td>${q.position}</td>
+        <td>${q.display_name}</td>
+        <td class="copyable" data-copy="${q.bungie_name}">${q.bungie_name}</td>
+        <td><button class="danger small" onclick="removeUser('${q.user_id}')">✖</button></td>
+      `;
+      body.appendChild(tr);
+    });
 
-    tr.innerHTML = `
-      <td>${q.position}</td>
-      <td>${q.display_name}</td>
-      <td class="copyable" data-copy="${q.bungie_name}">${q.bungie_name}</td>
-      <td><button class="danger small" onclick="removeUser('${q.user_id}')">✖</button></td>
-    `;
-    body.appendChild(tr);
-  });
-
-  enableDrag();
+    enableDrag();
+  } catch (e) { console.error("Queue load error", e); }
 }
 
+/* Queue Actions */
+async function nextQueue() { await fetch("/api/obs/queue/next", { method: "POST", credentials: "include" }); }
+async function toggleQueue() {
+  const res = await fetch("/api/obs/queue/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ open: !queueOpen }) });
+  if (res.ok) { const data = await res.json(); queueOpen = data.open; document.getElementById("queueToggle").textContent = queueOpen ? "Close Queue" : "Open Queue"; toast(queueOpen ? "Queue opened" : "Queue closed"); }
+}
+async function removeUser(id) { await fetch("/api/obs/queue/remove", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ user_id: id }) }); }
+async function resetRuns(btn) {
+  const res = await fetch("/api/obs/queue/reset", { method: "POST", credentials: "include" });
+  if (res.ok) { toast("Runs reset"); } else { toast("Failed to reset runs"); }
+}
+async function updateTeamSize() {
+  const v = document.getElementById("teamSize").value;
+  await fetch("/api/obs/queue/size", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ teamsize: +v }) });
+}
+async function updateQueueLen() {
+  const v = document.getElementById("queueLen").value;
+  await fetch("/api/obs/queue/length", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ length: +v }) });
+}
+
+/* Copy to clipboard */
 document.addEventListener("click", async e => {
   const el = e.target.closest(".copyable");
   if (!el) return;
-
   const value = el.dataset.copy;
   if (!value) return;
-
   try {
     await navigator.clipboard.writeText(value);
-
     el.classList.add("copied");
     const original = el.textContent;
     el.textContent = "Copied ✔";
-
-    setTimeout(() => {
-      el.textContent = original;
-      el.classList.remove("copied");
-    }, 900);
-
-  } catch (err) {
-    console.error("Clipboard error", err);
-    toast("Failed to copy");
-  }
+    setTimeout(() => { el.textContent = original; el.classList.remove("copied"); }, 900);
+  } catch (err) { toast("Failed to copy"); }
 });
 
-async function nextQueue() {
-  await fetch("/api/obs/queue/next", { method: "POST", credentials: "include" });
-}
-async function toggleQueue() {
-  const res = await fetch("/api/obs/queue/toggle", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ open: !queueOpen })
-  });
-  if (!res.ok) {
-    toast("Failed to toggle queue");
-    return;
-  }
-
-  const data = await res.json();
-  queueOpen = data.open;
-
-  document.getElementById("queueToggle").textContent = queueOpen ? "Close Queue" : "Open Queue";
-  toast(queueOpen ? "Queue opened" : "Queue closed");
-}
-async function removeUser(id) {
-  await fetch("/api/obs/queue/remove", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ user_id: id })
-  });
-}
-async function resetRuns(btn) {
-  btn.classList.add("loading");
-
-  const res = await fetch("/api/obs/queue/reset", {
-    method: "POST",
-    credentials: "include"
-  });
-
-  btn.classList.remove("loading");
-
-  if (!res.ok) {
-    btn.classList.add("shake");
-    toast("Failed to reset runs");
-    setTimeout(() => btn.classList.remove("shake"), 400);
-    return;
-  }
-
-  btn.classList.add("success");
-  toast("Runs reset");
-
-  setTimeout(() => {
-    btn.classList.remove("success");
-  }, 1200);
-}
-
-async function updateTeamSize() {
-  const teamSize = document.getElementById("teamSize");
-  await fetch("/api/obs/queue/size", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ teamsize: +teamSize.value })
-  });
-}
-async function updateQueueLen() {
-  const queueLen = document.getElementById("queueLen");
-  await fetch("/api/obs/queue/length", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ length: +queueLen.value })
-  });
-}
-
+/* Drag & Drop logic */
 function enableDrag() {
   const body = document.getElementById("queueBody");
-
   body.querySelectorAll(".draggable").forEach(row => {
-    row.addEventListener("dragstart", e => {
-      draggedRow = row;
-      if (e.dataTransfer) {
-        e.dataTransfer.effectAllowed = "move";
-      }
-      row.classList.add("dragging");
-    });
-    row.addEventListener("dragend", async () => {
-      row.classList.remove("dragging");
-      draggedRow = null;
-      await submitOrder();
-    });
+    row.addEventListener("dragstart", e => { draggedRow = row; if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; } row.classList.add("dragging"); });
+    row.addEventListener("dragend", async () => { row.classList.remove("dragging"); draggedRow = null; await submitOrder(); });
   });
 
   if (!dragHandlersBound) {
     body.addEventListener("dragover", e => {
       e.preventDefault();
       if (!draggedRow) return;
-
       const after = getDragAfterElement(body, e.clientY);
-      if (!after) {
-        body.appendChild(draggedRow);
-      } else {
-        body.insertBefore(draggedRow, after);
-      }
+      if (!after) { body.appendChild(draggedRow); } else { body.insertBefore(draggedRow, after); }
     });
     dragHandlersBound = true;
   }
 }
-
 function getDragAfterElement(container, y) {
   const rows = [...container.querySelectorAll("tr.draggable:not(.dragging)")];
   let closest = { offset: Number.NEGATIVE_INFINITY, element: null };
-
   for (const row of rows) {
     const box = row.getBoundingClientRect();
     const offset = y - box.top - box.height / 2;
-    if (offset < 0 && offset > closest.offset) {
-      closest = { offset, element: row };
-    }
+    if (offset < 0 && offset > closest.offset) { closest = { offset, element: row }; }
   }
-
   return closest.element;
 }
 async function submitOrder() {
-  const order = [...document.querySelectorAll(".draggable")]
-    .map(r => r.dataset.userId);
-  await fetch("/api/obs/queue/reorder", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ order })
-  });
+  const order = [...document.querySelectorAll(".draggable")].map(r => r.dataset.userId);
+  await fetch("/api/obs/queue/reorder", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ order }) });
 }
 
 /* ───────── ALIASES ───────── */
 async function loadAliases() {
-  const res = await fetch("/api/obs/aliases", { credentials: "include" });
-  if (!res.ok) return;
+  try {
+    const res = await fetch("/api/obs/aliases", { credentials: "include" });
+    if (!res.ok) return;
+    const data = await res.json();
+    const container = document.getElementById("commands");
+    const search = document.getElementById("aliasSearch")?.value?.toLowerCase() ?? "";
+    container.innerHTML = "";
 
-  const data = await res.json();
-  const container = document.getElementById("commands");
-  const search = document.getElementById("aliasSearch")?.value?.toLowerCase() ?? "";
+    const aliasesByCommand = {};
+    const aliasUsage = {};
 
-  container.innerHTML = "";
+    for (const [alias, command] of Object.entries(data.aliases)) {
+      (aliasesByCommand[command] ??= []).push(alias);
+      aliasUsage[alias] = aliasUsage[alias] || new Set();
+      aliasUsage[alias].add(command);
+    }
 
-  // Build reverse maps
-  const aliasesByCommand = {};
-  const aliasUsage = {};
+    data.commands.forEach(cmd => {
+      const allAliases = [...cmd.default_aliases, ...(aliasesByCommand[cmd.name] || [])].join(" ").toLowerCase();
+      if (search && !cmd.name.includes(search) && !cmd.description.toLowerCase().includes(search) && !allAliases.includes(search)) return;
 
-  for (const [alias, command] of Object.entries(data.aliases)) {
-    (aliasesByCommand[command] ??= []).push(alias);
-    aliasUsage[alias] = aliasUsage[alias] || new Set();
-    aliasUsage[alias].add(command);
-  }
+      const disabled = data.disabled_commands.includes(cmd.name);
+      const removed = new Set(data.removed_aliases);
+      const custom = aliasesByCommand[cmd.name] || [];
 
-  data.commands.forEach(cmd => {
-    const allAliases = [
-      ...cmd.default_aliases,
-      ...(aliasesByCommand[cmd.name] || [])
-    ].join(" ").toLowerCase();
+      const card = document.createElement("div");
+      card.className = "command collapsed";
 
-    if (
-      search &&
-      !cmd.name.includes(search) &&
-      !cmd.description.toLowerCase().includes(search) &&
-      !allAliases.includes(search)
-    ) return;
+      const header = document.createElement("div");
+      header.className = "command-header";
+      header.innerHTML = `
+        <div class="title">${cmd.name} <span class="badge">${custom.length + cmd.default_aliases.length}</span></div>
+        <button class="toggle-btn small ${disabled ? '' : 'danger'}">${disabled ? "Enable" : "Disable"}</button>
+      `;
 
-    const disabled = data.disabled_commands.includes(cmd.name);
-    const removed = new Set(data.removed_aliases);
-    const custom = aliasesByCommand[cmd.name] || [];
-
-    const card = document.createElement("div");
-    card.className = "command collapsed";
-
-    const header = document.createElement("div");
-    header.className = "command-header";
-    header.innerHTML = `
-      <div class="title">
-        ${cmd.name}
-        <span class="badge">${custom.length + cmd.default_aliases.length}</span>
-      </div>
-      <button class="toggle-btn">${disabled ? "Enable" : "Disable"}</button>
-    `;
-
-    const body = document.createElement("div");
-    body.className = "details";
-
-    body.innerHTML = `
-      <div class="desc">${cmd.description}</div>
-
-      <div class="alias-section">
-        <b>Default</b>
-        <div class="alias-row">
-          ${cmd.default_aliases.map(a => `
-            <span class="alias ${removed.has(a) ? "removed" : ""}">
-              ${a}
-              ${
-                removed.has(a)
-                  ? `<button data-restore="${a}">Restore</button>`
-                  : `<button data-remove-default="${a}">✖</button>`
-              }
-            </span>
-          `).join("") || "—"}
+      const body = document.createElement("div");
+      body.className = "details";
+      body.innerHTML = `
+        <div class="desc">${cmd.description}</div>
+        <div class="alias-section">
+          <b>Default</b>
+          <div class="alias-row">
+            ${cmd.default_aliases.map(a => `
+              <span class="alias ${removed.has(a) ? "removed" : ""}">
+                ${a}
+                ${removed.has(a) ? `<button data-restore="${a}">↺</button>` : `<button data-remove-default="${a}">✖</button>`}
+              </span>
+            `).join("") || "—"}
+          </div>
         </div>
-      </div>
-
-      <div class="alias-section">
-        <b>Custom</b>
-        <div class="alias-row">
-          ${custom.map(a => `
-            <span class="alias ${aliasUsage[a]?.size > 1 ? "conflict" : ""}">
-              ${a}
-              <button data-remove-alias="${a}">✖</button>
-            </span>
-          `).join("") || "—"}
+        <div class="alias-section">
+          <b>Custom</b>
+          <div class="alias-row">
+            ${custom.map(a => `
+              <span class="alias">
+                ${a} <button data-remove-alias="${a}">✖</button>
+              </span>
+            `).join("") || "—"}
+          </div>
         </div>
-      </div>
-    `;
+      `;
 
-    // Toggle expand (no inline onclick)
-    header.addEventListener("click", e => {
-      document.querySelectorAll(".command:not(.collapsed)").forEach(c => {
-        if (c !== card) c.classList.add("collapsed");
+      header.addEventListener("click", e => {
+        document.querySelectorAll(".command:not(.collapsed)").forEach(c => { if (c !== card) c.classList.add("collapsed"); });
+        card.classList.toggle("collapsed");
       });
 
-      card.classList.toggle("collapsed");
-    });
-
-    // Enable / disable command
-    header.querySelector(".toggle-btn").addEventListener("click", async e => {
-      e.stopPropagation();
-      await fetch("/api/obs/aliases/toggle", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: cmd.name, disable: !disabled })
+      header.querySelector(".toggle-btn").addEventListener("click", async e => {
+        e.stopPropagation();
+        await fetch("/api/obs/aliases/toggle", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: cmd.name, disable: !disabled }) });
+        loadAliases();
       });
-      loadAliases();
+
+      body.addEventListener("click", async e => {
+        const btn = e.target;
+        if (btn.dataset.removeAlias) { await fetch("/api/obs/aliases/remove", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alias: btn.dataset.removeAlias }) }); loadAliases(); }
+        if (btn.dataset.removeDefault) { await fetch("/api/obs/aliases/remove-default", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alias: btn.dataset.removeDefault }) }); loadAliases(); }
+        if (btn.dataset.restore) { await fetch("/api/obs/aliases/restore-default", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alias: btn.dataset.restore }) }); loadAliases(); }
+      });
+
+      card.appendChild(header);
+      card.appendChild(body);
+      container.appendChild(card);
     });
+  } catch (e) { console.error("Aliases load failed", e); }
+}
 
-    // Delegated alias actions
-    body.addEventListener("click", async e => {
-      const btn = e.target;
-
-      if (btn.dataset.removeAlias) {
-        await fetch("/api/obs/aliases/remove", {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ alias: btn.dataset.removeAlias })
-        });
-        loadAliases();
-      }
-
-      if (btn.dataset.removeDefault) {
-        await fetch("/api/obs/aliases/remove-default", {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ alias: btn.dataset.removeDefault })
-        });
-        loadAliases();
-      }
-
-      if (btn.dataset.restore) {
-        await fetch("/api/obs/aliases/restore-default", {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ alias: btn.dataset.restore })
-        });
-        loadAliases();
-      }
-    });
-
-    card.appendChild(header);
-    card.appendChild(body);
-    container.appendChild(card);
-  });
+function applyAliasFilter() {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => { loadAliases(); }, 300); // 300ms Debounce 
 }
 
 async function addAlias() {
   const aliasInput = document.getElementById("aliasInput");
   const commandInput = document.getElementById("commandInput");
-  await fetch("/api/obs/aliases/add", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ alias: aliasInput.value, command: commandInput.value })
-  });
-}
-async function removeAlias(a) {
-  await fetch("/api/obs/aliases/remove", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ alias: a })
-  });
-}
-async function removeDefault(a) {
-  await fetch("/api/obs/aliases/remove-default", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ alias: a })
-  });
-}
-async function restoreDefault(a) {
-  await fetch("/api/obs/aliases/restore-default", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ alias: a })
-  });
-}
-async function toggleCmd(cmd, disable) {
-  await fetch("/api/obs/aliases/toggle", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ command: cmd, disable })
-  });
-}
-
-function applyAliasFilter() {
+  if(!aliasInput.value || !commandInput.value) return;
+  await fetch("/api/obs/aliases/add", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ alias: aliasInput.value, command: commandInput.value }) });
+  aliasInput.value = ""; commandInput.value = "";
   loadAliases();
 }
 
-/* ───────── INIT ───────── */
-const evt = new EventSource("/api/obs/queue/events", { withCredentials: true });
-evt.onmessage = () => { loadQueue(); loadAliases(); };
+/* ───────── INIT & SSE ───────── */
+function initSSE() {
+  const evt = new EventSource("/api/obs/queue/events", { withCredentials: true });
+  const statusEl = document.getElementById("sse-status");
+  
+  evt.onopen = () => { statusEl.style.display = "none"; };
+  evt.onmessage = () => { loadQueue(); loadAliases(); };
+  evt.onerror = () => { statusEl.style.display = "inline-block"; };
+}
 
+initSSE();
 loadSessions();
 loadQueue();
 loadAliases();

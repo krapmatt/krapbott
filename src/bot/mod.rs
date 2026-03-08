@@ -22,11 +22,11 @@ pub async fn run_event_loop(pool: PgPool, state: Arc<AppState>, mut rx: tokio::s
     while let Some(mut event) = rx.recv().await {
         let pool = pool.clone();
         let state = state.clone();
-
-        if let Err(e) = handle_event(&mut event, pool.clone(), state.clone()).await{
-            tracing::error!("Event error: {e:?}");
-        }
+        tokio::spawn(async move {
+            if let Err(e) = handle_event(&mut event, pool.clone(), state.clone()).await{
+                tracing::error!("Event error: {e:?}");
+            }
+        });
     }
-
     Ok(())
 }

@@ -321,9 +321,3 @@ async fn main() -> BotResult<()> {
         .await;
     Ok(())
 }
-
-/* TODO!
-- BoTConfig Database
-- ALIASES DONT work
-- PRIORITY OF RESPONSES HAVE CLOSED QUEUE FIRST
-*/

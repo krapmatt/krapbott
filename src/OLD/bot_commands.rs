@@ -38,41 +38,6 @@ impl BotState {
         Ok(())
     }
 
-    
-
-    
-
-pub async fn register_user(pool: &PgPool, twitch_name: &str, bungie_name: &str, bot_state: Arc<RwLock<BotState>>) -> Result<String, BotError> {
-    let x_api_key = &bot_state.read().await.x_api_key;
-
-    let reply = if let Some(bungie_name) = is_valid_bungie_name(bungie_name) {
-        let new_user = TwitchUser {
-            twitch_name: twitch_name.to_string(),
-            bungie_name: bungie_name.to_string()
-        };
-        save_to_user_database(&pool, new_user, x_api_key.to_string()).await?
-    } else {
-        "❌ Invalid format of Bungie Name, This is correct format! -> bungiename#0000".to_string()
-    };
-    Ok(reply)
-}
-//if is/not in database
-pub async fn bungiename(msg: PrivmsgMessage, client: TwitchClient, pool: &PgPool, twitch_name: String) -> BotResult<()> {
-    let result = sqlx::query_scalar!(
-        r#"SELECT bungie_name FROM twitchuser WHERE twitch_name = $1"#,
-        twitch_name
-    ).fetch_optional(pool).await?.ok_or(BotError::SqlxError(sqlx::Error::WorkerCrashed))?;
-
-    let reply = match result {
-        Some(bungie_name) => format!("Twitch Name: {twitch_name} | Bungie Name: {bungie_name}"),
-        None => format!("{}, you are not registered ❌", twitch_name),
-    };
-
-    client.say(msg.channel_login, reply).await?;
-
-    Ok(())
-}
-
 pub async fn unban_player_from_queue(msg: PrivmsgMessage, client: TwitchClient ,pool: &PgPool) -> BotResult<()> {
     let words: Vec<&str> = words(&msg);
     let reply = if words.len() < 2 {
