@@ -285,24 +285,40 @@ pub struct ReorderPayload {
 }
 
 pub async fn obs_queue_reorder(cookies: Option<String>, body: ReorderPayload, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<impl Reply, warp::Rejection> {
+    // 1. Kontrola přihlášení
     let channel = match channel_from_session(cookies, &pool).await {
         Ok(c) => c,
-        Err(_) => return Err(warp::reject()),
+        Err(e) => {
+            tracing::error!("Reorder chyba: Uživatel nemá platnou session! {:?}", e);
+            let json = warp::reply::json(&serde_json::json!({"error": "No session"}));
+            return Ok(warp::reply::with_status(json, warp::http::StatusCode::UNAUTHORIZED).into_response());
+        }
     };
-    let owner = resolve_queue_owner(&state, &channel).await.map_err(|_| warp::reject())?;
 
-    let users = body
-        .order
-        .into_iter()
-        .map(|s| UserId::from_str(&s))
-        .collect::<Result<_, _>>()
-        .map_err(|_| warp::reject())?;
+    let owner = resolve_queue_owner(&state, &channel).await.unwrap_or(channel);
 
-    reorder_queue(&pool, &owner, users)
-        .await
-        .map_err(|_| warp::reject())?;
+    // 2. Kontrola a parsování ID uživatelů
+    let mut users = Vec::new();
+    for id_str in body.order {
+        match UserId::from_str(&id_str) {
+            Ok(id) => users.push(id),
+            Err(e) => {
+                tracing::error!("Reorder chyba: Neplatné ID uživatele '{}': {:?}", id_str, e);
+                let json = warp::reply::json(&serde_json::json!({"error": "Invalid User ID"}));
+                return Ok(warp::reply::with_status(json, warp::http::StatusCode::BAD_REQUEST).into_response());
+            }
+        }
+    }
 
-    Ok(warp::reply::json(&serde_json::json!({ "ok": true })))
+    // 3. Uložení do databáze
+    if let Err(e) = reorder_queue(&pool, &owner, users).await {
+        tracing::error!("Reorder chyba: Selhalo uložení do databáze! {:?}", e);
+        let json = warp::reply::json(&serde_json::json!({"error": "Database error"}));
+        return Ok(warp::reply::with_status(json, warp::http::StatusCode::INTERNAL_SERVER_ERROR).into_response());
+    }
+
+    // 4. Pokud vše projde, vrátíme klasické OK
+    Ok(warp::reply::json(&serde_json::json!({ "ok": true })).into_response())
 }
 
 #[derive(serde::Deserialize)]
