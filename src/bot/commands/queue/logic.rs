@@ -416,7 +416,7 @@ pub async fn remove_from_queue(pool: &PgPool, owner: &ChannelId, user_id: &UserI
     Ok(())
 }
 
-pub async fn reorder_queue(pool: &PgPool, owner: &ChannelId, ordered_users: Vec<UserId>) -> BotResult<()> {
+pub async fn reorder_queue(pool: &PgPool, owner: &ChannelId, new_order: Vec<UserId>) -> BotResult<()> {
     let mut tx = pool.begin().await?;
 
     sqlx::query!(
