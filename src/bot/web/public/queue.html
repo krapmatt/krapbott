@@ -23,10 +23,28 @@
             border-radius: 12px;
             box-shadow: 0 4px 15px rgba(209, 108, 230, 0.3);
             transition: transform 0.2s ease-in-out;
+            position: relative;
         }
 
         .queue-container:hover {
             transform: scale(1.02);
+        }
+
+        /* Status SSE Dot */
+        #sse-status {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background-color: #4caf50; /* Zelená - online */
+            box-shadow: 0 0 8px #4caf50;
+            transition: background-color 0.3s;
+        }
+        #sse-status.offline {
+            background-color: #ff4b4b; /* Červená - offline */
+            box-shadow: 0 0 8px #ff4b4b;
         }
 
         /* Queue Title */
@@ -93,31 +111,41 @@
             background-color: #d16ce6 !important;
             transition: background-color 0.3s ease-in-out;
         }
-
     </style>
 </head>
 <body>
     <div class="queue-container">
+        <div id="sse-status" title="Live Connection"></div>
+        
         <div class="queue-title" id="queue-title">Loading Queue...</div>
         <ul class="queue-list" id="queue-list"></ul>
         <table>
             <thead>
                 <tr>
                     <th>Pos</th>
-                    <th>Twitch</th>
+                    <th>Twitch / Kick</th>
                     <th>Bungie</th>
                 </tr>
             </thead>
             <tbody id="queue-body">
-                <!-- Queue data will be populated here -->
-            </tbody>
+                </tbody>
         </table>
     </div>
 
     <script>
-        async function fetchQueue() {
+        // Funkce pro získání jména streamera (Podporuje ?streamer=jmeno i /queue/jmeno)
+        function getStreamerName() {
             const urlParams = new URLSearchParams(window.location.search);
-            const streamer = urlParams.get("streamer");
+            let streamer = urlParams.get("streamer");
+            if (!streamer) {
+                const parts = window.location.pathname.split('/').filter(Boolean);
+                streamer = parts[parts.length - 1];
+            }
+            return (streamer && streamer !== "queue") ? streamer : null;
+        }
+
+        async function fetchQueue() {
+            const streamer = getStreamerName();
 
             if (!streamer) {
                 document.getElementById("queue-title").innerText = "No streamer specified";
@@ -127,38 +155,36 @@
             document.getElementById("queue-title").innerText = streamer.toUpperCase() + "'S QUEUE";
 
             try {
-                const response = await fetch(`api/public/queue/${streamer}`);  // Make sure this matches your API endpoint
+                // Přidáno lomítko na začátek, aby adresa vždy mířila na kořen webu
+                const response = await fetch(`/api/public/queue/${streamer}`);  
                 const groupedData = await response.json();
 
                 const tbody = document.getElementById("queue-body");  
-                tbody.innerHTML = ""; // Clear previous data
+                tbody.innerHTML = ""; 
 
-                if (groupedData.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="3">No data found for this channel.</td></tr>`;
+                if (!groupedData || groupedData.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="3">No data found or queue is empty.</td></tr>`;
                     return;
                 }
 
                 groupedData.forEach((group, index) => {
-                    // Group Row
                     const groupRow = document.createElement("tr");
                     groupRow.innerHTML = `<td colspan="3"><strong>Group ${index + 1}</strong></td>`;
                     tbody.appendChild(groupRow);
 
-                    // Grouped Entries
                     group.forEach(entry => {
                         const row = document.createElement("tr");
-                        row.dataset.twitchName = entry.twitch_name;
+                        row.dataset.twitchName = entry.display_name || entry.twitch_name;
                         row.dataset.position = entry.position;
                         row.innerHTML = `
                             <td>${entry.position}</td>
-                            <td>${entry.twitch_name}</td>
-                            <td class="copyable">${entry.bungie_name}</td>
+                            <td>${entry.display_name || entry.twitch_name}</td>
+                            <td class="copyable">${entry.bungie_name || "N/A"}</td>
                         `;
                         tbody.appendChild(row);
                     });
                 });
 
-                // Reattach copy event listener
                 attachCopyListeners();
             } catch (error) {
                 console.error("Failed to fetch queue:", error);
@@ -166,12 +192,37 @@
             }
         }
 
+        /* --- SSE (Server-Sent Events) --- */
+        function initLiveUpdates() {
+            const streamer = getStreamerName();
+            if (!streamer) return;
+
+            const statusDot = document.getElementById("sse-status");
+            const evt = new EventSource(`/api/public/queue/${streamer}/events`);
+
+            evt.onopen = () => {
+                statusDot.classList.remove("offline");
+                statusDot.title = "Live Connected";
+            };
+
+            // Jakmile backend ohlásí update, znovu stáhneme data fronty
+            evt.onmessage = () => {
+                fetchQueue();
+            };
+
+            evt.onerror = () => {
+                statusDot.classList.add("offline");
+                statusDot.title = "Connection lost. Reconnecting...";
+            };
+        }
+
+        // Copy logiku necháváme beze změny
         function attachCopyListeners() {
             document.querySelectorAll('.copyable').forEach(element => {
                 element.addEventListener('click', () => {
                     const textToCopy = element.textContent.trim();
+                    if (textToCopy === "N/A") return;
 
-                    // First, try Clipboard API
                     if (navigator.clipboard && navigator.clipboard.writeText) {
                         navigator.clipboard.writeText(textToCopy)
                             .then(() => showCopyFeedback(element))
@@ -186,18 +237,12 @@
         function fallbackExecCommandCopy(text, element) {
             const textarea = document.createElement("textarea");
             textarea.value = text;
-
-            // Hide the textarea off-screen
             textarea.style.position = "fixed";
             textarea.style.top = "-9999px";
             document.body.appendChild(textarea);
-
-            // Select the text in the textarea
             textarea.select();
-
             try {
-                const successful = document.execCommand("copy");
-                if (successful) {
+                if (document.execCommand("copy")) {
                     showCopyFeedback(element);
                 }
             } catch (err) {
@@ -213,11 +258,12 @@
                 element.classList.remove("copied");
             }, 600);
         }
-        // Run the fetch function on load
-        window.onload = fetchQueue;
 
-        // Auto-refresh every 30 seconds
-        setInterval(fetchQueue, 30000);
+        // Spustíme fetch ihned po načtení
+        window.onload = () => {
+            fetchQueue();
+            initLiveUpdates(); // Místo setInterval(fetchQueue, 30000) zapneme SSE
+        };
     </script>
 </body>
 </html>

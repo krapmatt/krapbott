@@ -414,6 +414,23 @@ pub async fn obs_queue_events(cookies: Option<String>, pool: Arc<PgPool>, state:
     ))
 }
 
+pub async fn public_queue_events(streamer: String, state: Arc<AppState>) -> Result<impl warp::Reply, warp::Rejection> {
+    let mut rx = state.sse_bus.subscribe();
+
+    let stream = async_stream::stream! {
+        loop {
+            let _ = rx.recv().await;
+            yield Ok::<Event, Infallible>(
+                Event::default().data("update")
+            );
+        }
+    };
+
+    Ok(warp::sse::reply(
+        warp::sse::keep_alive().stream(stream)
+    ))
+}
+
 #[derive(Serialize)]
 pub struct ObsAliasResponse {
     pub aliases: HashMap<String, String>,  // custom aliases
@@ -607,7 +624,7 @@ pub async fn obs_queue_reset(
     })))
 }
 
-pub async fn public_queue_page() -> Result<Response, warp::Rejection> {
+pub async fn public_queue_page(streamer: String) -> Result<Response, warp::Rejection> {
     Ok(warp::reply::html(include_str!("public/queue.html")).into_response())
 }
 

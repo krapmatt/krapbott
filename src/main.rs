@@ -272,6 +272,18 @@ async fn main() -> BotResult<()> {
         .and(warp::get())
         .map(|| warp::reply::with_status("", warp::http::StatusCode::NO_CONTENT));
 
+    let public_queue_page = warp::path!("queue" / String)
+        .and(warp::get())
+        .and_then(crate::bot::web::obs::public_queue_page);
+    let public_queue_api = warp::path!("api" / "public" / "queue" / String)
+        .and(warp::get())
+        .and(pool_filter.clone())
+        .and(state_filter.clone())
+        .and_then(crate::bot::web::obs::public_queue_data);
+    let public_queue_events_api = warp::path!("api" / "public" / "queue" / String / "events")
+        .and(warp::get())
+        .and(state_filter.clone())
+        .and_then(crate::bot::web::obs::public_queue_events);
     // CORS
     let cors = warp::cors()
         .allow_origin("https://krapbott.up.railway.app")
@@ -307,6 +319,9 @@ async fn main() -> BotResult<()> {
     .or(obs_logout)
     .or(obs_sse)
     .or(favicon)
+    .or(public_queue_page)
+    .or(public_queue_api)
+    .or(public_queue_events_api)
     .or(options)
     .with(cors)
     .boxed();
