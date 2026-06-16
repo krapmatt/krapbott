@@ -424,7 +424,15 @@ function getDragAfterElement(container, y) {
 }
 async function submitOrder() {
   const order = [...document.querySelectorAll(".draggable")].map(r => r.dataset.userId);
-  await fetch("/api/obs/queue/reorder", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ order }) });
+  const res = await fetch("/api/obs/queue/reorder", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ order }) });
+  if (res.ok) {
+        loadQueue();
+        toast("Pořadí aktualizováno");
+    } else {
+        // Pokud se něco pokazilo, vypíšeme chybu
+        console.error("Chyba při reorderu:", await res.text());
+        toast("Chyba při přeřazování");
+    }
 }
 
 /* ───────── ALIASES ───────── */
