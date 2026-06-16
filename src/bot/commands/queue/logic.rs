@@ -419,16 +419,21 @@ pub async fn remove_from_queue(pool: &PgPool, owner: &ChannelId, user_id: &UserI
 pub async fn reorder_queue(pool: &PgPool, owner: &ChannelId, ordered_users: Vec<UserId>) -> BotResult<()> {
     let mut tx = pool.begin().await?;
 
-    for (idx, user_id) in ordered_users.iter().enumerate() {
-        let pos = (idx + 1) as i32;
+    sqlx::query!(
+        "UPDATE krapbott_v2.queue SET position = -position WHERE channel_id = $1",
+        owner.as_str()
+    ).execute(&mut *tx).await?;
 
+    for (index, user_id) in new_order.into_iter().enumerate() {
+        let new_pos = (index + 1) as i32; // 
+        
         sqlx::query!(
-            r#"
-            UPDATE krapbott_v2.queue
-            SET position = $1
-            WHERE user_id = $2 AND channel_id = $3
-            "#,
-            pos, user_id.as_str(), owner.as_str()
+            "UPDATE krapbott_v2.queue 
+             SET position = $1 
+             WHERE channel_id = $2 AND user_id = $3",
+            new_pos,
+            owner.as_str(),
+            user_id.as_str()
         ).execute(&mut *tx).await?;
     }
 
