@@ -160,7 +160,6 @@ async fn main() -> BotResult<()> {
         .and(state_filter.clone())
         .and_then(obs_queue_reorder);
     let obs_toggle = warp::path!("api" / "obs" / "queue" / "toggle")
-        .and(warp::path::end())
         .and(warp::post())
         .and(warp::header::optional("cookie"))
         .and(warp::body::json())
