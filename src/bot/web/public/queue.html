@@ -127,7 +127,7 @@
             document.getElementById("queue-title").innerText = streamer.toUpperCase() + "'S QUEUE";
 
             try {
-                const response = await fetch(`/queue/${streamer}`);  // Make sure this matches your API endpoint
+                const response = await fetch(`api/public/queue/${streamer}`);  // Make sure this matches your API endpoint
                 const groupedData = await response.json();
 
                 const tbody = document.getElementById("queue-body");  
