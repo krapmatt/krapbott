@@ -105,7 +105,7 @@ pub struct AliasConfig {
     pub removed_aliases: HashSet<String>,
 }
 
-#[derive(serde::Serialize, Debug)]
+#[derive(serde::Serialize, Debug, Clone)]
 pub struct ObsQueueEntry {
     pub position: i32,
     pub display_name: String,

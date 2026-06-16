@@ -278,7 +278,7 @@ pub fn list() -> Arc<dyn CommandT> {
                     )
                 } else {
                     format!(
-                        "You can find queue here: https://krapbott-rajo.shuttle.app/queue.html?streamer={}",
+                        "You can find queue here: https://krapbott.up.railway.app/queue?streamer={}",
                         owner.channel()
                     )
                 };

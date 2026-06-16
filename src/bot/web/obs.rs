@@ -606,3 +606,37 @@ pub async fn obs_queue_reset(
         "ok": true
     })))
 }
+
+pub async fn public_queue_page() -> Result<Response, warp::Rejection> {
+    Ok(warp::reply::html(include_str!("public/queue.html")).into_response())
+}
+
+pub async fn public_queue_data(streamer: String, pool: Arc<PgPool>, state: Arc<AppState>) -> Result<impl Reply, warp::Rejection> {
+    let channel_id = {
+        let cfg = state.config.read().await;
+        cfg.channels.keys().find(|c| c.channel().eq_ignore_ascii_case(&streamer)).cloned()
+    };
+
+    let Some(channel) = channel_id else {
+        // Pokud streamer neexistuje, vrátíme prázdné pole
+        return Ok(warp::reply::json(&Vec::<Vec<ObsQueueEntry>>::new()));
+    };
+
+    // 2. Zjistíme, čí to je fronta a jaká je velikost týmu
+    let owner = resolve_queue_owner(&state, &channel).await.unwrap_or(channel);
+    let teamsize = {
+        let cfg = state.config.read().await;
+        cfg.get_channel_config(&owner).map(|c| c.teamsize).unwrap_or(1)
+    };
+
+    // 3. Vytáhneme frontu z databáze
+    let queue = fetch_queue_for_owner(&pool, &owner, teamsize).await.unwrap_or_default();
+
+    // 4. Rozdělíme data do "skupin" (chunks) podle teamsize, což čeká queue.html
+    let mut grouped_data = Vec::new();
+    for chunk in queue.chunks(teamsize) {
+        grouped_data.push(chunk.to_vec());
+    }
+
+    Ok(warp::reply::json(&grouped_data))
+}

@@ -249,6 +249,7 @@ let queueOpen = true;
 let draggedRow = null;
 let dragHandlersBound = false;
 let searchTimeout = null;
+let isDragging = false
 
 function showTab(id, btn) {
   document.querySelectorAll(".tab-content").forEach(s => s.classList.remove("active"));
@@ -397,8 +398,8 @@ document.addEventListener("click", async e => {
 function enableDrag() {
   const body = document.getElementById("queueBody");
   body.querySelectorAll(".draggable").forEach(row => {
-    row.addEventListener("dragstart", e => { draggedRow = row; if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; } row.classList.add("dragging"); });
-    row.addEventListener("dragend", async () => { row.classList.remove("dragging"); draggedRow = null; await submitOrder(); });
+    row.addEventListener("dragstart", e => { isDragging = true; draggedRow = row; if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; } row.classList.add("dragging"); });
+    row.addEventListener("dragend", async () => { row.classList.remove("dragging"); draggedRow = null; isDragging = false; await submitOrder(); });
   });
 
   if (!dragHandlersBound) {
@@ -535,7 +536,11 @@ function initSSE() {
   const statusEl = document.getElementById("sse-status");
   
   evt.onopen = () => { statusEl.style.display = "none"; };
-  evt.onmessage = () => { loadQueue(); loadAliases(); };
+  evt.onmessage = () => { if (!isDragging) {
+      loadQueue(); 
+    }
+    loadAliases(); 
+  };
   evt.onerror = () => { statusEl.style.display = "inline-block"; };
 }
 

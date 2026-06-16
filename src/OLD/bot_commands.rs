@@ -118,3 +118,4 @@ pub async fn mod_action_user_from_queue(msg: PrivmsgMessage, client: TwitchClien
     client.say_in_reply_to(&msg, reply).await?;
     Ok(())
 }
+}
