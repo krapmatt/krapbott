@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                            UPDATE krapbott_v2.queue\n                            SET position = -position\n                            WHERE channel_id = $1 AND position > $2\n                        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d2f43d0c90a01c34e2ceeed98da59b691af199afc3f19b7ace7c30a59e34f81e"
+}
